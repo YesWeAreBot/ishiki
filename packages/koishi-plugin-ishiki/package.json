@@ -1,0 +1,33 @@
+{
+  "name": "koishi-plugin-ishiki",
+  "version": "0.0.0",
+  "license": "MIT",
+  "files": [
+    "lib"
+  ],
+  "type": "module",
+  "main": "./lib/index.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js",
+      "require": "./lib/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@huggingface/jinja": "^0.5.10",
+    "@yesimagent/core": "link:@yesimagent/core",
+    "@yesimagent/gateway": "link:@yesimagent/gateway",
+    "yaml": "^2.9.0"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.11"
+  }
+}
