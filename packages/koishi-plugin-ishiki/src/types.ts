@@ -5,7 +5,10 @@ declare module "@yesimagent/core" {
   interface AgentCustomMessage {
     "ishiki.message.created": CustomMessage<"ishiki.message.created", IshikiEvents.MessageCreated>;
     "ishiki.message.deleted": CustomMessage<"ishiki.message.deleted", IshikiEvents.MessageDeleted>;
-    "ishiki.checkpoint": CustomMessage<"ishiki.checkpoint", IshikiEvents.Checkpoint>;
+  }
+
+  interface AgentCustomEntry {
+    "ishiki.checkpoint": IshikiEvents.Checkpoint;
   }
 }
 

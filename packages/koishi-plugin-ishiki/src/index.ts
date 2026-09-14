@@ -1,4 +1,4 @@
-import { promises as fs, existsSync } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 
 import { Agent, AgentEvent, AgentMessage, AgentPlugin, createAgent, createCustomMessage, createJsonlStorage } from "@yesimagent/core";
@@ -6,6 +6,7 @@ import { createGateway, Gateway, GatewayConfig } from "@yesimagent/gateway";
 import { Context, Logger, Schema, Session } from "koishi";
 import { parse } from "yaml";
 
+import { createDumpFetch } from "./debug.js";
 import { createSendMessageTool, type SendMessageTool } from "./tools.js";
 import {} from "./types.js";
 
@@ -86,6 +87,9 @@ class Ishiki {
       this.logger.info(`--- Model Config ---\n${JSON.stringify(modelConfig, null, 2)}`);
       this.gateway = createGateway({
         config: modelConfig,
+        fetch: this.config.dumpRequests
+          ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.ctx.baseDir, this.config.dataPath, "debug") })
+          : undefined,
       });
       for (const model of this.gateway.models()) {
         this.logger.info(model);
@@ -159,12 +163,14 @@ namespace Ishiki {
     dataPath: string;
     selfId: string;
     innerThought: boolean;
+    dumpRequests: boolean;
     logLevel: number;
   }
   export const Config: Schema<Ishiki.Config> = Schema.object({
     dataPath: Schema.string().role("path").description("数据存储路径").default("data/ishiki"),
     selfId: Schema.string().description("机器人自身的 ID").default(""),
     innerThought: Schema.boolean().description("是否启用内心活动").default(false),
+    dumpRequests: Schema.boolean().description("是否将请求数据保存到本地").default(false),
     logLevel: Schema.union([0, 1, 2, 3]).description("日志级别").default(Logger.INFO) as Schema<number>,
   });
 }
