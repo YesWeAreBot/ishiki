@@ -5,7 +5,7 @@ import { AgentEvent, AgentMessage, AgentPlugin, createAgent, createCustomMessage
 import { Gateway } from "@yesimagent/gateway";
 import { Context, Logger, Session } from "koishi";
 
-import { Profile } from "./profiles.js";
+import { isChannelAllowed, Profile } from "./profiles.js";
 import { createSendMessageTool, SendMessageTool } from "./tools.js";
 
 export class ProfileRuntime {
@@ -153,8 +153,7 @@ export class ProfileRuntime {
     });
 
     this.ctx.on("internal/session", async (session: Session) => {
-      const isChannelAllowed = this.profile.allowedChannels.some(({ sid, channels }) => sid === session.sid && channels.includes(session.channelId ?? ""));
-      if (!isChannelAllowed) return;
+      if (!isChannelAllowed(this.profile, session.sid, session.channelId ?? "")) return;
 
       this.logger.debug(`--- Session ---\n${JSON.stringify(session, null, 2)}`);
 

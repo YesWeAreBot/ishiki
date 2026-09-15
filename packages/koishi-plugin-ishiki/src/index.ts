@@ -7,7 +7,7 @@ import { Context, Logger, Schema, Session } from "koishi";
 import { parse } from "yaml";
 
 import { createDumpFetch } from "./debug.js";
-import { ProfileConfig } from "./profiles.js";
+import { parseProfileConfig } from "./profiles.js";
 import { ProfileRuntime } from "./runtime.js";
 import { createSendMessageTool, type SendMessageTool } from "./tools.js";
 import {} from "./types.js";
@@ -54,9 +54,7 @@ class Ishiki {
       }
 
       const profilesContent = await fs.readFile(profilesFile, "utf-8");
-      const rawProfilesConfig = parse(profilesContent) as ProfileConfig;
-      this.logger.info(`--- Profiles Config ---\n${JSON.stringify(rawProfilesConfig, null, 2)}`);
-      const profilesConfig = ProfileConfig(rawProfilesConfig);
+      const profilesConfig = parseProfileConfig(profilesContent);
       this.logger.info(`--- Validated Profiles Config ---\n${JSON.stringify(profilesConfig, null, 2)}`);
 
       for (const profile of profilesConfig.profiles) {
