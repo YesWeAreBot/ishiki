@@ -13,6 +13,7 @@ function makeProfile(id: string, channels: string[], initialChannel = "group:1")
     attention: { mentions: [], quoteSelf: false },
     context: {
       workspaceTokenLimit: 8192,
+      charsPerToken: 4,
       idleMs: 1_800_000,
       historyEntries: 40,
       focusHistoryEntries: 40,

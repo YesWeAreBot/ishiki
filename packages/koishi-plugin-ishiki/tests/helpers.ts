@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -47,7 +47,7 @@ export function toolCallStep(...calls: Array<{ toolCallId: string; toolName: str
 
 export interface StoredEntry {
   type: string;
-  data: { next?: Focus } & Record<string, unknown>;
+  data: { next?: Focus; previous?: Focus; frameFocus?: Focus; prevFocus?: Focus; text?: string } & Record<string, unknown>;
 }
 
 export interface Bubble {
@@ -56,12 +56,35 @@ export interface Bubble {
 }
 
 export interface Harness {
-  send(overrides?: Partial<Session>): Promise<void>;
+  send(overrides?: Record<string, unknown>): Promise<void>;
   bubbles: Record<string, Bubble[]>;
   calls(): number;
   /** Every prompt the model was asked with, in call order. */
   prompts(): unknown[];
   entries(): Promise<StoredEntry[]>;
+  /** Stops the profile so its idle timer does not outlive the test. */
+  close(): Promise<void>;
+}
+
+/** The prompt as the model saw it, with JSON escapes undone so markup can be searched literally. */
+export function promptText(prompts: unknown[], index: number): string {
+  return JSON.stringify(prompts[index]).replaceAll('\\"', '"');
+}
+
+function delay(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+}
+
+export async function waitFor<T>(produce: () => Promise<T | undefined> | T | undefined, timeoutMs = 2000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await produce();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+    await delay(10);
+  }
 }
 
 export function makeProfile(): Profile {
@@ -76,12 +99,16 @@ export function makeProfile(): Profile {
     ],
     keywords: [],
     attention: { mentions: [], quoteSelf: false },
-    context: { workspaceTokenLimit: 8192, idleMs: 1_800_000, historyEntries: 40, focusHistoryEntries: 40, toolResultChars: 2000 },
+    context: { workspaceTokenLimit: 8192, charsPerToken: 4, idleMs: 1_800_000, historyEntries: 40, focusHistoryEntries: 40, toolResultChars: 2000 },
     innerThought: false,
   };
 }
 
-export function makeSession(overrides: Partial<Session> = {}): Session {
+export function makeContext(overrides: Partial<Profile["context"]>): Profile["context"] {
+  return { ...makeProfile().context, ...overrides };
+}
+
+export function makeSession(overrides: Record<string, unknown> = {}): Session {
   return {
     type: "message-created",
     sid: "onebot:1",
@@ -95,13 +122,17 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     isDirect: true,
     elements: [],
     stripped: { content: "hello", prefix: "", appel: false, hasAt: false, atSelf: false },
+    author: { name: "Miaow" },
+    event: { channel: { id: "group:1", name: "开发组", type: 0 } },
     ...overrides,
   } as unknown as Session;
 }
 
 const temporaryDirectories: string[] = [];
+const runningRuntimes: ProfileRuntime[] = [];
 
-export async function cleanupTemporaryDirectories(): Promise<void> {
+export async function cleanup(): Promise<void> {
+  for (const runtime of runningRuntimes.splice(0)) await runtime.stop();
   for (const directory of temporaryDirectories.splice(0)) await rm(directory, { recursive: true, force: true });
 }
 
@@ -111,7 +142,7 @@ export async function cleanupTemporaryDirectories(): Promise<void> {
  */
 export async function createHarness(
   steps: LanguageModelV4StreamPart[][],
-  options: { failingContents?: string[]; profile?: Partial<Profile> } = {},
+  options: { failingContents?: string[]; profile?: Partial<Profile>; seed?: string[]; contextWindow?: number } = {},
 ): Promise<Harness> {
   const failingContents = new Set(options.failingContents ?? []);
   let calls = 0;
@@ -128,6 +159,10 @@ export async function createHarness(
   const baseDir = await mkdtemp(path.join(tmpdir(), "ishiki-"));
   temporaryDirectories.push(baseDir);
   const file = path.join(baseDir, "data/ishiki/test/messages.jsonl");
+  if (options.seed !== undefined && options.seed.length > 0) {
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `${options.seed.join("\n")}\n`, "utf-8");
+  }
 
   const bubbles: Record<string, Bubble[]> = { "onebot:1": [], "onebot:2": [] };
   const bots = Object.fromEntries(
@@ -154,7 +189,10 @@ export async function createHarness(
       handlers.set(name, handler);
     },
   };
-  const gateway = { languageModel: () => model };
+  const gateway = {
+    languageModel: () => model,
+    models: () => (options.contextWindow === undefined ? [] : [{ id: "test:model", metadata: { contextWindow: options.contextWindow } }]),
+  };
 
   const runtime = new ProfileRuntime(ctx as unknown as Context, {
     profile: { ...makeProfile(), ...options.profile },
@@ -162,11 +200,15 @@ export async function createHarness(
     profilesPath: "profiles.yaml",
   });
   await runtime.start();
+  runningRuntimes.push(runtime);
 
   return {
     bubbles,
     calls: () => calls,
     prompts: () => prompts,
+    async close() {
+      await runtime.stop();
+    },
     async send(overrides = {}) {
       const handler = handlers.get("internal/session");
       if (!handler) throw new Error("ingestion handler was not registered");

@@ -3,7 +3,9 @@ import path from "path";
 
 import {
   Agent,
+  AgentCustomEntry,
   AgentEvent,
+  AgentEntry,
   AgentMessage,
   AgentPlugin,
   AgentStorage,
@@ -11,6 +13,7 @@ import {
   createCustomMessage,
   createEntry,
   createJsonlStorage,
+  createUserMessage,
   jsonSchema,
   tool,
   ToolSet,
@@ -19,10 +22,15 @@ import { Gateway } from "@yesimagent/gateway";
 import { Context, h, Logger, Session } from "koishi";
 
 import { Focus, isChannelAllowed, Profile, resolveFocus } from "./profiles.js";
+import type { IshikiEntry, IshikiEvent } from "./types.js";
 
 /** How many facts `peek_channel` reads by default, and the most it will read in one call. */
 const PEEK_DEFAULT_LIMIT = 20;
 const PEEK_MAX_LIMIT = 50;
+
+/** Used when the model declares no window: the workspace budget is half of it, this is the floor. */
+const DEFAULT_WORKSPACE_TOKEN_LIMIT = 8192;
+const IDLE_CHECK_INTERVAL_MS = 60_000;
 
 interface SendMessageInput {
   inner_thought?: string;
@@ -57,6 +65,206 @@ function formatClock(timestamp: number): string {
   return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
 }
 
+function focusKey(focus: Focus): string {
+  return `${focus.sid}:${focus.channelId}`;
+}
+
+function sidOf(fact: { platform: string; selfId: string }): string {
+  return `${fact.platform}:${fact.selfId}`;
+}
+
+function sceneKeyOf(fact: IshikiEvent.MessageCreated): string {
+  return `${sidOf(fact)}:${fact.channel.id}`;
+}
+
+/** `[21:40] Miaow(42) #m1: 内容` — the only line a fact ever renders to. */
+function lineOf(fact: IshikiEvent.MessageCreated): string {
+  const who = fact.user.name === undefined || fact.user.name.length === 0 ? fact.user.id : `${fact.user.name}(${fact.user.id})`;
+  return `[${formatClock(fact.timestamp)}] ${who} #${fact.messageId}: ${fact.content}`;
+}
+
+function blockOf(element: "focus" | "awareness", sid: string, channel: { id: string; name?: string }, lines: string[], trigger?: string): string {
+  const attributes = [`sid="${sid}"`, `channel="${channel.id}"`];
+  if (channel.name !== undefined && channel.name.length > 0) attributes.push(`name="${channel.name}"`);
+  if (trigger !== undefined) attributes.push(`trigger="${trigger}"`);
+  return [`<${element} ${attributes.join(" ")}>`, ...lines, `</${element}>`].join("\n");
+}
+
+function mentionsSelf(content: string, selfId: string): boolean {
+  if (!content.includes("<at")) return false;
+  try {
+    return h.parse(content).some((element) => element.type === "at" && element.attrs?.id === selfId);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why a fact from another scene is still worth showing. The first two entries mirror the wake rules, so the
+ * fact that started a turn can never be invisible inside it.
+ */
+function hitReason(profile: Profile, fact: IshikiEvent.MessageCreated): "direct" | "atSelf" | "keyword" | undefined {
+  if (fact.channel.direct) return "direct";
+  if (mentionsSelf(fact.content, fact.selfId)) return "atSelf";
+  if (profile.keywords.some((keyword) => keyword.length > 0 && fact.content.includes(keyword))) return "keyword";
+  return undefined;
+}
+
+/** A focus block for a fact in the cursor's scene, or an awareness block when the fact still reaches us. */
+function createdBlock(profile: Profile, cursor: Focus, fact: IshikiEvent.MessageCreated): string | undefined {
+  if (sceneKeyOf(fact) === focusKey(cursor)) return blockOf("focus", sidOf(fact), fact.channel, [lineOf(fact)]);
+  const reason = hitReason(profile, fact);
+  return reason === undefined ? undefined : blockOf("awareness", sidOf(fact), fact.channel, [lineOf(fact)], reason);
+}
+
+function deletedBlock(profile: Profile, cursor: Focus, fact: IshikiEvent.MessageDeleted): string | undefined {
+  const sid = sidOf(fact);
+  const inFocus = `${sid}:${fact.channelId}` === focusKey(cursor);
+  const ours = fact.operatorId !== undefined && profile.allowedChannels.some((declaration) => declaration.sid === sid);
+  if (!inFocus && !ours) return undefined;
+  const line = `[${formatClock(fact.timestamp)}] #${fact.messageId}: (已撤回)`;
+  return inFocus ? blockOf("focus", sid, { id: fact.channelId }, [line]) : blockOf("awareness", sid, { id: fact.channelId }, [line]);
+}
+
+function changeLine(change: IshikiEntry.FocusChanged): string {
+  const reason = change.reason === undefined || change.reason.length === 0 ? "" : `（${change.reason}）`;
+  return `[focus change] ${focusKey(change.previous)} → ${focusKey(change.next)}${reason}`;
+}
+
+/** Keeps both ends of an oversized tool result; the middle is where the redundancy lives. */
+function truncateMiddle(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const half = Math.max(1, Math.floor(max / 2));
+  return `${text.slice(0, half)}\n…[已截断 ${text.length - half * 2} 字符]…\n${text.slice(-half)}`;
+}
+
+function partsOf(content: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(content)) return [];
+  return content as Array<Record<string, unknown>>;
+}
+
+function toolOutputText(content: unknown): string {
+  if (typeof content === "string") return content;
+  const pieces: string[] = [];
+  for (const part of partsOf(content)) {
+    const output = part.output as { type?: string; value?: unknown } | undefined;
+    if (output === undefined) continue;
+    pieces.push(typeof output.value === "string" ? output.value : JSON.stringify(output.value ?? null));
+  }
+  return pieces.join("\n");
+}
+
+function userMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  const pieces: string[] = [];
+  for (const part of partsOf(content)) {
+    if (part.type === "text") pieces.push(String(part.text ?? ""));
+    else pieces.push("[附件]");
+  }
+  return pieces.filter((piece) => piece.length > 0).join("\n");
+}
+
+/** The generic loses the narrowing a literal type would give, so the helper owns the one cast. */
+function lastEntryOfType<T extends keyof AgentCustomEntry>(entries: readonly AgentEntry[], type: T): AgentEntry<T> | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.type === type) return entry as AgentEntry<T>;
+  }
+  return undefined;
+}
+
+function workspaceOf(entries: readonly AgentEntry[]): readonly AgentEntry[] {
+  const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
+  return checkpoint === undefined ? entries : entries.slice(entries.indexOf(checkpoint) + 1);
+}
+
+function messageEntriesOf(entries: readonly AgentEntry[]): readonly AgentEntry[] {
+  return entries.filter((entry) => entry.type === "message");
+}
+
+/**
+ * Pulls the assistant calls for the tool results in a selection back in, so the frame never records a result
+ * whose call is missing. A tail selection can grow past its limit; that is the point.
+ */
+function completeToolCalls(selection: readonly AgentEntry[], workspace: readonly AgentEntry[]): readonly AgentEntry[] {
+  const wanted = new Set<string>();
+  for (const entry of selection) {
+    if (entry.type !== "message" || entry.data.role !== "tool") continue;
+    for (const part of partsOf(entry.data.content)) {
+      if (typeof part.toolCallId === "string") wanted.add(part.toolCallId);
+    }
+  }
+  if (wanted.size === 0) return selection;
+
+  const chosen = new Set(selection.map((entry) => entry.id));
+  const calls: AgentEntry[] = [];
+  for (const entry of workspace) {
+    if (entry.type !== "message" || entry.data.role !== "assistant" || chosen.has(entry.id)) continue;
+    const matches = partsOf(entry.data.content).some((part) => part.type === "tool-call" && typeof part.toolCallId === "string" && wanted.has(part.toolCallId));
+    if (matches) calls.push(entry);
+  }
+  return [...calls, ...selection];
+}
+
+function belongsToFocus(entry: AgentEntry, focus: Focus): boolean {
+  if (entry.type !== "message") return false;
+  const message = entry.data;
+  if (message.role === "custom") {
+    if (message.type === "ishiki.message.created") return sceneKeyOf(message.data) === focusKey(focus);
+    if (message.type === "ishiki.message.deleted") return `${sidOf(message.data)}:${message.data.channelId}` === focusKey(focus);
+    return false;
+  }
+  // The mind's own actions always happened where it was: they belong to whatever focus was live then.
+  return message.role === "assistant" || message.role === "tool";
+}
+
+/**
+ * The frame carries behavior and its results, never the mind's own wording: what it said is not a memory it
+ * should read back and imitate.
+ */
+function renderEntries(entries: readonly AgentEntry[], cursor: Focus, profile: Profile, toolResultChars: number): string[] {
+  const lines: string[] = [];
+  const callNames = new Map<string, string>();
+
+  for (const entry of entries) {
+    if (entry.type === "ishiki.checkpoint") continue;
+    if (entry.type === "ishiki.focus.changed") {
+      lines.push(changeLine(entry.data));
+      continue;
+    }
+    if (entry.type !== "message") continue;
+
+    const message = entry.data;
+    if (message.role === "custom") {
+      const block =
+        message.type === "ishiki.message.created"
+          ? createdBlock(profile, cursor, message.data)
+          : message.type === "ishiki.message.deleted"
+            ? deletedBlock(profile, cursor, message.data)
+            : undefined;
+      if (block !== undefined) lines.push(block);
+      continue;
+    }
+    if (message.role === "assistant") {
+      for (const part of partsOf(message.content)) {
+        if (part.type === "tool-call" && typeof part.toolCallId === "string") callNames.set(part.toolCallId, String(part.toolName ?? "tool"));
+      }
+      continue;
+    }
+    if (message.role === "tool") {
+      for (const part of partsOf(message.content)) {
+        const name = callNames.get(String(part.toolCallId)) ?? String(part.toolName ?? "tool");
+        lines.push(`[工具结果] ${name}: ${truncateMiddle(toolOutputText([part]), toolResultChars)}`);
+      }
+      continue;
+    }
+    if (message.role === "user") {
+      const text = userMessageText(message.content);
+      if (text.length > 0) lines.push(truncateMiddle(text, toolResultChars));
+    }
+  }
+  return lines;
+}
 export class ProfileRuntime {
   private readonly ctx: Context;
   private readonly logger: Logger;
@@ -88,6 +296,15 @@ export class ProfileRuntime {
   private cachedInstructions: string | undefined;
   private cachedTools: ToolSet | undefined;
 
+  /** Set by any appended entry; cleared by a successful rebuild and used to skip idle checks on a quiet mind. */
+  private generationDirty = false;
+  /** A trigger fired while a turn was running: run it at the turn boundary instead. */
+  private rebuildPending = false;
+  private rebuildChain: Promise<void> = Promise.resolve();
+  private idleTimer: NodeJS.Timeout | undefined;
+  /** Workspace budget in tokens: the profile's own value, else half the window the model declares. */
+  private workspaceTokenLimit = DEFAULT_WORKSPACE_TOKEN_LIMIT;
+
   constructor(ctx: Context, options: { profile: Profile; gateway: Gateway; profilesPath: string }) {
     this.ctx = ctx;
     this.profile = options.profile;
@@ -118,32 +335,48 @@ export class ProfileRuntime {
         } satisfies AgentPlugin,
         {
           name: "ishiki-agent-plugin",
-          transformEntries: (entries) => {
-            // find and transform checkpoint entry, focus change entry
-            // return plain messages for previous hook to transform into model messages
+          onAppend: (entries) => {
+            this.generationDirty = true;
             return entries;
           },
-          transformMessages: (messages) => {
-            // find current focus, filter focus messages, mark awareness messages
-            return messages;
-          },
-          toModelMessages: (message) => {
-            // transform custom messages into model messages
-            switch (message.type) {
-              case "ishiki.message.created":
-                return [
-                  {
-                    role: "user",
-                    content: `[频道ID: ${message.data.channelId}] [消息ID: ${message.data.messageId}] [用户ID: ${message.data.userId}] [平台消息] ${message.data.content}`,
-                  },
-                ];
-              case "ishiki.message.deleted":
-                return;
-              case "onebot.guild.member-added":
-                return;
-              default:
-                return;
+          /**
+           * The whole projection, in the one hook that sees entries. Everything before the last checkpoint
+           * already lives inside the frame text, so this walks the current generation only and its cost
+           * tracks the generation, not the history. Output is native messages: no render types, no second
+           * hook to carry a cursor across.
+           */
+          transformEntries: (entries) => {
+            const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
+            const out: AgentEntry[] = [];
+            if (checkpoint !== undefined) {
+              out.push(createEntry("message", createUserMessage(checkpoint.data.text), { id: checkpoint.id, timestamp: checkpoint.timestamp }));
             }
+
+            // The cursor starts where the generation started and only recorded switches move it: the live
+            // focus would reinterpret messages that were already rendered.
+            let cursor = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
+            for (const entry of workspaceOf(entries)) {
+              if (entry.type === "ishiki.focus.changed") {
+                cursor = { ...entry.data.next };
+                out.push(createEntry("message", createUserMessage(changeLine(entry.data)), { id: entry.id, timestamp: entry.timestamp }));
+                continue;
+              }
+              if (entry.type !== "message") continue;
+
+              const message = entry.data;
+              if (message.role !== "custom") {
+                out.push(entry);
+                continue;
+              }
+              const block =
+                message.type === "ishiki.message.created"
+                  ? createdBlock(this.profile, cursor, message.data)
+                  : message.type === "ishiki.message.deleted"
+                    ? deletedBlock(this.profile, cursor, message.data)
+                    : undefined;
+              if (block !== undefined) out.push(createEntry("message", createUserMessage(block), { id: message.id, timestamp: message.timestamp }));
+            }
+            return out;
           },
           onStepFinish: async (info) => {
             // A step boundary is the earliest moment the switch record can land: the step's assistant and
@@ -165,6 +398,7 @@ export class ProfileRuntime {
           onTurnFinish: () => {
             this.switchedThisTurn = false;
             this.stopRequestedThisStep = false;
+            if (this.generationDirty || this.rebuildPending) this.scheduleRebuild("turn-finish");
           },
         } satisfies AgentPlugin,
       ],
@@ -344,8 +578,8 @@ export class ProfileRuntime {
             const message = entry.data;
             if (message.role !== "custom" || message.type !== "ishiki.message.created") continue;
             const fact = message.data;
-            if (`${fact.platform}:${fact.selfId}` !== target.sid || fact.channelId !== target.channelId) continue;
-            lines.push(`[${formatClock(fact.timestamp)}] ${fact.userId} #${fact.messageId}: ${fact.content}`);
+            if (sidOf(fact) !== target.sid || fact.channel.id !== target.channelId) continue;
+            lines.push(lineOf(fact));
           }
 
           const recent = lines.slice(-limit);
@@ -379,6 +613,8 @@ export class ProfileRuntime {
     this.cachedInstructions = undefined;
     this.cachedTools = undefined;
     await this.loadPromptParts();
+    await this.restoreContext();
+    this.resolveBudget();
 
     // The tools close over this runtime, so the agent has to be reachable before the first prompt assembly.
     await this.agent.init();
@@ -389,6 +625,8 @@ export class ProfileRuntime {
       this.logger.debug(`--- Agent Event ---\n${JSON.stringify(event, null, 2)}`);
     });
 
+    this.idleTimer = setInterval(() => void this.checkIdle(), IDLE_CHECK_INTERVAL_MS);
+
     this.ctx.on("internal/session", async (session: Session) => {
       if (!isChannelAllowed(this.profile, session.sid, session.channelId ?? "")) return;
 
@@ -397,11 +635,13 @@ export class ProfileRuntime {
       let shouldTrigger: boolean = false;
       let message: AgentMessage | undefined;
       switch (session.type) {
-        case "message-created":
+        case "message-created": {
+          const authorName = session.author?.name;
+          const channelName = session.event?.channel?.name;
           message = createCustomMessage("ishiki.message.created", {
             content: session.content!,
-            userId: session.userId!,
-            channelId: session.channelId,
+            user: { id: session.userId!, ...(authorName === undefined ? {} : { name: authorName }) },
+            channel: { id: session.channelId!, ...(channelName === undefined ? {} : { name: channelName }), direct: session.isDirect },
             guildId: session.guildId,
             messageId: session.messageId!,
             timestamp: session.timestamp,
@@ -426,6 +666,7 @@ export class ProfileRuntime {
             shouldTrigger = true;
           }
           break;
+        }
         case "message-deleted":
           break;
         case "guild-member-added":
@@ -442,8 +683,133 @@ export class ProfileRuntime {
     });
   }
 
+  /**
+   * The live focus is the switch recorded after the last checkpoint; only a profile without any checkpoint
+   * falls back to the configured `initialFocus`. The frame needs no restoring — it lives in the checkpoint
+   * payload and the projection reads it from the entry stream.
+   */
+  private async restoreContext(): Promise<void> {
+    const entries = await this.storage.read();
+    const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
+    if (checkpoint === undefined) {
+      this.generationDirty = entries.length > 0;
+      return;
+    }
+
+    const after = entries.slice(entries.indexOf(checkpoint) + 1);
+    const lastSwitch = lastEntryOfType(after, "ishiki.focus.changed");
+    this.currentFocus = lastSwitch === undefined ? { ...checkpoint.data.frameFocus } : { ...lastSwitch.data.next };
+    this.generationDirty = after.length > 0;
+  }
+
+  /** The workspace budget: an explicit token limit, else half of the window the model declares. */
+  private resolveBudget(): void {
+    const declared = this.profile.context.workspaceTokenLimit;
+    if (declared !== undefined) {
+      this.workspaceTokenLimit = declared;
+      return;
+    }
+    const window = this.gateway.models("language").find((model) => model.id === this.profile.model)?.metadata.contextWindow;
+    this.workspaceTokenLimit = window === undefined ? DEFAULT_WORKSPACE_TOKEN_LIMIT : Math.floor(window * 0.5);
+  }
+
+  private overBudget(workspace: readonly AgentEntry[]): boolean {
+    let chars = 0;
+    for (const entry of workspace) chars += JSON.stringify(entry).length;
+    return chars / this.profile.context.charsPerToken >= this.workspaceTokenLimit;
+  }
+
+  /**
+   * The text of the next frame. A generation that switched keeps the whole trace of where the mind came from
+   * (pruned, but not cut to a window); one that did not carries over only its recent tail.
+   */
+  private frameTextFor(frameFocus: Focus, previousFrameFocus: Focus, workspace: readonly AgentEntry[]): string {
+    const { historyEntries, focusHistoryEntries, toolResultChars } = this.profile.context;
+    const messages = messageEntriesOf(workspace);
+    const switchIndex = workspace.findIndex((entry) => entry.type === "ishiki.focus.changed");
+    const parts = [`<frame at="${formatClock(Date.now())}" sid="${frameFocus.sid}" channel="${frameFocus.channelId}">`];
+
+    if (switchIndex >= 0) {
+      parts.push(`<last_focus_history sid="${previousFrameFocus.sid}" channel="${previousFrameFocus.channelId}">`);
+      parts.push(...renderEntries(completeToolCalls(workspace.slice(0, switchIndex + 1), workspace), previousFrameFocus, this.profile, toolResultChars));
+      parts.push("</last_focus_history>");
+
+      // The new focus gets its own window searched over the whole generation, so lines may repeat what the
+      // trajectory already shows; a repeat costs fewer tokens than a gap the mind cannot account for.
+      const window = completeToolCalls(messages.filter((entry) => belongsToFocus(entry, frameFocus)).slice(-focusHistoryEntries), workspace);
+      parts.push("<history>");
+      parts.push(...renderEntries(window, frameFocus, this.profile, toolResultChars));
+      parts.push("</history>");
+    } else {
+      const tail = messages.slice(-historyEntries);
+      parts.push("<history>");
+      if (messages.length > tail.length) parts.push(`<!-- 更早 ${messages.length - tail.length} 条已折叠 -->`);
+      parts.push(...renderEntries(completeToolCalls(tail, workspace), frameFocus, this.profile, toolResultChars));
+      parts.push("</history>");
+    }
+
+    parts.push("</frame>");
+    return parts.join("\n");
+  }
+
+  /** The only materialized write. A failure leaves the generation untouched so the next trigger retries it. */
+  private async rebuild(reason: string): Promise<void> {
+    const entries = await this.storage.read();
+    const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
+    const workspace = workspaceOf(entries);
+    if (workspace.length === 0) {
+      this.generationDirty = false;
+      return;
+    }
+
+    const switched = workspace.some((entry) => entry.type === "ishiki.focus.changed");
+    // Idle is early compression, not a budget decision: folding a quiet generation while it is still small is
+    // the point, since nobody is waiting for the answer.
+    if (!switched && reason !== "idle" && !this.overBudget(workspace)) return;
+
+    const frameFocus = { ...this.currentFocus };
+    const previousFrameFocus = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
+    const text = this.frameTextFor(frameFocus, previousFrameFocus, workspace);
+    const record: IshikiEntry.Checkpoint = {
+      frameFocus,
+      ...(switched ? { prevFocus: { ...previousFrameFocus } } : {}),
+      text,
+      createdAt: Date.now(),
+    };
+
+    try {
+      await this.storage.append(createEntry("ishiki.checkpoint", record));
+    } catch (error) {
+      this.logger.warn(`checkpoint 写入失败（${reason}），本代保留待下次重试：${String(error)}`);
+      return;
+    }
+
+    this.generationDirty = false;
+    this.rebuildPending = false;
+    this.logger.debug(`帧重建完成（${reason}），${text.length} 字符`);
+  }
+
+  private scheduleRebuild(reason: string): void {
+    this.rebuildChain = this.rebuildChain
+      .then(() => this.rebuild(reason))
+      .catch((error: unknown) => this.logger.warn(`帧重建异常（${reason}）：${String(error)}`));
+  }
+
+  /** Early compression: a quiet generation is folded before the next message has to pay for it. */
+  private async checkIdle(): Promise<void> {
+    if (!this.generationDirty) return;
+    if (!this.agent.isIdle()) {
+      this.rebuildPending = true;
+      return;
+    }
+    const entries = await this.storage.read();
+    const last = entries.at(-1);
+    if (last === undefined || Date.now() - last.timestamp < this.profile.context.idleMs) return;
+    this.scheduleRebuild("idle");
+  }
+
   async stop() {
-    if (!this.agent) return;
+    clearInterval(this.idleTimer);
     await this.agent.stop();
   }
 }

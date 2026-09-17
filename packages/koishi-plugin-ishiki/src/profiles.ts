@@ -16,7 +16,10 @@ export interface Profile {
   keywords: string[];
   attention: { mentions: string[]; quoteSelf: boolean };
   context: {
-    workspaceTokenLimit: number;
+    /** Tokens of workspace allowed before a rebuild. Omitted means "half the model's declared window". */
+    workspaceTokenLimit?: number;
+    /** Characters per token, for the workspace budget only. CJK-heavy traffic is closer to 1.5 than to 4. */
+    charsPerToken: number;
     idleMs: number;
     historyEntries: number;
     focusHistoryEntries: number;
@@ -54,7 +57,8 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
         quoteSelf: Schema.boolean().default(false),
       }),
       context: Schema.object({
-        workspaceTokenLimit: Schema.number().default(8192),
+        workspaceTokenLimit: Schema.number(),
+        charsPerToken: Schema.number().default(4),
         idleMs: Schema.number().default(30 * Time.minute),
         historyEntries: Schema.number().default(40),
         focusHistoryEntries: Schema.number().default(40),

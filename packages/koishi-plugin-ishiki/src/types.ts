@@ -24,8 +24,9 @@ export namespace IshikiEvent {
 
   export interface MessageCreated extends EventBase {
     content: string;
-    userId: string;
-    channelId?: string;
+    /** A snapshot: a later rename never rewrites the lines already rendered from this fact. */
+    user: { id: string; name?: string };
+    channel: { id: string; name?: string; direct: boolean };
     guildId?: string;
     messageId: string;
     quote?: { id: string; content?: string; user?: { id: string; name?: string }; channel?: { id: string }; guild?: { id: string } };
@@ -54,8 +55,14 @@ export namespace IshikiEntry {
     reason?: string;
   }
 
+  /**
+   * The generation boundary: the frame is materialized here (its text plus the focus the generation started
+   * in), so every later step reuses one stable string instead of re-rendering the previous generation.
+   */
   export interface Checkpoint {
-    focus: { sid: string; channelId: string };
-    frameText: string;
+    frameFocus: { sid: string; channelId: string };
+    prevFocus?: { sid: string; channelId: string };
+    text: string;
+    createdAt: number;
   }
 }
