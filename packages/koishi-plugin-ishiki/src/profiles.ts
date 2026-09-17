@@ -1,11 +1,17 @@
 import { Schema, Time } from "koishi";
 import { parse as parseYaml } from "yaml";
 
+/** A scene: one body plus a channel id whose meaning is scoped to that body. */
+export interface Focus {
+  sid: string;
+  channelId: string;
+}
+
 export interface Profile {
   id: string;
   dataPath: string;
   model: string;
-  initialFocus: { sid: string; channelId: string };
+  initialFocus: Focus;
   allowedChannels: Array<{ sid: string; channels: string[] }>;
   keywords: string[];
   attention: { mentions: string[]; quoteSelf: boolean };
@@ -106,6 +112,35 @@ export function matchesChannelRules(rules: readonly string[], channelId: string)
 export function isChannelAllowed(profile: Profile, sid: string, channelId: string): boolean {
   const declaration = profile.allowedChannels.find((item) => item.sid === sid);
   return declaration ? matchesChannelRules(declaration.channels, channelId) : false;
+}
+
+export interface TargetError {
+  error: { name: string; message: string };
+}
+
+/**
+ * Turns a tool's addressing input into a concrete scene. `sid` defaults to the body of the current focus,
+ * `channel` is always explicit — its meaning belongs to the sid, so the caller cannot omit it safely.
+ */
+export function resolveFocus(profile: Profile, current: Focus, input: { sid?: string; channel?: string }): Focus | TargetError {
+  const sid = input.sid ?? current.sid;
+  const declaration = profile.allowedChannels.find((item) => item.sid === sid);
+  if (!declaration) {
+    return {
+      error: {
+        name: "UnknownBody",
+        message: `sid "${sid}" 不在本 profile 的 allowedChannels 内；可用：${profile.allowedChannels.map((item) => item.sid).join(", ")}`,
+      },
+    };
+  }
+
+  const channelId = input.channel;
+  if (!channelId) return { error: { name: "InvalidInput", message: "channel 不能为空" } };
+  if (!matchesChannelRules(declaration.channels, channelId)) {
+    return { error: { name: "TargetNotAllowed", message: `频道 "${channelId}" 不在 sid "${sid}" 的白名单内；可用：${declaration.channels.join(", ")}` } };
+  }
+
+  return { sid, channelId };
 }
 
 function positiveIntersections(left: CompiledChannelRule[], right: CompiledChannelRule[]): CompiledChannelRule[] {

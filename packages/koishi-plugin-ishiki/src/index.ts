@@ -1,15 +1,14 @@
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 
-import { Agent, AgentEvent, AgentMessage, AgentPlugin, createAgent, createCustomMessage, createJsonlStorage, jsonSchema, tool } from "@yesimagent/core";
+import { Agent } from "@yesimagent/core";
 import { createGateway, Gateway, GatewayConfig } from "@yesimagent/gateway";
-import { Context, Logger, Schema, Session } from "koishi";
+import { Context, Logger, Schema } from "koishi";
 import { parse } from "yaml";
 
 import { createDumpFetch } from "./debug.js";
 import { parseProfileConfig } from "./profiles.js";
 import { ProfileRuntime } from "./runtime.js";
-import { createSendMessageTool, type SendMessageTool } from "./tools.js";
 import {} from "./types.js";
 
 class Ishiki {
@@ -22,11 +21,17 @@ class Ishiki {
 
   private gateway!: Gateway;
   private cortex!: Agent;
+  private runtimes: ProfileRuntime[] = [];
   constructor(ctx: Context, config: Ishiki.Config) {
     this.ctx = ctx;
     this.config = config;
     this.logger = ctx.logger("ishiki");
     this.logger.level = config.logLevel ?? Logger.INFO;
+
+    ctx.on("dispose", async () => {
+      for (const runtime of this.runtimes) await runtime.stop();
+      this.runtimes = [];
+    });
 
     ctx.on("ready", async () => {
       const modelConfigFile = path.resolve(this.ctx.baseDir, this.config.dataPath, "models.yaml");
@@ -59,6 +64,7 @@ class Ishiki {
 
       for (const profile of profilesConfig.profiles) {
         const runtime = new ProfileRuntime(this.ctx, { profile, gateway: this.gateway, profilesPath: this.config.profilesPath });
+        this.runtimes.push(runtime);
         await runtime.start();
       }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isChannelAllowed, matchesChannelRules, parseProfileConfig, type Profile, validateProfileConfig } from "../src/profiles.js";
+import { isChannelAllowed, matchesChannelRules, parseProfileConfig, resolveFocus, type Profile, validateProfileConfig } from "../src/profiles.js";
 
 function makeProfile(id: string, channels: string[], initialChannel = "group:1"): Profile {
   return {
@@ -108,5 +108,30 @@ profiles:
 
     expect(() => validateProfileConfig({ profiles: [exceptOne, one] })).not.toThrow();
     expect(() => validateProfileConfig({ profiles: [exceptOne, two] })).toThrow(/overlap/);
+  });
+});
+
+describe("focus resolution", () => {
+  const profile = makeProfile("boki", ["group:1", "group:2"]);
+  const focus = { sid: "onebot:1", channelId: "group:1" };
+
+  it("defaults the body to the current focus", () => {
+    expect(resolveFocus(profile, focus, { channel: "group:2" })).toEqual({ sid: "onebot:1", channelId: "group:2" });
+  });
+
+  it("rejects a body the profile does not own", () => {
+    const result = resolveFocus(profile, focus, { sid: "onebot:9", channel: "group:1" });
+    expect("error" in result && result.error.name).toBe("UnknownBody");
+  });
+
+  it("rejects a channel outside the declaration of that body", () => {
+    const result = resolveFocus(profile, focus, { channel: "group:3" });
+    expect("error" in result && result.error.name).toBe("TargetNotAllowed");
+    expect("error" in result && result.error.message).toContain("group:1, group:2");
+  });
+
+  it("rejects an empty channel", () => {
+    const result = resolveFocus(profile, focus, { channel: "" });
+    expect("error" in result && result.error.name).toBe("InvalidInput");
   });
 });

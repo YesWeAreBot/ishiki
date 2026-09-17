@@ -6,12 +6,12 @@ declare module "@yesimagent/core" {
     "ishiki.message.deleted": CustomMessage<"ishiki.message.deleted", IshikiEvent.MessageDeleted>;
 
     // OneBot Events
-    "onebot.guild.member-added": CustomMessage<"onebot.guild.member-added", OneBotEvents.GuildMemberAdded>;
+    "onebot.guild.member-added": CustomMessage<"onebot.guild.member-added", OneBotEvent.GuildMemberAdded>;
   }
 
   interface AgentCustomEntry {
     "ishiki.checkpoint": IshikiEntry.Checkpoint;
-    "ishiki.focus-change": IshikiEntry.FocusChange;
+    "ishiki.focus.changed": IshikiEntry.FocusChanged;
   }
 }
 
@@ -38,7 +38,7 @@ export namespace IshikiEvent {
   }
 }
 
-export namespace OneBotEvents {
+export namespace OneBotEvent {
   export interface GuildMemberAdded extends IshikiEvent.EventBase {
     guildId: string;
     userId: string;
@@ -47,10 +47,13 @@ export namespace OneBotEvents {
 }
 
 export namespace IshikiEntry {
-  export interface FocusChange {
+  /** Appended at a step boundary when `switch_focus` changed the scene mid-step. */
+  export interface FocusChanged {
     previous: { sid: string; channelId: string };
     next: { sid: string; channelId: string };
+    reason?: string;
   }
+
   export interface Checkpoint {
     focus: { sid: string; channelId: string };
     frameText: string;
