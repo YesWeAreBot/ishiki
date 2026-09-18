@@ -6,13 +6,14 @@ Profile 用配置文件声明，不进 Koishi Schema，不上配置页。建议�
 
 身体集合由 `allowedChannels` 的 `sid` 推导，不单独配 `bots`。
 
-下面仅示意账号与频道分配；初始 focus 的行为见后文，具体配置字段形状留到实现计划确定。
+下面示例使用当前 v1 配置字段；每条 `allowedChannels` 声明至少一个规则。初始 focus 必须匹配对应 sid 的规则。
 
 ```yaml
 profiles:
   - id: boki
     dataPath: data/ishiki/boki
     model: deepseek:deepseek-flash
+    initialFocus: { sid: onebot:1434974784, channelId: channelA }
     allowedChannels:
       - sid: onebot:1434974784
         channels:
@@ -20,12 +21,11 @@ profiles:
           - channelB
           - private:*
           - "!private:12345678"
-      - sid: qq:4138444372060156334
-        channels: []
 
   - id: other
     dataPath: data/ishiki/other
     model: deepseek:deepseek-flash
+    initialFocus: { sid: onebot:1434974784, channelId: private:12345678 }
     allowedChannels:
       - sid: onebot:1434974784
         channels:

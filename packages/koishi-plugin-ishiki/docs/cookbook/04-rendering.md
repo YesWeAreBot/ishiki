@@ -51,31 +51,55 @@ Koishi session 是平台事件入口，不是唯一入口。插件可以直接�
 
 公共来源契约方向已定，不再将每个插件自定义的来源提取器视为并列已选方案。具体字段形状、域划分和匹配规则在数据流收口后确定。
 
-## 在 transformMessages 完成投影
+## 在 transformEntries 完成投影
 
 ```text
 storage 中的原始事实
-  → transformEntries 提供检查点 / 帧边界所需信息（具体接法待定）
-  → ishiki transformMessages 按历史顺序遍历
+  → transformEntries 读边界：有检查点就把帧文本投影成一条原生 user 消息；
+     没有检查点时自行给出位置声明（见 03-context.md）
       → 从帧的起始 focus 推进 cursor，遇 focus-change 换挡
-      → 调用注册的 isVisible；不可见则跳过本条渲染，不影响触发路径
-      → 按事件名调用注册渲染器
-      → 为非 focus 可见消息添加 awareness 包装
-      → 给 ModelMessage[] 补齐 id / timestamp，输出原生 AgentMessage[]
+      → 落在 cursor 场景里的事实 → 裸行
+      → 别处够得着的事实 → awareness 包装
+      → assistant / tool / user 条目原样通过
   → yesimagent 原生 AgentMessage → ModelMessage
 ```
 
+- 投影只在这一个 hook 里完成：它是唯一拿得到 entry 的 hook，所以不需要渲染 type、不需要第二个 hook，也不需要在 hook 之间传递 cursor。
 - `AgentMessage` 已包含 user / system / assistant / tool 类型，输出不必保持为 custom。
 - 原有 assistant / tool 消息直接保留，不交给事件渲染器重造。
 - 最终投影只服务本次模型调用，不回写 storage。每 step 仍从事实流重新投影，不缓存渲染结果。
 - 不引入 `ishiki.render.*`、内置 custom 文本中转，或跨 hook 的 focus / awareness 临时标记。
 - 渲染器遵守同一代前缀稳定约定；不读取当前 logical focus 回头解释旧消息，不执行触发引擎的有状态决策。
 
+## 块形态
+
+位置声明写明此刻在哪，所以窗口里的行只在**一段的开头**带一次块头（告诉模型"从这里起是当前窗口"），别处的事件则整块包装：
+
+```text
+<focus sid="onebot:1" channel="group:1">                        这一段窗口里的行
+[00:06] Miaow(1293865264) #2075295533: neko
+[00:06] Miaow(1293865264) #2075295534: 在吗
+[00:07] Miaow(1293865264) #2075295535: ？
+<awareness sid="onebot:1" channel="group:9" name="另一个群">     别处但够得着
+[00:06] Miaow(42) #m1: 在吗
+</awareness>
+<focus sid="onebot:1" channel="group:1">                        被上面那块打断，重新开一段
+[00:08] Miaow(1293865264) #2075295536: 干嘛
+[focus change] onebot:1:group:1 → onebot:1:group:9（去回话）     焦点本身变过
+```
+
+- 块头只写一次、不闭合：中间夹进任何别的东西（别的块、工具轨迹、心智自己说的话、焦点切换）之后再出现窗口里的行，就重新开一段。
+- 行 = `[HH:MM] 名(userId) #msgId: 正文`；名缺则只写 id。
+- 够得着 = 私聊、@ 自己、命中关键词——与唤醒同源，所以叫醒这一轮的那条事实不会在轮内不可见。
+- 不写触发原因：模型不需要知道"为什么这条进来了"，只需要知道"这条不在焦点里"。
+- `peek_channel` 的结果自带 `<peek sid channel count>`：它是回答，不是事件，必须自己声明读的是哪个场景。
+- 帧里的 `<history>` / `<last_focus_history>` 段**不再**加块头（那两段自己就声明了场景），所以段内是裸行——它们不是"此刻正在发生的事"。
+
 ## 为什么不放在 toModelMessages
 
 yesimagent 的 `toModelMessages` 是 first-win：第一个非 `undefined` 返回值结束分派，`[]` 也会终止。它不是“插件先渲染、core 再包装”的流水线，且只接收单条消息。
 
-统一注册表不必由同名 hook 调用。放在 `transformMessages` 内即可在一次遍历中完成 cursor、渲染和包装，无须为传递投影语境新增消息类型。
+统一注册表不必由同名 hook 调用。放在 `transformEntries` 内即可在一次遍历中完成 cursor、渲染和包装，无须为传递投影语境新增消息类型。
 
 当前内核没有默认的 custom → user 转换。原生转换保留 content，但 user / system 顶层 `providerOptions` 尚未透传；若渲染器依赖它，需要补齐此通用转换边界，不能假定任意 ModelMessage 都能无损往返。
 

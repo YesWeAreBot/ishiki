@@ -123,8 +123,9 @@ export interface TargetError {
 }
 
 /**
- * Turns a tool's addressing input into a concrete scene. `sid` defaults to the body of the current focus,
- * `channel` is always explicit — its meaning belongs to the sid, so the caller cannot omit it safely.
+ * Turns a tool's addressing input into a concrete scene. Omitting both parameters means "the window that is
+ * already open" (`current`); naming another body without naming a channel is refused, because a channel id
+ * only means something inside one body's namespace and the open window's id belongs to the open window's body.
  */
 export function resolveFocus(profile: Profile, current: Focus, input: { sid?: string; channel?: string }): Focus | TargetError {
   const sid = input.sid ?? current.sid;
@@ -138,8 +139,10 @@ export function resolveFocus(profile: Profile, current: Focus, input: { sid?: st
     };
   }
 
-  const channelId = input.channel;
-  if (!channelId) return { error: { name: "InvalidInput", message: "channel 不能为空" } };
+  const channelId = input.channel ?? (sid === current.sid ? current.channelId : undefined);
+  if (channelId === undefined || channelId.length === 0) {
+    return { error: { name: "InvalidInput", message: `用别的身体发消息时要一并给出 channel（可选：${declaration.channels.join(", ")}）` } };
+  }
   if (!matchesChannelRules(declaration.channels, channelId)) {
     return { error: { name: "TargetNotAllowed", message: `频道 "${channelId}" 不在 sid "${sid}" 的白名单内；可用：${declaration.channels.join(", ")}` } };
   }

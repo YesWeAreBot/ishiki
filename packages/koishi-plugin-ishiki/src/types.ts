@@ -4,6 +4,7 @@ declare module "@yesimagent/core" {
   interface AgentCustomMessage {
     "ishiki.message.created": CustomMessage<"ishiki.message.created", IshikiEvent.MessageCreated>;
     "ishiki.message.deleted": CustomMessage<"ishiki.message.deleted", IshikiEvent.MessageDeleted>;
+    "ishiki.inner.thought": CustomMessage<"ishiki.inner.thought", IshikiMessage.InnerThought>;
 
     // OneBot Events
     "onebot.guild.member-added": CustomMessage<"onebot.guild.member-added", OneBotEvent.GuildMemberAdded>;
@@ -12,6 +13,16 @@ declare module "@yesimagent/core" {
   interface AgentCustomEntry {
     "ishiki.checkpoint": IshikiEntry.Checkpoint;
     "ishiki.focus.changed": IshikiEntry.FocusChanged;
+  }
+}
+
+export namespace IshikiMessage {
+  /**
+   * The mind's own monologue, recorded at the step boundary. It never leaves the machine and never enters a
+   * frame — frames carry behavior and its results, not the mind's own wording.
+   */
+  export interface InnerThought {
+    text: string;
   }
 }
 

@@ -120,6 +120,11 @@ describe("focus resolution", () => {
     expect(resolveFocus(profile, focus, { channel: "group:2" })).toEqual({ sid: "onebot:1", channelId: "group:2" });
   });
 
+  it("defaults the whole target to the open window", () => {
+    expect(resolveFocus(profile, focus, {})).toEqual(focus);
+    expect(resolveFocus(profile, focus, { sid: "onebot:1" })).toEqual(focus);
+  });
+
   it("rejects a body the profile does not own", () => {
     const result = resolveFocus(profile, focus, { sid: "onebot:9", channel: "group:1" });
     expect("error" in result && result.error.name).toBe("UnknownBody");
@@ -129,6 +134,14 @@ describe("focus resolution", () => {
     const result = resolveFocus(profile, focus, { channel: "group:3" });
     expect("error" in result && result.error.name).toBe("TargetNotAllowed");
     expect("error" in result && result.error.message).toContain("group:1, group:2");
+  });
+
+  it("refuses another body without a channel", () => {
+    const twoBodies: Profile = { ...profile, allowedChannels: [...profile.allowedChannels, { sid: "onebot:2", channels: ["group:3"] }] };
+
+    const result = resolveFocus(twoBodies, focus, { sid: "onebot:2" });
+    expect("error" in result && result.error.name).toBe("InvalidInput");
+    expect(resolveFocus(twoBodies, focus, { sid: "onebot:2", channel: "group:3" })).toEqual({ sid: "onebot:2", channelId: "group:3" });
   });
 
   it("rejects an empty channel", () => {
