@@ -29,6 +29,18 @@ export interface Profile {
     sceneWindowMs: number;
   };
   innerThought: boolean;
+  /** Whether the mind may switch focus. When false, switch_focus is not registered as a tool. */
+  allowChangeFocus: boolean;
+  typing: {
+    /** Base delay added before every bubble (ms). */
+    baseDelay: number;
+    /** Simulated characters per second for computing typing duration. */
+    charPerSecond: number;
+    /** Floor for the computed delay (ms). */
+    minDelay: number;
+    /** Ceiling for the computed delay (ms). */
+    maxDelay: number;
+  };
 }
 
 export interface ProfileConfig {
@@ -68,6 +80,13 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
         sceneWindowMs: Schema.number().default(24 * Time.hour),
       }),
       innerThought: Schema.boolean().default(false),
+      allowChangeFocus: Schema.boolean().default(true).description("是否允许心智切换 focus；为 false 时 switch_focus 不可用"),
+      typing: Schema.object({
+        baseDelay: Schema.number().default(500).description("基础延迟 (毫秒)"),
+        charPerSecond: Schema.number().default(5).description("模拟每秒字符数"),
+        minDelay: Schema.number().default(800).description("最小延迟 (毫秒)"),
+        maxDelay: Schema.number().default(4000).description("最大延迟 (毫秒)"),
+      }),
     }),
   ).required(),
 });

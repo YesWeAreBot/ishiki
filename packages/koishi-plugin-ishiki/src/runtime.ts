@@ -1,6 +1,7 @@
 import { existsSync, promises as fs, mkdirSync } from "fs";
 import path from "path";
 
+import { Template } from "@huggingface/jinja";
 import {
   Agent,
   AgentCustomEntry,
@@ -13,17 +14,33 @@ import {
   createEntry,
   createJsonlStorage,
   createUserMessage,
+  dynamicTool,
   jsonSchema,
   tool,
   ToolSet,
 } from "@yesimagent/core";
 import { Gateway } from "@yesimagent/gateway";
-import { Context, h, Logger, Session } from "koishi";
+import { Context, h, Logger, Session, sleep } from "koishi";
 
 import { HandlerResult, sessionHandlers } from "./handlers.js";
 import { Focus, isChannelAllowed, Profile, resolveFocus } from "./profiles.js";
 import { classify, collectLines, eventRenders, formatClock, sceneKey } from "./scene.js";
 import type { IshikiEntry, IshikiEvent } from "./types.js";
+
+/** Resolve a path relative to the package root's resources/ directory. Works in both ESM and CJS builds. */
+function resourcePath(...segments: string[]): string {
+  // In ESM import.meta.url is a file URL; in CJS (esbuild) import.meta is empty but __dirname is a global.
+  let srcDir: string;
+  if (import.meta.url) {
+    srcDir = path.dirname(new URL(import.meta.url).pathname);
+    // On Windows, URL pathname starts with /C:/... — strip the leading slash.
+    if (process.platform === "win32" && srcDir.startsWith("/")) srcDir = srcDir.slice(1);
+  } else {
+    // eslint-disable-next-line no-restricted-globals -- CJS global, not available in ESM type definitions
+    srcDir = __dirname;
+  }
+  return path.resolve(srcDir, "..", "resources", ...segments);
+}
 
 /** How many lines `peek_channel` reads by default, and the most it will read in one call. */
 const PEEK_DEFAULT_LIMIT = 20;
@@ -34,7 +51,6 @@ const DEFAULT_WORKSPACE_TOKEN_LIMIT = 8192;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
 
 interface SendMessageInput {
-  inner_thought?: string;
   sid?: string;
   channel?: string;
   messages: string[];
@@ -83,6 +99,8 @@ export class ProfileRuntime {
   private readonly profile: Profile;
   private readonly gateway: Gateway;
   private readonly profileDataPath: string;
+  /** Whether this profile has multiple scenes (bodies × channels > 1). */
+  private readonly singleScene: boolean;
 
   private agent: Agent;
   private storage: AgentStorage;
@@ -96,10 +114,16 @@ export class ProfileRuntime {
   /** Messages a step actually sent; like a monologue, each lands as an ordinary fact at the step boundary. */
   private pendingSelfMessages: IshikiEvent.MessageCreated[] = [];
   /**
-   * Raised by `finish` and by a `send_message` that does not ask to continue. `onStepFinish` runs exactly
-   * once per step, so it consumes the flag and never lets it leak into the next step.
+   * Raised by `finish`. `onStepFinish` runs exactly once per step, so it consumes the flag and never lets
+   * it leak into the next step.
    */
   private stopRequestedThisStep = false;
+  /**
+   * Set by `send_message` when `continue` is falsy. The actual stop only fires in `onStepFinish` if no
+   * other non-trivial tool (anything besides `think`) ran in the same step — so a parallel switch_focus
+   * failure does not silently end the turn.
+   */
+  private sendWantsStop = false;
 
   /**
    * Prompt parts, frozen until `start()` reloads them. Assembly runs every turn, so without the freeze a
@@ -129,6 +153,10 @@ export class ProfileRuntime {
     }
     this.currentFocus = { ...this.profile.initialFocus };
     this.storage = createJsonlStorage(path.resolve(this.profileDataPath, "messages.jsonl"));
+    // A single scene means exactly one body with exactly one non-wildcard channel.
+    const totalChannels = this.profile.allowedChannels.reduce((sum, d) => sum + d.channels.length, 0);
+    const hasWildcard = this.profile.allowedChannels.some((d) => d.channels.some((c) => c.includes("*")));
+    this.singleScene = totalChannels <= 1 && !hasWildcard;
 
     this.agent = createAgent({
       id: this.profile.id,
@@ -262,12 +290,22 @@ export class ProfileRuntime {
             }
 
             // Consume the flag: this hook runs exactly once per step, so it never leaks into the next one.
-            const stop = this.stopRequestedThisStep;
+            // send_message's stop is deferred: it only fires when no other non-trivial tool ran in the
+            // same step, so a parallel switch_focus failure doesn't silently end the turn.
+            const hasBlockingTool = info.result.messages.some(
+              (m) =>
+                m.role === "assistant" &&
+                Array.isArray(m.content) &&
+                m.content.some((p) => p.type === "tool-call" && p.toolName !== "send_message" && p.toolName !== "think"),
+            );
+            const stop = this.stopRequestedThisStep || (this.sendWantsStop && !hasBlockingTool);
             this.stopRequestedThisStep = false;
+            this.sendWantsStop = false;
             return stop ? { continue: false } : undefined;
           },
           onTurnFinish: () => {
             this.stopRequestedThisStep = false;
+            this.sendWantsStop = false;
             if (this.generationDirty || this.rebuildPending) this.scheduleRebuild("turn-finish");
           },
         } satisfies AgentPlugin,
@@ -280,47 +318,77 @@ export class ProfileRuntime {
     if (this.cachedInstructions === undefined) {
       const personaFile = path.resolve(this.profileDataPath, "persona.md");
       const persona = existsSync(personaFile) ? (await fs.readFile(personaFile, "utf-8")).trim() : "";
-      this.cachedInstructions = [persona, this.stableZone()].filter((part) => part.length > 0).join("\n\n");
+      this.cachedInstructions = [persona, await this.renderSystemPrompt()].filter((part) => part.length > 0).join("\n\n");
     }
     if (this.cachedTools === undefined) this.cachedTools = this.buildTools();
   }
 
   /**
-   * The stable zone: how this mind works, what focus means, and the bodies it acts through. What a tool
-   * takes and returns is stated in that tool's own schema — a second copy here would drift from it.
+   * Renders the system prompt from the Jinja template, resolving the optional think.md overlay.
+   * All template variables are configuration-time constants, so the rendered result is byte-stable.
    */
-  private stableZone(): string {
-    const bodies = this.profile.allowedChannels.map((declaration) => `  ${declaration.sid} → ${declaration.channels.join(", ")}`).join("\n");
+  private async renderSystemPrompt(): Promise<string> {
+    // Resolve think prompt: profile data dir overrides the bundled default.
+    let thinkPrompt = "";
+    if (this.profile.innerThought) {
+      const userThink = path.resolve(this.profileDataPath, "think.md");
+      const thinkSource = existsSync(userThink) ? userThink : resourcePath("templates", "think.md");
+      const thinkRaw = (await fs.readFile(thinkSource, "utf-8")).trim();
+      // The think template itself may use Jinja variables.
+      thinkPrompt = new Template(thinkRaw).render({
+        singleScene: this.singleScene,
+        allowChangeFocus: this.profile.allowChangeFocus,
+        bodies: this.profile.allowedChannels,
+        profileName: this.profile.name,
+      });
+    }
 
-    return [
-      "你是一个心智：在聊天软件上拥有自己的账号，在频道里跟人说话、看别人说话。没有人给你派任务，也没有人等你交付什么。",
-      "",
-      "## 说话方式",
-      "",
-      "你写下的正文只有你自己看得见；想让别人收到话，必须调用工具发出去（send_message）。",
-      "",
-      "## 你在哪：一个窗口",
-      "",
-      "你的账号同时在线，但你同一时刻只打开一个频道的窗口，那就是焦点（focus）。",
-      "",
-      "- 帧是回顾：一个场景一段，段头写明 sid 与 channel，带 focus 的那段就是你正打开的窗口，段内裸行都属于这个场景。",
-      "- 帧之后才是正在发生的事：窗口里的行以 <focus sid channel> 块头出现，别处够得着的以 <notification> 出现（只告诉你谁在哪里说了什么，要看完整上下文请 peek_channel）。",
-      "- 别把两处的话串起来：同一个人可能同时在私聊和群里跟你讲话，那是两场对话；答话要答在跟你说话的那个频道。",
-      "- 发消息默认发到 focus：省略 channel 与 sid；要发去别的频道、或改用另一个账号，才写它们。",
-      "- 换窗口用 switch_focus；换过之后本轮的后续动作默认在新窗口发生，你离开的那个场景在新帧里有自己的一段。",
-      "",
-      "你的账号与可发消息的频道（channel 的语义域是 sid）：",
-      bodies,
-      "",
-      "你的 uid 是账号里 platform: 后面那一段。",
-      "行里括号中的 id 等于你的 uid 时，这一行就是你说的；你自己的话与别人的话写法相同。",
-      "",
-      "## 一次被叫到",
-      "",
-      "有人叫到你，你就来一轮；一轮里可以连续调用多个工具。",
-      "把话说完，这一轮就结束了：不必留在原地等回复，对方下一条消息会再叫你一次。",
-      "没有想说的话就不说，沉默是允许的。",
-    ].join("\n");
+    const systemRaw = await fs.readFile(resourcePath("templates", "system.md.jinja"), "utf-8");
+    return new Template(systemRaw).render({
+      thinkPrompt,
+      singleScene: this.singleScene,
+      allowChangeFocus: this.profile.allowChangeFocus,
+      bodies: this.profile.allowedChannels,
+      profileName: this.profile.name,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Typing delay (human-like pacing between bubbles)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Computes a human-like typing delay for `text`, based on character count with separate CJK / latin rates,
+   * randomized around the configured `charPerSecond`, clamped to `[minDelay, maxDelay]`.
+   */
+  private getTypingDelay(text: string): number {
+    const { baseDelay, charPerSecond, minDelay, maxDelay } = this.profile.typing;
+    if (charPerSecond <= 0) return minDelay;
+
+    // Strip markup so only visible text contributes to the delay.
+    const plain = h
+      .parse(text)
+      .filter((e) => e.type === "text")
+      .map((e) => e.attrs?.content ?? String(e))
+      .join("");
+    if (plain.length === 0) return minDelay;
+
+    const cjkRegex = /[\u4e00-\u9fa5]/g;
+    const cjkCount = (plain.match(cjkRegex) ?? []).length;
+    const latinCount = plain.length - cjkCount;
+
+    // CJK input (pinyin) is slower; latin characters are ~1.5× faster.
+    const cjkDelay = (cjkCount / charPerSecond) * 1000;
+    const latinDelay = (latinCount / (charPerSecond * 1.5)) * 1000;
+
+    // Per-character randomness weighted by character type composition.
+    const cjkRandomFactor = 0.5;
+    const latinRandomFactor = 0.3;
+    const totalRandomness = plain.length > 0 ? (cjkCount * cjkRandomFactor + latinCount * latinRandomFactor) / plain.length : 0;
+    const randomFactor = 1 + (Math.random() - 0.5) * 2 * totalRandomness;
+
+    const computed = baseDelay + (cjkDelay + latinDelay) * randomFactor;
+    return Math.max(minDelay, Math.min(computed, maxDelay));
   }
 
   /**
@@ -332,99 +400,121 @@ export class ProfileRuntime {
       this.stopRequestedThisStep = true;
     };
 
-    return {
-      send_message: tool({
-        description: "把你的话发到某个频道。",
-        inputSchema: jsonSchema<SendMessageInput>({
+    const tools: ToolSet = {};
+
+    // -- think (optional) ---------------------------------------------------
+    if (this.profile.innerThought) {
+      tools.think = tool({
+        description: "写下你的想法，只有你自己看得到。按 think_guide 的格式写，和本步的其他工具一起调用。",
+        inputSchema: jsonSchema<{ thought: string }>({
           type: "object",
           properties: {
-            ...(this.profile.innerThought
-              ? {
-                  inner_thought: {
-                    type: "string",
-                    description: "本次发送前的内心独白，只留给你自己看，不会发出去",
-                  },
-                }
-              : {}),
-            sid: { type: "string", description: "账号（platform:selfId）；省略即 focus 所在的账号" },
-            channel: { type: "string", minLength: 1, description: "目标频道；省略即 focus 的频道" },
-            messages: {
-              type: "array",
-              minItems: 1,
-              items: { type: "string", minLength: 1 },
-              description: "要发送的消息，每一项作为一条独立消息按顺序发出",
-            },
-            mode: {
-              type: "string",
-              enum: ["element", "raw"],
-              description: 'element（默认）时正文中的 <at id="…"/> 等元素会被平台解析；raw 时正文按字面发送',
-            },
-            continue: {
-              type: "boolean",
-              description: "true 只用于本轮还有下一步要做；省略即发完结束本轮",
-            },
+            thought: { type: "string", description: "按 think_guide 的格式写下你此刻的想法" },
           },
-          required: ["messages"],
         }),
-        execute: async (input) => {
-          const target = resolveFocus(this.profile, this.currentFocus, input);
-          if ("error" in target) return { ok: false as const, error: target.error, sent: [], failedAt: 0 };
-
-          const messages = input.messages;
-          if (!Array.isArray(messages) || messages.length === 0 || messages.some((message) => typeof message !== "string" || message.length === 0)) {
-            return { ok: false as const, error: { name: "InvalidInput", message: "messages 必须是非空字符串数组" }, sent: [], failedAt: 0 };
-          }
-          const bot = this.ctx.bots[target.sid];
-          if (!bot) return { ok: false as const, error: { name: "BotNotFound", message: `Bot with sid ${target.sid} not found` }, sent: [], failedAt: 0 };
-
-          const platform = bot.platform!;
-          const sent: string[] = [];
-
-          for (let index = 0; index < messages.length; index += 1) {
-            try {
-              const content = input.mode === "raw" ? h.escape(messages[index]) : messages[index];
-              const ids = await bot.sendMessage(target.channelId, content);
-              sent.push(...ids);
-              if (ids.length === 0) {
-                this.logger.warn(`平台没有返回消息 id，这条自消息不进记录：${target.sid}/${target.channelId}`);
-              } else {
-                this.pendingSelfMessages.push({
-                  platform,
-                  channel: { id: target.channelId },
-                  content: content,
-                  messageId: ids[0],
-                  timestamp: Date.now(),
-                  selfId: bot.selfId,
-                  user: { id: bot.selfId, name: bot.user?.name ?? this.profile.name },
-                });
-              }
-            } catch (error) {
-              // A platform failure carries a name worth keeping: `BotNotFound` tells the model to fix the address.
-              const failure = error instanceof Error ? { name: error.name, message: error.message } : { name: "Error", message: String(error) };
-              return { ok: false as const, sent, failedAt: index, error: failure };
-            }
-          }
-
-          if (input.continue !== true) requestStop();
-          return { ok: true as const, count: sent.length };
-        },
-      }),
-      finish: tool({
-        description: "结束本轮而不发言。看过消息但决定不回复时用它。",
-        inputSchema: jsonSchema<{ reason?: string }>({
-          type: "object",
-          properties: {
-            reason: { type: "string", description: "结束原因" },
-          },
-          required: [],
-        }),
-        execute: async () => {
-          requestStop();
+        execute: async ({ thought }) => {
+          this.logger.debug(`--- 内心独白 ---\n${thought}`);
           return { ok: true as const };
         },
+      });
+    }
+
+    // -- send_message -------------------------------------------------------
+    tools.send_message = tool({
+      description:
+        '把话发出去。messages 里每一条是一个独立气泡，按顺序发出。省略 sid 和 channel 就发到当前窗口。element 模式下 <at id="…"/> 会被平台解析为 @。',
+      inputSchema: jsonSchema<SendMessageInput>({
+        type: "object",
+        properties: {
+          sid: { type: "string", description: "账号（platform:selfId）；省略即 focus 所在的账号" },
+          channel: { type: "string", minLength: 1, description: "目标频道；省略即 focus 的频道" },
+          messages: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", minLength: 1 },
+            description: "要发送的消息，每一项作为一条独立消息按顺序发出",
+          },
+          mode: {
+            type: "string",
+            enum: ["element", "raw"],
+            description: 'element（默认）时正文中的 <at id="…"/> 等元素会被平台解析；raw 时正文按字面发送',
+          },
+          continue: {
+            type: "boolean",
+            description: "true 只用于本轮还有下一步要做；省略即发完结束本轮",
+          },
+        },
+        required: ["messages"],
       }),
-      switch_focus: tool({
-        description: "换 focus（当前打开的窗口）。换过之后，本轮的后续发送默认去新场景；一轮只能换一次。",
+      execute: async (input) => {
+        const target = resolveFocus(this.profile, this.currentFocus, input);
+        if ("error" in target) return { ok: false as const, error: target.error, sent: [], failedAt: 0 };
+
+        const messages = input.messages;
+        if (!Array.isArray(messages) || messages.length === 0 || messages.some((message) => typeof message !== "string" || message.length === 0)) {
+          return { ok: false as const, error: { name: "InvalidInput", message: "messages 必须是非空字符串数组" }, sent: [], failedAt: 0 };
+        }
+        const bot = this.ctx.bots[target.sid];
+        if (!bot) return { ok: false as const, error: { name: "BotNotFound", message: `Bot with sid ${target.sid} not found` }, sent: [], failedAt: 0 };
+
+        const platform = bot.platform!;
+        const sent: string[] = [];
+
+        for (let index = 0; index < messages.length; index += 1) {
+          try {
+            const content = input.mode === "raw" ? h.escape(messages[index]) : messages[index];
+
+            // Human-like typing delay: computed from the message text, applied before sending.
+            const delay = this.getTypingDelay(content);
+            if (delay > 0) await sleep(delay);
+
+            const ids = await bot.sendMessage(target.channelId, content);
+            sent.push(...ids);
+            if (ids.length === 0) {
+              this.logger.warn(`平台没有返回消息 id，这条自消息不进记录：${target.sid}/${target.channelId}`);
+            } else {
+              this.pendingSelfMessages.push({
+                platform,
+                channel: { id: target.channelId },
+                content: content,
+                messageId: ids[0],
+                timestamp: Date.now(),
+                selfId: bot.selfId,
+                user: { id: bot.selfId, name: bot.user?.name ?? this.profile.name },
+              });
+            }
+          } catch (error) {
+            // A platform failure carries a name worth keeping: `BotNotFound` tells the model to fix the address.
+            const failure = error instanceof Error ? { name: error.name, message: error.message } : { name: "Error", message: String(error) };
+            return { ok: false as const, sent, failedAt: index, error: failure };
+          }
+        }
+
+        if (input.continue !== true) this.sendWantsStop = true;
+        return { ok: true as const, count: sent.length };
+      },
+    });
+
+    // -- finish -------------------------------------------------------------
+    tools.finish = tool({
+      description: "结束本轮而不发言。看过消息但决定不回复时用它。",
+      inputSchema: jsonSchema<{ reason?: string }>({
+        type: "object",
+        properties: {
+          reason: { type: "string", description: "结束原因" },
+        },
+        required: [],
+      }),
+      execute: async () => {
+        requestStop();
+        return { ok: true as const };
+      },
+    });
+
+    // -- switch_focus (conditional) -----------------------------------------
+    if (!this.singleScene && this.profile.allowChangeFocus) {
+      tools.switch_focus = tool({
+        description: "切到另一个频道的窗口。切完后本轮后续的发送默认去新频道。",
         inputSchema: jsonSchema<SwitchFocusInput>({
           type: "object",
           properties: {
@@ -441,15 +531,17 @@ export class ProfileRuntime {
           if (target.sid === this.currentFocus.sid && target.channelId === this.currentFocus.channelId) {
             return { ok: true as const, changed: false, target };
           }
-          // No cooldown: a switch ends the generation, so "once per generation" is structural. Frequent
-          // hopping pays its own frame-level misses.
           this.pendingFocus = { previous: this.currentFocus, next: target, ...(input.reason === undefined ? {} : { reason: input.reason }) };
           this.currentFocus = target;
           return { ok: true as const, changed: true, target };
         },
-      }),
-      peek_channel: tool({
-        description: "只读查看某个频道最近的消息；不改变 focus，也不产生记录。",
+      });
+    }
+
+    // -- peek_channel (conditional) -----------------------------------------
+    if (!this.singleScene) {
+      tools.peek_channel = tool({
+        description: "看一眼某个频道最近的消息，不切过去，不留记录。",
         inputSchema: jsonSchema<PeekChannelInput>({
           type: "object",
           properties: {
@@ -473,26 +565,27 @@ export class ProfileRuntime {
           const text = [`<peek sid="${target.sid}" channel="${target.channelId}" count=${recent.length}>`, ...recent].join("\n");
           return { ok: true as const, target, count: recent.length, text };
         },
-      }),
-      report_tool_issue: tool({
-        description: "报告工具调用问题",
-        inputSchema: jsonSchema({
-          type: "object",
-          properties: {
-            tool: { type: "string", description: "工具名称" },
-            issue: { type: "string", description: "concise description of the issue" },
-          },
-          required: ["tool", "issue"],
-        }),
-        execute: async (args) => {
-          await fs.appendFile(
-            path.resolve(this.profileDataPath, "tool_issues.log"),
-            `[${new Date().toISOString()}] Tool: ${args.tool}, Issue: ${args.issue}\n`,
-          );
-          return { success: true, message: "Noted, thanks" };
+      });
+    }
+
+    // -- report_tool_issue --------------------------------------------------
+    tools.report_tool_issue = tool({
+      description: "报告工具调用问题",
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          tool: { type: "string", description: "工具名称" },
+          issue: { type: "string", description: "concise description of the issue" },
         },
+        required: ["tool", "issue"],
       }),
-    };
+      execute: async (args) => {
+        await fs.appendFile(path.resolve(this.profileDataPath, "tool_issues.log"), `[${new Date().toISOString()}] Tool: ${args.tool}, Issue: ${args.issue}\n`);
+        return { success: true, message: "Noted, thanks" };
+      },
+    });
+
+    return tools;
   }
 
   async start() {
@@ -522,7 +615,7 @@ export class ProfileRuntime {
       if (session.userId !== undefined && this.profile.allowedChannels.some((declaration) => declaration.sid === `${session.platform}:${session.userId}`))
         return;
 
-      this.logger.debug(`--- Session ---\n${JSON.stringify(session, null, 2)}`);
+      // this.logger.debug(`--- Session ---\n${JSON.stringify(session, null, 2)}`);
 
       let result: HandlerResult | undefined;
       for (const handler of sessionHandlers) {

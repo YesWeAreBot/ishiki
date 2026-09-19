@@ -165,12 +165,14 @@ describe("switching focus", () => {
         { toolCallId: "c1", toolName: "switch_focus", input: { sid: "onebot:2", channel: "group:9" } },
         { toolCallId: "c2", toolName: "send_message", input: { channel: "group:9", messages: ["ping"] } },
       ),
-      textStep("unreached"),
+      textStep("done"),
     ]);
 
     await harness.send();
 
-    expect(harness.calls()).toBe(1);
+    // send_message without continue does NOT stop the turn when another tool (switch_focus) ran in the
+    // same step — the model gets a second call to see the results and decide what to do next.
+    expect(harness.calls()).toBe(2);
     expect(harness.bubbles["onebot:2"]).toEqual([{ channelId: "group:9", content: "ping" }]);
     expect(harness.bubbles["onebot:1"]).toEqual([]);
 
@@ -338,7 +340,7 @@ describe("three zones", () => {
     await harness.send();
 
     // Nothing marks a sent line any more, so the prompt has to say how to recognise it.
-    expect(promptText(harness.prompts(), 0)).toContain("行里括号中的 id 等于你的 uid 时");
+    expect(promptText(harness.prompts(), 0)).toContain("括号里的 id 如果等于你的 uid");
   });
 
   it("opens a run header once per stretch of lines from the window", async () => {

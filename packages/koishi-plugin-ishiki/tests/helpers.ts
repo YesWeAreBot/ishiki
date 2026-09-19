@@ -102,6 +102,8 @@ export function makeProfile(): Profile {
     attention: { mentions: [], quoteSelf: false },
     context: { workspaceTokenLimit: 8192, charsPerToken: 4, idleMs: 1_800_000, historyEntries: 40, sceneWindowMs: 24 * 60 * 60 * 1000 },
     innerThought: false,
+    allowChangeFocus: true,
+    typing: { baseDelay: 0, charPerSecond: 5, minDelay: 0, maxDelay: 0 },
   };
 }
 
