@@ -22,7 +22,7 @@ import { Gateway } from "@yesimagent/gateway";
 import { Context, h, Logger, Session } from "koishi";
 
 import { Focus, isChannelAllowed, Profile, resolveFocus } from "./profiles.js";
-import { classify, factsOf, formatClock, frameSegments, sceneKey } from "./scene.js";
+import { classify, collectFacts, formatClock, sceneKey } from "./scene.js";
 import type { IshikiEntry, IshikiEvent } from "./types.js";
 
 /** How many facts `peek_channel` reads by default, and the most it will read in one call. */
@@ -56,11 +56,11 @@ interface PeekChannelInput extends TargetInput {
 }
 
 /**
- * The attributes a position declares, shared by the materialized frames and the projection's own head. The name
- * comes from the first fact of that scene in this generation: taken from anything later, the head could drift.
+ * The `<frame ...>` opening tag. The channel name comes from the first non-own fact in the workspace so
+ * earlier steps of the same turn always see the same string.
  */
-function positionAttributes(focus: Focus, at: string, workspace: readonly AgentEntry[]): string {
-  const name = factsOf(workspace, focus, { retractions: false }).find((fact) => !fact.own)?.channelName;
+function renderFrameHead(focus: Focus, at: string, workspace: readonly AgentEntry[]): string {
+  const name = collectFacts(workspace, focus, { retractions: false }).find((fact) => !fact.own)?.channelName;
   return [
     `at="${at}"`,
     `focus_sid="${focus.sid}"`,
@@ -70,7 +70,7 @@ function positionAttributes(focus: Focus, at: string, workspace: readonly AgentE
 }
 
 /** The generic loses the narrowing a literal type would give, so the helper owns the one cast. */
-function lastEntryOfType<T extends keyof AgentCustomEntry>(entries: readonly AgentEntry[], type: T): AgentEntry<T> | undefined {
+function findLastEntry<T extends keyof AgentCustomEntry>(entries: readonly AgentEntry[], type: T): AgentEntry<T> | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry.type === type) return entry as AgentEntry<T>;
@@ -78,8 +78,8 @@ function lastEntryOfType<T extends keyof AgentCustomEntry>(entries: readonly Age
   return undefined;
 }
 
-function workspaceOf(entries: readonly AgentEntry[]): readonly AgentEntry[] {
-  const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
+function sliceWorkspace(entries: readonly AgentEntry[]): readonly AgentEntry[] {
+  const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
   return checkpoint === undefined ? entries : entries.slice(entries.indexOf(checkpoint) + 1);
 }
 
@@ -166,8 +166,8 @@ export class ProfileRuntime {
            * hook to carry a cursor across.
            */
           transformEntries: (entries) => {
-            const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
-            const workspace = workspaceOf(entries);
+            const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
+            const workspace = sliceWorkspace(entries);
             const out: AgentEntry[] = [];
             if (checkpoint !== undefined) {
               out.push(createEntry("message", createUserMessage(checkpoint.data.text), { id: checkpoint.id, timestamp: checkpoint.timestamp }));
@@ -176,7 +176,7 @@ export class ProfileRuntime {
               // from the first entry and the configured focus, so every step of the turn renders the same string.
               const first = workspace[0];
               if (first !== undefined) {
-                const head = `<frame ${positionAttributes(this.profile.initialFocus, formatClock(first.timestamp), workspace)}/>`;
+                const head = `<frame ${renderFrameHead(this.profile.initialFocus, formatClock(first.timestamp), workspace)}/>`;
                 out.push(createEntry("message", createUserMessage(head), { id: `frame:${first.id}`, timestamp: first.timestamp }));
               }
             }
@@ -477,7 +477,7 @@ export class ProfileRuntime {
             return { ok: false as const, error: { name: "LimitTooLarge", message: `limit 必须是 1 到 ${PEEK_MAX_LIMIT} 之间的整数` } };
           }
 
-          const lines = factsOf(await this.agent.storage.read(), target, { retractions: false }).map((fact) => fact.line);
+          const lines = collectFacts(await this.agent.storage.read(), target, { retractions: false }).map((fact) => fact.line);
           const recent = lines.slice(-limit);
           const text = [`<peek sid="${target.sid}" channel="${target.channelId}" count=${recent.length}>`, ...recent].join("\n");
           return { ok: true as const, target, count: recent.length, text };
@@ -616,14 +616,14 @@ export class ProfileRuntime {
    */
   private async restoreContext(): Promise<void> {
     const entries = await this.storage.read();
-    const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
+    const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
     if (checkpoint === undefined) {
       this.generationDirty = entries.length > 0;
       return;
     }
 
     const after = entries.slice(entries.indexOf(checkpoint) + 1);
-    const lastSwitch = lastEntryOfType(after, "ishiki.focus.changed");
+    const lastSwitch = findLastEntry(after, "ishiki.focus.changed");
     this.currentFocus = lastSwitch === undefined ? { ...checkpoint.data.frameFocus } : { ...lastSwitch.data.next };
     this.generationDirty = after.length > 0;
   }
@@ -646,47 +646,54 @@ export class ProfileRuntime {
   }
 
   /**
-   * The text of the next frame: one segment per scene. A fact belongs to the scene it came from; a tool call
-   * belongs to the scene the mind was in when it ran, so a switch hands the trajectory it produced to the scene it
-   * is leaving. A scene the generation was focused in keeps that slice of it; one it only heard from is read back
-   * out of storage instead, which is the only place that holds a conversation rather than fragments of attention.
-   * `startFocus` is where the generation's cursor began, which is the scene a switch is leaving.
+   * Renders the frame text: every admitted scene gets a rolling window of recent facts pulled from the full
+   * storage stream. No distinction between "worked in" and "only heard from" — all scenes use the same rule.
+   *
+   * Scene admission: focus always enters; any scene whose facts appeared in this generation's workspace also enters.
    */
-  private frameTextFor(frameFocus: Focus, startFocus: Focus, entries: readonly AgentEntry[], workspace: readonly AgentEntry[]): string {
-    const at = Date.now();
+  private renderFrame(frameFocus: Focus, entries: readonly AgentEntry[], workspace: readonly AgentEntry[]): string {
+    const now = Date.now();
     const here = sceneKey(frameFocus);
     const { historyEntries, sceneWindowMs } = this.profile.context;
-    const segments = frameSegments(this.profile, workspace, startFocus);
 
-    const parts = [`<frame ${positionAttributes(frameFocus, formatClock(at), workspace)}>`];
+    // Discover every scene that appeared in this generation (for non-focus admission).
+    const scenes = new Map<string, Focus>();
+    scenes.set(here, frameFocus);
+    for (const entry of workspace) {
+      if (entry.type !== "message") continue;
+      const message = entry.data;
+      if (message.role !== "custom") continue;
+      if (message.type === "ishiki.message.created" || message.type === "ishiki.self.message") {
+        const sid = `${message.data.platform}:${message.data.selfId}`;
+        const scene: Focus = { sid, channelId: message.data.channel.id };
+        const key = sceneKey(scene);
+        if (!scenes.has(key)) scenes.set(key, scene);
+      }
+    }
 
-    // The open window leads with the lines the live path showed, and it declares nothing twice: the frame head
-    // already says where the mind is.
-    const open = segments.find((segment) => sceneKey(segment.scene) === here);
+    // Build one segment per scene, all from storage with the same tail + time-window rule.
+    const segments: Array<{ scene: Focus; lines: string[]; dropped: number; latest: number }> = [];
+    for (const [key, scene] of scenes) {
+      const fresh = collectFacts(entries, scene).filter((fact) => now - fact.timestamp <= sceneWindowMs);
+      const kept = fresh.slice(-historyEntries);
+      const lines = kept.map((fact) => fact.line);
+      const dropped = Math.max(0, fresh.length - historyEntries);
+      const latest = kept.at(-1)?.timestamp ?? 0;
+      if (lines.length === 0 && key !== here) continue;
+      segments.push({ scene, lines, dropped, latest });
+    }
+
+    const parts = [`<frame ${renderFrameHead(frameFocus, formatClock(now), workspace)}>`];
+
+    // Focus segment first (always present, even if empty).
+    const focus = segments.find((s) => sceneKey(s.scene) === here);
     parts.push(`<history sid="${frameFocus.sid}" channel="${frameFocus.channelId}" focus>`);
-    parts.push(...(open?.lines ?? []));
+    if (focus && focus.dropped > 0) parts.push(`<!-- 更早 ${focus.dropped} 条已折叠 -->`);
+    parts.push(...(focus?.lines ?? []));
     parts.push("</history>");
 
-    const rest: Array<{ scene: Focus; lines: string[]; dropped: number; latest: number }> = [];
-    for (const segment of segments) {
-      if (sceneKey(segment.scene) === here) continue;
-      let lines = segment.lines;
-      let dropped = 0;
-      let latest = segment.latest;
-      if (!segment.focus) {
-        // A scene the generation only heard from is read back out of storage — the only place that holds a
-        // conversation rather than fragments of attention.
-        const fresh = factsOf(entries, segment.scene).filter((fact) => at - fact.timestamp <= sceneWindowMs);
-        const kept = fresh.slice(-historyEntries);
-        lines = kept.map((fact) => fact.line);
-        dropped = Math.max(0, fresh.length - historyEntries);
-        latest = kept.at(-1)?.timestamp ?? 0;
-      }
-      if (lines.length === 0) continue;
-      rest.push({ scene: segment.scene, lines, dropped, latest });
-    }
-    rest.sort((left, right) => right.latest - left.latest);
-
+    // Other scenes sorted by recency.
+    const rest = segments.filter((s) => sceneKey(s.scene) !== here).sort((a, b) => b.latest - a.latest);
     for (const segment of rest) {
       parts.push(`<history sid="${segment.scene.sid}" channel="${segment.scene.channelId}">`);
       if (segment.dropped > 0) parts.push(`<!-- 更早 ${segment.dropped} 条已折叠 -->`);
@@ -706,7 +713,7 @@ export class ProfileRuntime {
    */
   private async rebuild(reason: string): Promise<boolean> {
     const entries = await this.storage.read();
-    const workspace = workspaceOf(entries);
+    const workspace = sliceWorkspace(entries);
     if (workspace.length === 0) {
       this.generationDirty = false;
       return true;
@@ -717,9 +724,7 @@ export class ProfileRuntime {
     if (reason !== "switch" && reason !== "idle" && !this.overBudget(workspace)) return false;
 
     const frameFocus = { ...this.currentFocus };
-    const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
-    const startFocus = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
-    const text = this.frameTextFor(frameFocus, startFocus, entries, workspace);
+    const text = this.renderFrame(frameFocus, entries, workspace);
     const record: IshikiEntry.Checkpoint = {
       frameFocus,
       text,

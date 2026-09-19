@@ -549,10 +549,9 @@ describe("frame rebuild", () => {
     await harness.send();
 
     const text = String((await rebuiltCheckpoint(harness)).data.text);
-    // Both halves of the pair are printed whole: no truncation marker ever appears.
-    expect(text).toContain('[工具调用] peek_channel: {"channel":"group:1"}');
-    expect(text).toContain("[工具结果] peek_channel:");
-    expect(text).not.toContain("已截断");
+    // Frame contains only message facts — no tool traces, no assistant prose.
+    expect(text).not.toContain("[工具调用]");
+    expect(text).not.toContain("[工具结果]");
     expect(text).not.toContain("这段文字不该进帧");
   });
 
@@ -573,8 +572,8 @@ describe("frame rebuild", () => {
 
     // The step after the send reads the monologue as the mind's own text: the tool call carries it whole.
     expect(promptText(harness.prompts(), 1)).toContain("先看看反应");
-    // The frozen frame carries it too, for the same reason: the arguments are printed whole.
-    expect(String((await rebuiltCheckpoint(harness)).data.text)).toContain("先看看反应");
+    // The frame only stores message facts, not tool arguments; the monologue does not survive into the frame.
+    expect(String((await rebuiltCheckpoint(harness)).data.text)).not.toContain("先看看反应");
   });
 
   it("hands the mind only the outcome of a send", async () => {
@@ -629,11 +628,8 @@ describe("frame rebuild", () => {
     await harness.send();
 
     const text = String((await rebuiltCheckpoint(harness)).data.text);
-    // The call names the target; the words themselves become a fact of that scene, so the frame needs no head
-    // of its own for them.
-    expect(text).toContain("[工具调用] send_message:");
-    expect(text).toContain('"channel":"group:9"');
-    expect(text).toContain('"messages":["那边好"]');
+    // The words become an ordinary fact of the target scene's history segment.
+    expect(text).toContain("NekoChan(2) #id-1: 那边好");
 
     const mine = (await harness.entries())
       .filter((entry) => String(entry.data["type"]) === "ishiki.self.message")
@@ -657,8 +653,8 @@ describe("frame rebuild", () => {
     await harness.send();
 
     const text = String((await rebuiltCheckpoint(harness)).data.text);
-    // Two calls, three bubbles: the calls are the trajectory, the bubbles are facts of that scene.
-    expect(text.match(/\[工具调用\] send_message:/g)).toHaveLength(2);
+    // Three bubbles become ordinary facts of the target scene.
+    expect(text).toContain("NekoChan(2)");
 
     const mine = (await harness.entries())
       .filter((entry) => String(entry.data["type"]) === "ishiki.self.message")
@@ -683,14 +679,13 @@ describe("frame rebuild", () => {
     await harness.send();
 
     const text = String((await rebuiltCheckpoint(harness)).data.text);
-    const arrived = text.indexOf('<history sid="onebot:2" channel="group:9" focus>');
-    const left = text.indexOf('<history sid="onebot:1" channel="group:1">');
-    expect(arrived).toBeGreaterThan(-1);
-    expect(left).toBeGreaterThan(arrived);
-    // The mind ran these calls while the window was still group:1, so that segment is what carries them.
-    expect(text.slice(arrived, left)).not.toContain("[工具调用]");
-    expect(text.indexOf("[工具调用] switch_focus:")).toBeGreaterThan(left);
-    expect(text.indexOf("[工具调用] send_message:")).toBeGreaterThan(left);
+    // Focus switched to group:9; both scenes appear as history segments (all from storage).
+    expect(text).toContain('<history sid="onebot:2" channel="group:9" focus>');
+    expect(text).toContain('<history sid="onebot:1" channel="group:1">');
+    // The original message that triggered the turn is in group:1's history.
+    expect(text).toContain("Miaow(42) #m1: hello");
+    // Frames no longer contain tool traces — only message facts.
+    expect(text).not.toContain("[工具调用]");
   });
 
   it("reads the mind's own words back inside the window they were said in", async () => {
@@ -721,8 +716,8 @@ describe("frame rebuild", () => {
     await harness.send();
 
     const text = String((await rebuiltCheckpoint(harness)).data.text);
-    expect(text).toContain("[工具调用] send_message:");
-    expect(text).toContain("[工具结果] send_message:");
+    // Frame only contains message facts; tool traces are not folded into frames.
+    expect(text).not.toContain("[工具调用]");
     // Nothing left the machine, so no self message was recorded either.
     const mine = (await harness.entries()).filter((entry) => String(entry.data["type"]) === "ishiki.self.message");
     expect(mine).toHaveLength(0);
@@ -743,11 +738,11 @@ describe("frame rebuild", () => {
 
     await harness.send();
 
-    // The trace keeps the addressing and the words; the arguments are printed whole, the monologue included.
+    // The send failed so no self-message fact was recorded; frame has no trace of the attempt.
     const text = String((await rebuiltCheckpoint(harness)).data.text);
-    expect(text).toContain("[工具调用] send_message:");
-    expect(text).toContain("发不出去");
-    expect(text).toContain("这句进帧");
+    expect(text).not.toContain("[工具调用]");
+    expect(text).not.toContain("发不出去");
+    expect(text).not.toContain("这句进帧");
   });
 
   it("restores the frame and the live focus from the last checkpoint", async () => {
@@ -803,11 +798,11 @@ describe("frame rebuild", () => {
       return found.length > 0 ? found[found.length - 1] : undefined;
     });
     const text = String(checkpoint.data.text);
-    // group:9 was only noticed, so it is read back out of storage and cut to its tail.
+    // All scenes are read from storage with the same tail rule; group:9 has 2 facts, limit is 1.
     expect(text).toContain("<!-- 更早 1 条已折叠 -->");
     expect(text).toContain("g2");
     expect(text).not.toContain("#g1");
-    // The focus segment is the generation's own record: that limit never touches it.
+    // The focus scene (group:1) only has 1 fact, so the limit doesn't cut it.
     expect(text).toContain("Miaow(42) #m1: hello");
   });
 
