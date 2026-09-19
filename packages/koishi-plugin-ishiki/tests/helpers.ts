@@ -47,7 +47,7 @@ export function toolCallStep(...calls: Array<{ toolCallId: string; toolName: str
 
 export interface StoredEntry {
   type: string;
-  data: { next?: Focus; previous?: Focus; frameFocus?: Focus; prevFocus?: Focus; text?: string } & Record<string, unknown>;
+  data: { next?: Focus; previous?: Focus; frameFocus?: Focus; text?: string } & Record<string, unknown>;
 }
 
 export interface Bubble {

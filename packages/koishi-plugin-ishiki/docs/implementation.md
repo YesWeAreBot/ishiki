@@ -15,10 +15,13 @@
 | `index.ts`    | 插件入口:Schema、`ready` 装配、`models.yaml` / `profiles.yaml` 读取、session 分发          |
 | `runtime.ts`  | `ProfileRuntime`:运行期状态、投影(`transformEntries`)、四个工具、落帧与空闲;纯函数在模块级 |
 | `profiles.ts` | `profiles.yaml` 解析与校验、频道规则、`resolveFocus`                                       |
+| `scene.ts`    | 场景身份、事实行渲染、归属遍历(`classify`)、帧分段(`frameSegments`)与场景读流(`factsOf`)   |
 | `types.ts`    | `declare module` 扩展:事实 / 边界 / 独白                                                   |
 | `debug.ts`    | `dumpRequests`:包装 `fetch` 落盘原始请求与响应                                             |
 
 曾经规划过的 `scope.ts` / `entities.ts` / `facts/` / `fold/` / `tools/` / `lifecycle/` / `prompt/` **没有落地**:账号与频道规则在 `profiles.ts`,投影、工具与落帧都在 `runtime.ts`。切文件的判据见 §6.2 与 §8.0——按类型切文件会把还在变动的接口提前冻结,而「一个人的两个文件」并没有大到需要分。
+
+**09-19 抽出 `scene.ts`**:这一层按 **seam** 切,不按类型切——投影与帧此前各自走了一遍同一条 entry 流(推进 cursor、判定够不够得着、按场景归属),撤回行的格式也抄了两份。判据是**调用点 ≥2**:`classify` 两个消费方(工作区投影、`frameSegments`),`factsOf` 三个(`peek_channel`、帧的存储回读、位置声明的频道名)。投影本身仍写在 hook 字面量里,不另开 module:它只有一个调用点,拆出来只是给测试留缝。
 
 ### 1.2 已落地的内核改动(既成事实,不再待办)
 
@@ -32,20 +35,20 @@
 
 ### 1.3 本轮(四段机制)改造面
 
-| 目标                               | 落点                                                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 状态槽(**已落地**)                 | `transformEntries` 就地现算(挂钟取档 + `<state>` 正文 + `slot:<anchorId>` 的 id),在帧之后插入一条 `user` 消息            |
-| self-skip(**已落地**)              | session 处理器里就地判:`platform:userId` 在该 profile 的 sid 集合里 → 直接 return,不入 storage                           |
-| 帧按场景分组(**已落地**)           | `frameTextFor` 就地分桶、就地做存储路线的尾部 + 时间窗口过滤;`segmentLines()` 渲染一段                                   |
-| 自己的话走事实通道(**已落地**)     | `send_message` 成功后在 step 边界落 `ishiki.self.message`;`transformEntries` 不投影它,帧侧与别人同格式渲染               |
-| 工具轨迹不折叠(**已落地**)         | `segmentLines()`:每个 tool-call / tool-result 各一行,参数与结果完整;`truncateMiddle()` 与 `context.toolResultChars` 删除 |
-| 工具轨迹按 cursor 归属(**已落地**) | `frameTextFor` 的分桶:assistant / tool 条目落进遍历到它时的 cursor 场景;`startFocus` 由 `rebuild` 传入                   |
-| 聚合取消(**已落地**)               | 帧侧 `pushFact` / `closeFacts` 删除;工作区投影一条事实一个块                                                             |
-| 立即换代(**已落地**)               | `onStepFinish` 的 `pendingFocus` 分支:由「落 change 条目」改为「立即 `rebuild("switch", previous)`」                     |
-| change 保险丝(**已落地**)          | `rebuild` 返回 false 时落 change 条目;`transformEntries` 就地把它渲染成块头(工作区投影的降级路径)                        |
-| 冷却降级(**已落地**)               | `switchedThisTurn` 与 `FocusCooldown` 全部删除;v1 无冷却                                                                 |
-| `<scenes>` 段                      | 不做(09-19 删)                                                                                                           |
-| 去 K                               | 不实现「每 step 封顶 + `+n`」(09-19 否决)                                                                                |
+| 目标                               | 落点                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 状态槽(**已落地**)                 | `transformEntries` 就地现算(挂钟取档 + `<state>` 正文 + `slot:<anchorId>` 的 id),在帧之后插入一条 `user` 消息                         |
+| self-skip(**已落地**)              | session 处理器里就地判:`platform:userId` 在该 profile 的 sid 集合里 → 直接 return,不入 storage                                        |
+| 帧按场景分组(**已落地**)           | `frameSegments()` 分桶并渲染行;`frameTextFor` 做存储路线的尾部 + 时间窗口过滤与段排序                                                 |
+| 自己的话走事实通道(**已落地**)     | `send_message` 成功后在 step 边界落 `ishiki.self.message`;`transformEntries` 不投影它,帧侧与别人同格式渲染                            |
+| 工具轨迹不折叠(**已落地**)         | `scene.ts` 的 `renderLines()`:每个 tool-call / tool-result 各一行,参数与结果完整;`truncateMiddle()` 与 `context.toolResultChars` 删除 |
+| 工具轨迹按 cursor 归属(**已落地**) | `classify()` 的归属:assistant / tool 条目落进遍历到它时的 cursor 场景;`startFocus` 由 `rebuild` 传入                                  |
+| 聚合取消(**已落地**)               | 帧侧 `pushFact` / `closeFacts` 删除;工作区投影一条事实一个块                                                                          |
+| 立即换代(**已落地**)               | `onStepFinish` 的 `pendingFocus` 分支:由「落 change 条目」改为「立即 `rebuild("switch", previous)`」                                  |
+| change 保险丝(**已落地**)          | `rebuild` 返回 false 时落 change 条目;`transformEntries` 就地把它渲染成块头(工作区投影的降级路径)                                     |
+| 冷却降级(**已落地**)               | `switchedThisTurn` 与 `FocusCooldown` 全部删除;v1 无冷却                                                                              |
+| `<scenes>` 段                      | 不做(09-19 删)                                                                                                                        |
+| 去 K                               | 不实现「每 step 封顶 + `+n`」(09-19 否决)                                                                                             |
 
 ## 2. 目录结构
 
@@ -120,7 +123,6 @@ export namespace Fact {
 ```ts
 export interface Checkpoint {
   frameFocus: Focus; // 本代起点(身体 + 频道)
-  prevFocus?: Focus; // 上一代起点;仅当本代发生切换
   text: string; // 已渲染的帧文本:生成一次,之后每个 step 只读这一份
   createdAt: number;
   // memory?: string;  // 慢层摘要的位置,落地时再加(§12)
@@ -504,8 +506,8 @@ onStepFinish: async (info) => {
 
 `switch_focus` 的落盘动作从「写 `ishiki.focus.changed` 条目」改为「**在 step 边界写新 checkpoint**」:
 
-- `rebuild("switch", previous)`(第二个参数是**离开的那个场景**)组装帧文本并 `append` 一条 `ishiki.checkpoint`;`prevFocus` 写进 payload。组帧的 cursor 起点 `startFocus` 取自上一个检查点的 `frameFocus`,它就是被离开的场景,所以整步的工具轨迹落在它那段里(§6.2)。
-- **成功路径不落 change 条目**:切换语义由 `frameFocus + prevFocus` 完整表达。
+- `rebuild("switch")` 组装帧文本并 `append` 一条 `ishiki.checkpoint`。组帧的 cursor 起点 `startFocus` 取自上一个检查点的 `frameFocus`,它就是被离开的场景,所以整步的工具轨迹落在它那段里(§6.2)。
+- **成功路径不落 change 条目**:切换语义由边界本身加新一代的 `frameFocus` 完整表达,旧场景的去向写在帧文本里。
 - **时机必须在 step 边界**:tool `execute` 内本 step 的 assistant / tool 条目还没写完,重建会读到残缺工作区。
 - **代价(显式)**:换代把本步已经发生的一切留在被离开的那个场景——触发消息、本次工具调用、工具结果都成为它在帧里的样子,新的工作区从换代点开始。缓存账上 miss 总量守恒。
 - **重启恢复**:live focus = 最后 checkpoint 的 `frameFocus`;只有降级路径才需要再扫 change 条目。
@@ -561,26 +563,26 @@ private async checkIdle() { … generationDirty ∧ agent.isIdle() ∧ 静默超
 
 纯函数优先,测试只覆盖确定性行为(不写「有测试」的填充):
 
-| 目标                | 用例要点                                                                                                                                                                                                                                                               |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scope` 派生        | 单场景 / 多频道 / 多身体三档;`private:*` 视为家族                                                                                                                                                                                                                      |
-| 静态校验            | 同 profile 内同平台两具身体的**多方**场景相交 → 抛错;**两方豁免**;跨 profile 同 sid 全场景相交 → 抛错;不同平台不比较                                                                                                                                                   |
-| 寻址解析            | `channel` 省略且该身体只有一个频道 → 取它;多频道未给 `channel` → 结构化错误;`sid` 省略取 focus 的身体                                                                                                                                                                  |
-| **self-skip**       | 自己任一具身体(`platform:userId ∈ allowedChannels`)的发言不入 storage、不起 turn;别人的同频道发言照常摄入                                                                                                                                                              |
-| **自己的话**        | 成功的 `send_message` 每个气泡落一条 `ishiki.self.message`(带平台返回的 id 与自己的 user 快照);工作区投影里看不到它;帧里与别人的行同格式;失败不落事实;平台不回 id 时只记 warning                                                                                       |
-| **立即换代**        | 一次 `switch_focus` 后 storage 里**没有** `ishiki.focus.changed`、多了一条 `ishiki.checkpoint`;新 checkpoint 的 `prevFocus` 是离开的场景;下一个 step 的帧头已是新场景(`focus_sid` / `focus_channel`),旧场景有自己的一段;同一 step 连切则 `frameFocus` 停在最后那个场景 |
-| **轨迹归属**        | 一次切换把整步的工具调用留在被离开的那段里:新焦点段里没有任何 `[工具调用]`,`send_message` / `switch_focus` 两行都落在旧段                                                                                                                                              |
-| **状态槽**          | 位置(帧之后、工作区之前);正文匹配 `^<state>\n当前时间:\d{4}年\d{1,2}月\d{1,2}日 (凌晨                                                                                                                                                                                  | 上午 | 下午 | 晚上)\n</state>$`;同一次投影内槽与帧之前的字节不含任何时钟漂移;冷启动无 checkpoint 时槽照样出现 |
-| 冷启动              | 空流第一 turn 之前写开局帧;无边界时投影自给 `<frame …/>`                                                                                                                                                                                                               |
-| `frameTextFor` 分段 | 焦点段在最前且带 `focus`;这一代工作过的场景用工作区切片;只被叫到过的场景从存储拉;段序按最近活跃倒序                                                                                                                                                                    |
-| 段的裁剪            | 存储路线的段裁到 `historyEntries` 条、只收 `sceneWindowMs` 以内,被裁时写 `<!-- 更早 N 条已折叠 -->`;焦点段不受该上限影响                                                                                                                                               |
-| 工具轨迹不折叠      | 每个 tool-call / tool-result 各一行,参数与结果完整,`已截断` 不出现;独白随参数进帧                                                                                                                                                                                      |
-| 一条事实一个块      | 帧侧没有 `<awareness>` 块,也没有聚合;工作区投影里别处的事各自一块                                                                                                                                                                                                      |
-| name 回退           | 平台报不出账号昵称时用 `profile.name`;两者都没有则只写 id                                                                                                                                                                                                              |
-| change 保险丝       | checkpoint 写失败时落 change 条目,且被渲染成带 `from` / `reason` 的块头                                                                                                                                                                                                |
-| 前缀稳定            | 同一 turn 两个 step 的 request,除状态槽外逐字节相同;追加一条同场景消息后旧字节不变                                                                                                                                                                                     |
-| 前缀稳定(槽)        | 同一粗档内两次投影的槽逐字节相同                                                                                                                                                                                                                                       |
-| 内核 step 边界      | join 的消息不在本 step 的 storage 里、在下一 step 的 collect 里;最后一步 join 的消息在 turn 结束后仍在 storage 里;`onStepFinish` 每 step 恰一次(含最后一步)                                                                                                            |
+| 目标                | 用例要点                                                                                                                                                                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scope` 派生        | 单场景 / 多频道 / 多身体三档;`private:*` 视为家族                                                                                                                                                                                                                                     |
+| 静态校验            | 同 profile 内同平台两具身体的**多方**场景相交 → 抛错;**两方豁免**;跨 profile 同 sid 全场景相交 → 抛错;不同平台不比较                                                                                                                                                                  |
+| 寻址解析            | `channel` 省略且该身体只有一个频道 → 取它;多频道未给 `channel` → 结构化错误;`sid` 省略取 focus 的身体                                                                                                                                                                                 |
+| **self-skip**       | 自己任一具身体(`platform:userId ∈ allowedChannels`)的发言不入 storage、不起 turn;别人的同频道发言照常摄入                                                                                                                                                                             |
+| **自己的话**        | 成功的 `send_message` 每个气泡落一条 `ishiki.self.message`(带平台返回的 id 与自己的 user 快照);工作区投影里看不到它;帧里与别人的行同格式;失败不落事实;平台不回 id 时只记 warning                                                                                                      |
+| **立即换代**        | 一次 `switch_focus` 后 storage 里**没有** `ishiki.focus.changed`、多了一条 `ishiki.checkpoint`;新 checkpoint 的 `frameFocus` 是进入的场景,旧场景在它的帧文本里有自己的一段;下一个 step 的帧头已是新场景(`focus_sid` / `focus_channel`);同一 step 连切则 `frameFocus` 停在最后那个场景 |
+| **轨迹归属**        | 一次切换把整步的工具调用留在被离开的那段里:新焦点段里没有任何 `[工具调用]`,`send_message` / `switch_focus` 两行都落在旧段                                                                                                                                                             |
+| **状态槽**          | 位置(帧之后、工作区之前);正文匹配 `^<state>\n当前时间:\d{4}年\d{1,2}月\d{1,2}日 (凌晨                                                                                                                                                                                                 | 上午 | 下午 | 晚上)\n</state>$`;同一次投影内槽与帧之前的字节不含任何时钟漂移;冷启动无 checkpoint 时槽照样出现 |
+| 冷启动              | 空流第一 turn 之前写开局帧;无边界时投影自给 `<frame …/>`                                                                                                                                                                                                                              |
+| `frameTextFor` 分段 | 焦点段在最前且带 `focus`;这一代工作过的场景用工作区切片;只被叫到过的场景从存储拉;段序按最近活跃倒序                                                                                                                                                                                   |
+| 段的裁剪            | 存储路线的段裁到 `historyEntries` 条、只收 `sceneWindowMs` 以内,被裁时写 `<!-- 更早 N 条已折叠 -->`;焦点段不受该上限影响                                                                                                                                                              |
+| 工具轨迹不折叠      | 每个 tool-call / tool-result 各一行,参数与结果完整,`已截断` 不出现;独白随参数进帧                                                                                                                                                                                                     |
+| 一条事实一个块      | 帧侧没有 `<awareness>` 块,也没有聚合;工作区投影里别处的事各自一块                                                                                                                                                                                                                     |
+| name 回退           | 平台报不出账号昵称时用 `profile.name`;两者都没有则只写 id                                                                                                                                                                                                                             |
+| change 保险丝       | checkpoint 写失败时落 change 条目,且被渲染成带 `from` / `reason` 的块头                                                                                                                                                                                                               |
+| 前缀稳定            | 同一 turn 两个 step 的 request,除状态槽外逐字节相同;追加一条同场景消息后旧字节不变                                                                                                                                                                                                    |
+| 前缀稳定(槽)        | 同一粗档内两次投影的槽逐字节相同                                                                                                                                                                                                                                                      |
+| 内核 step 边界      | join 的消息不在本 step 的 storage 里、在下一 step 的 collect 里;最后一步 join 的消息在 turn 结束后仍在 storage 里;`onStepFinish` 每 step 恰一次(含最后一步)                                                                                                                           |
 
 **一条测试面的诚实说明**:状态槽读挂钟,而生产代码里**不注入时钟**(为可测性留缝是明确禁止的)。因此「档位映射」没有确定性单测——结构断言只能覆盖取值域(正则),边界(05:59→06:00 等)靠人工在真实实例里跨档观察。这是选挂钟方案的既定代价,不是遗漏。
 

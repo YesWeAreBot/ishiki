@@ -4,8 +4,7 @@ declare module "@yesimagent/core" {
   interface AgentCustomMessage {
     "ishiki.message.created": CustomMessage<"ishiki.message.created", IshikiEvent.MessageCreated>;
     "ishiki.message.deleted": CustomMessage<"ishiki.message.deleted", IshikiEvent.MessageDeleted>;
-    "ishiki.inner.thought": CustomMessage<"ishiki.inner.thought", IshikiMessage.InnerThought>;
-    "ishiki.self.message": CustomMessage<"ishiki.self.message", IshikiMessage.SelfMessage>;
+    "ishiki.self.message": CustomMessage<"ishiki.self.message", IshikiEvent.MessageCreated>;
 
     // OneBot Events
     "onebot.guild.member-added": CustomMessage<"onebot.guild.member-added", OneBotEvent.GuildMemberAdded>;
@@ -15,18 +14,6 @@ declare module "@yesimagent/core" {
     "ishiki.checkpoint": IshikiEntry.Checkpoint;
     "ishiki.focus.changed": IshikiEntry.FocusChanged;
   }
-}
-
-export namespace IshikiMessage {
-  /**
-   * The mind's own monologue, recorded at the step boundary. It never leaves the machine and never enters a
-   * frame — frames carry behavior and its results, not the mind's own wording.
-   */
-  export interface InnerThought {
-    text: string;
-  }
-
-  export interface SelfMessage extends IshikiEvent.MessageCreated {}
 }
 
 export namespace IshikiEvent {
@@ -75,7 +62,6 @@ export namespace IshikiEntry {
    */
   export interface Checkpoint {
     frameFocus: { sid: string; channelId: string };
-    prevFocus?: { sid: string; channelId: string };
     text: string;
     createdAt: number;
   }

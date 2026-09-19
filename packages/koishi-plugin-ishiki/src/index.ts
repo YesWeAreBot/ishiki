@@ -1,4 +1,4 @@
-import { existsSync, promises as fs } from "node:fs";
+import { existsSync, promises as fs, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { Agent } from "@yesimagent/core";
@@ -19,39 +19,34 @@ class Ishiki {
   public config: Ishiki.Config;
   public logger: Logger;
 
-  private gateway!: Gateway;
-  private cortex!: Agent;
+  private gateway: Gateway;
   private runtimes: ProfileRuntime[] = [];
+
   constructor(ctx: Context, config: Ishiki.Config) {
     this.ctx = ctx;
     this.config = config;
     this.logger = ctx.logger("ishiki");
     this.logger.level = config.logLevel ?? Logger.INFO;
 
-    ctx.on("dispose", async () => {
-      for (const runtime of this.runtimes) await runtime.stop();
-      this.runtimes = [];
+    const modelConfigFile = path.resolve(this.ctx.baseDir, this.config.dataPath, "models.yaml");
+    if (!existsSync(modelConfigFile)) {
+      mkdirSync(path.dirname(modelConfigFile), { recursive: true });
+      writeFileSync(modelConfigFile, "");
+    }
+    const modelConfigContent = readFileSync(modelConfigFile, "utf-8");
+    const modelConfig = (parse(modelConfigContent) as GatewayConfig) ?? {};
+    this.logger.info(`--- Model Config ---\n${JSON.stringify(modelConfig, null, 2)}`);
+    this.gateway = createGateway({
+      config: modelConfig,
+      fetch: this.config.dumpRequests
+        ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.ctx.baseDir, this.config.dataPath, "debug") })
+        : undefined,
     });
+    for (const model of this.gateway.models()) {
+      this.logger.info(model);
+    }
 
     ctx.on("ready", async () => {
-      const modelConfigFile = path.resolve(this.ctx.baseDir, this.config.dataPath, "models.yaml");
-      if (!existsSync(modelConfigFile)) {
-        await fs.mkdir(path.dirname(modelConfigFile), { recursive: true });
-        await fs.writeFile(modelConfigFile, "");
-      }
-      const modelConfigContent = await fs.readFile(modelConfigFile, "utf-8");
-      const modelConfig = (parse(modelConfigContent) as GatewayConfig) ?? {};
-      this.logger.info(`--- Model Config ---\n${JSON.stringify(modelConfig, null, 2)}`);
-      this.gateway = createGateway({
-        config: modelConfig,
-        fetch: this.config.dumpRequests
-          ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.ctx.baseDir, this.config.dataPath, "debug") })
-          : undefined,
-      });
-      for (const model of this.gateway.models()) {
-        this.logger.info(model);
-      }
-
       const profilesFile = path.resolve(this.ctx.baseDir, this.config.profilesPath);
       if (!existsSync(profilesFile)) {
         this.logger.warn(`Profiles file not found: ${profilesFile}`);
@@ -74,6 +69,11 @@ class Ishiki {
       }
 
       this.logger.info("Ishiki plugin is ready.");
+    });
+
+    ctx.on("dispose", async () => {
+      for (const runtime of this.runtimes) await runtime.stop();
+      this.runtimes = [];
     });
   }
 }

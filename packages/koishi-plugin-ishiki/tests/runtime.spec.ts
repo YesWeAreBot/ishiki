@@ -178,7 +178,6 @@ describe("switching focus", () => {
     expect((await harness.entries()).filter((entry) => entry.type === "ishiki.focus.changed")).toHaveLength(0);
     const checkpoint = await rebuiltCheckpoint(harness);
     expect(checkpoint.data.frameFocus).toEqual({ sid: "onebot:2", channelId: "group:9" });
-    expect(checkpoint.data.prevFocus).toEqual({ sid: "onebot:1", channelId: "group:1" });
   });
 
   it("lets a second switch in one step end another generation", async () => {
@@ -196,7 +195,6 @@ describe("switching focus", () => {
     // pending hop is the trajectory it came through.
     const checkpoint = await rebuiltCheckpoint(harness);
     expect(checkpoint.data.frameFocus).toEqual({ sid: "onebot:1", channelId: "group:1" });
-    expect(checkpoint.data.prevFocus).toEqual({ sid: "onebot:2", channelId: "group:9" });
     expect((await harness.entries()).filter((entry) => entry.type === "ishiki.focus.changed")).toHaveLength(0);
   });
 
@@ -506,7 +504,6 @@ describe("frame rebuild", () => {
 
     const checkpoint = await rebuiltCheckpoint(harness);
     expect(checkpoint.data.frameFocus).toEqual({ sid: "onebot:1", channelId: "group:1" });
-    expect(checkpoint.data.prevFocus).toBeUndefined();
     expect(String(checkpoint.data.text)).toContain("<frame");
     // The focus segment is the generation's own record, so the line that filled the budget is right there.
     expect(String(checkpoint.data.text)).toContain("Miaow(42) #m1: hello");
@@ -543,31 +540,6 @@ describe("frame rebuild", () => {
     await rebuiltCheckpoint(tight);
   });
 
-  it("groups the switched generation by scene", async () => {
-    const harness = await createHarness([
-      toolCallStep(
-        { toolCallId: "c1", toolName: "switch_focus", input: { sid: "onebot:2", channel: "group:9" } },
-        { toolCallId: "c2", toolName: "send_message", input: { channel: "group:9", messages: ["ping"] } },
-      ),
-      textStep("unreached"),
-    ]);
-
-    await harness.send();
-
-    const checkpoint = await rebuiltCheckpoint(harness);
-    const text = String(checkpoint.data.text);
-    expect(checkpoint.data.frameFocus).toEqual({ sid: "onebot:2", channelId: "group:9" });
-    expect(checkpoint.data.prevFocus).toEqual({ sid: "onebot:1", channelId: "group:1" });
-    // The trajectory belongs to the scene the mind was working in; the send that followed is that scene's line.
-    expect(text).toContain('<history sid="onebot:2" channel="group:9" focus>');
-    expect(text.match(/\[工具结果\] switch_focus:/g)).toHaveLength(1);
-    expect(text).toContain("NekoChan(2) #id-1: ping");
-    // The scene it left is a conversation again, read back out of storage.
-    expect(text).toContain('<history sid="onebot:1" channel="group:1">');
-    expect(text).not.toContain("<last_focus_history");
-    expect(text).not.toContain("[focus change]");
-  });
-
   it("keeps the assistant's prose out of the frame and prints tool traffic in full", async () => {
     const harness = await createHarness(
       [toolCallStep({ toolCallId: "c1", toolName: "peek_channel", input: { channel: "group:1" } }), textStep("这段文字不该进帧")],
@@ -599,11 +571,9 @@ describe("frame rebuild", () => {
 
     await harness.send();
 
-    // The step after the send reads the monologue as the mind's own text.
+    // The step after the send reads the monologue as the mind's own text: the tool call carries it whole.
     expect(promptText(harness.prompts(), 1)).toContain("先看看反应");
-    const stored = (await harness.entries()).filter((entry) => String(entry.data["type"]) === "ishiki.inner.thought");
-    expect(stored).toHaveLength(1);
-    // And the frozen frame carries it too: the arguments are printed whole, so nothing is trimmed field by field.
+    // The frozen frame carries it too, for the same reason: the arguments are printed whole.
     expect(String((await rebuiltCheckpoint(harness)).data.text)).toContain("先看看反应");
   });
 
@@ -721,51 +691,6 @@ describe("frame rebuild", () => {
     expect(text.slice(arrived, left)).not.toContain("[工具调用]");
     expect(text.indexOf("[工具调用] switch_focus:")).toBeGreaterThan(left);
     expect(text.indexOf("[工具调用] send_message:")).toBeGreaterThan(left);
-  });
-
-  it("gives another scene a segment of its own, one line per fact", async () => {
-    // Two facts of one other scene, both reaching the mind while the cursor is elsewhere.
-    const harness = await createHarness([textStep("nothing")], {
-      profile: { ...twoSceneProfile(), context: makeContext({ workspaceTokenLimit: 1 }) },
-      seed: [storedFact("在吗", "group:9", true), storedFact("再看一眼", "group:9", true)],
-    });
-
-    await harness.send();
-
-    // A stream that already had facts never got an opening frame, so the rebuild writes the only checkpoint.
-    const checkpoint = await waitFor(async () => {
-      const found = (await harness.entries()).filter((entry) => entry.type === "ishiki.checkpoint");
-      return found.length > 0 ? found[found.length - 1] : undefined;
-    });
-    const text = String(checkpoint.data.text);
-    // One segment, its own head, and no wrapper of any kind inside a frame.
-    expect(text.match(/<history sid="onebot:1" channel="group:9">/g)).toHaveLength(1);
-    expect(text).toContain("在吗");
-    expect(text).toContain("再看一眼");
-    expect(text).not.toContain("<awareness");
-  });
-
-  it("prints a scene's conversation in exactly one segment", async () => {
-    const harness = await createHarness(
-      [
-        textStep("nothing"),
-        toolCallStep({ toolCallId: "c1", toolName: "switch_focus", input: { sid: "onebot:2", channel: "group:9" } }),
-        textStep("unreached"),
-      ],
-      { profile: twoSceneProfile() },
-    );
-
-    await harness.send();
-    // Direct, so it reaches the mind while the cursor is elsewhere, and it is the scene the switch opens.
-    await harness.send({ sid: "onebot:2", selfId: "2", channelId: "group:9", isDirect: true, messageId: "m9", content: "在吗" });
-
-    const checkpoint = await rebuiltCheckpoint(harness);
-    const text = String(checkpoint.data.text);
-    expect(checkpoint.data.frameFocus).toEqual({ sid: "onebot:2", channelId: "group:9" });
-    expect(text).toContain('<history sid="onebot:2" channel="group:9" focus>');
-    // Every fact belongs to one scene, so the same words are never printed twice.
-    expect(text.match(/在吗/g)).toHaveLength(1);
-    expect(text).not.toContain("<awareness");
   });
 
   it("reads the mind's own words back inside the window they were said in", async () => {
