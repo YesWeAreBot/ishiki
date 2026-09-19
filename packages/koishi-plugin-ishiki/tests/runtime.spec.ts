@@ -382,17 +382,17 @@ describe("three zones", () => {
     expect(second.slice(0, first.length)).toEqual(first);
   });
 
-  it("shows another scene's fact as awareness only when it reaches the mind", async () => {
+  it("shows another scene's fact as a notification only when it reaches the mind", async () => {
     const direct = await createHarness([textStep("nothing")], { profile: twoSceneProfile() });
     await direct.send({ channelId: "group:9", content: "在吗" });
     const directText = promptText(direct.prompts(), 0);
-    expect(directText).toContain('<awareness sid="onebot:1" channel="group:9"');
+    expect(directText).toContain('<notification sid="onebot:1" channel="group:9"');
     expect(directText).toContain("在吗");
 
     const keyword = await createHarness([textStep("nothing")], { profile: { ...twoSceneProfile(), keywords: ["上线"] } });
     await keyword.send({ channelId: "group:9", isDirect: false, content: "我们上线了" });
     const keywordText = promptText(keyword.prompts(), 0);
-    expect(keywordText).toContain('<awareness sid="onebot:1" channel="group:9"');
+    expect(keywordText).toContain('<notification sid="onebot:1" channel="group:9"');
     expect(keywordText).toContain("我们上线了");
 
     const quiet = await createHarness([textStep("nothing")], { profile: twoSceneProfile() });
@@ -521,23 +521,6 @@ describe("frame rebuild", () => {
     const text = promptText(harness.prompts(), 1);
     expect(text).toContain("<frame");
     expect(text.indexOf("<frame")).toBeLessThan(text.indexOf("Miaow(42) #m1: hello"));
-  });
-
-  it("derives the budget from the window the model declares", async () => {
-    const roomy = await createHarness([textStep("nothing")], {
-      profile: { context: makeContext({ workspaceTokenLimit: undefined }) },
-      contextWindow: 1_000_000,
-    });
-    await roomy.send();
-    // Only the opening frame: the declared window is far larger than the generation.
-    expect((await roomy.entries()).filter((entry) => entry.type === "ishiki.checkpoint")).toHaveLength(1);
-
-    const tight = await createHarness([textStep("nothing")], {
-      profile: { context: makeContext({ workspaceTokenLimit: undefined }) },
-      contextWindow: 8,
-    });
-    await tight.send();
-    await rebuiltCheckpoint(tight);
   });
 
   it("keeps the assistant's prose out of the frame and prints tool traffic in full", async () => {

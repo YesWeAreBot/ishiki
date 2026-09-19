@@ -5,10 +5,8 @@ import type { Focus, Profile } from "./profiles.js";
 import type { IshikiEvent } from "./types.js";
 
 /**
- * Everything that knows what a scene is and what a fact reads back as. A scene is a body plus a channel id
- * whose meaning is scoped to that body, so the address is `platform:selfId:channelId` and the key carries the
- * body. The workspace projection and the frame between them ask the same three questions — is this fact of the
- * cursor's scene, is it of some given scene, and what line does it render to — so they ask them here.
+ * Scene primitives: identity, fact rendering, workspace classification, and storage queries.
+ * A scene is a body (sid) plus a channel id; the address is `platform:selfId:channelId`.
  */
 
 /** 场景身份 = 身体 + 频道;地址写作 `platform:selfId:channelId`(`channelId` 的语义域是 `selfId`)。 */
@@ -38,8 +36,7 @@ export function renderLine(fact: IshikiEvent.MessageCreated): string {
 
 /**
  * A fact as the projection sees it: the scene it belongs to, the one line it renders to, and the channel name
- * it arrived with. The wrapper cannot be baked into the line itself, because a fact of another scene renders
- * as a block.
+ * it arrived with.
  */
 export interface Fact {
   scene: Focus;
@@ -73,12 +70,16 @@ function toRetraction(fact: IshikiEvent.MessageDeleted): Omit<Fact, "timestamp">
 /** A fact plus the one thing a projection adds: whether the cursor is on that scene. */
 type Seen = Omit<Fact, "timestamp"> & { focus: boolean };
 
-/** A bare line for a fact in the cursor's scene, a line worth an awareness block when it comes from elsewhere. */
+/**
+ * Decides whether a non-focus fact reaches the mind's workspace (as a notification).
+ *
+ * The conditions mirror the wake rules in the ingestion handler (direct / @self / keywords),
+ * so a fact that triggered a turn is always visible inside it. The ingestion handler reads
+ * Koishi's `session.stripped.atSelf`; here we re-parse from stored content via `h.parse`.
+ */
 function seenFact(profile: Profile, cursor: Focus, fact: IshikiEvent.MessageCreated): Seen | undefined {
   if (sceneKey(sceneOf(fact)) === sceneKey(cursor)) return { ...toFact(fact, false), focus: true };
 
-  // Whether a fact from another scene still reaches the mind. The rules mirror the wake rules, so the fact that
-  // started a turn can never be invisible inside it.
   let reaches = fact.channel.direct === true || profile.keywords.some((keyword) => keyword.length > 0 && fact.content.includes(keyword));
   if (!reaches && fact.content.includes("<at")) {
     try {
@@ -107,9 +108,7 @@ export type WalkRecord =
 
 /**
  * Reads the workspace as records: advances the cursor over the recorded switches, decides whether a fact
- * reaches the mind, and pins each entry to the scene it belonged to when the stream reached it. A record says
- * what something is, never how it is emitted — the block heads, the awareness wrappers and the trace lines are
- * the consumers' business.
+ * reaches the mind, and pins each entry to the scene it belonged to when the stream reached it.
  */
 export function classify(profile: Profile, entries: readonly AgentEntry[], startFocus: Focus): WalkRecord[] {
   const out: WalkRecord[] = [];

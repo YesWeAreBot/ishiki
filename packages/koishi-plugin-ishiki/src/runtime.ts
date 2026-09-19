@@ -218,20 +218,19 @@ export class ProfileRuntime {
                 continue;
               }
               // What the mind said is marked by the tool call that sent it, so its own message is projected into
-              // a frame and never read back here as somebody else's line.
+              // a frame and never read back here as somebody else's line in the workspace.
               if (record.own) continue;
-              // A fact of another scene renders as a block: only the scene the mind is in prints bare lines.
-              const body = record.focus
-                ? record.line
-                : [
-                    `<awareness sid="${record.scene.sid}" channel="${record.scene.channelId}"${record.channelName === undefined || record.channelName.length === 0 ? "" : ` name="${record.channelName}"`}>`,
-                    record.line,
-                    "</awareness>",
-                  ].join("\n");
-
-              // The first line of a run opens with the header; the ones after it stay bare.
-              const text = record.focus && !inWindow ? `<focus sid="${record.scene.sid}" channel="${record.scene.channelId}">\n${body}` : body;
-              inWindow = record.focus;
+              // Non-focus facts are compact notifications: enough to know who said what where, not full context.
+              if (!record.focus) {
+                const from = record.line.match(/\] (.+?) #/)?.[1] ?? "";
+                const text = `<notification sid="${record.scene.sid}" channel="${record.scene.channelId}"${from ? ` from="${from}"` : ""}>${record.line}</notification>`;
+                out.push(createEntry("message", createUserMessage(text), { id: record.entry.data.id, timestamp: record.entry.data.timestamp }));
+                inWindow = false;
+                continue;
+              }
+              // Focus fact: bare line, with a header on the first one after non-focus content.
+              const text = !inWindow ? `<focus sid="${record.scene.sid}" channel="${record.scene.channelId}">\n${record.line}` : record.line;
+              inWindow = true;
               out.push(createEntry("message", createUserMessage(text), { id: record.entry.data.id, timestamp: record.entry.data.timestamp }));
             }
             return out;
@@ -313,7 +312,7 @@ export class ProfileRuntime {
       "你的账号同时在线，但你同一时刻只打开一个频道的窗口，那就是焦点（focus）。",
       "",
       "- 帧是回顾：一个场景一段，段头写明 sid 与 channel，带 focus 的那段就是你正打开的窗口，段内裸行都属于这个场景。",
-      "- 帧之后才是正在发生的事：窗口里的行以 <focus sid channel> 块头出现，别处够得着的以 <awareness> 块出现。",
+      "- 帧之后才是正在发生的事：窗口里的行以 <focus sid channel> 块头出现，别处够得着的以 <notification> 出现（只告诉你谁在哪里说了什么，要看完整上下文请 peek_channel）。",
       "- 别把两处的话串起来：同一个人可能同时在私聊和群里跟你讲话，那是两场对话；答话要答在跟你说话的那个频道。",
       "- 发消息默认发到 focus：省略 channel 与 sid；要发去别的频道、或改用另一个账号，才写它们。",
       "- 换窗口用 switch_focus；换过之后本轮的后续动作默认在新窗口发生，你离开的那个场景在新帧里有自己的一段。",
@@ -630,13 +629,8 @@ export class ProfileRuntime {
 
   /** The workspace budget: an explicit token limit, else half of the window the model declares. */
   private resolveBudget(): void {
-    const declared = this.profile.context.workspaceTokenLimit;
-    if (declared !== undefined) {
-      this.workspaceTokenLimit = declared;
-      return;
-    }
-    const window = this.gateway.models("language").find((model) => model.id === this.profile.model)?.metadata.contextWindow;
-    this.workspaceTokenLimit = window === undefined ? DEFAULT_WORKSPACE_TOKEN_LIMIT : Math.floor(window * 0.5);
+    // The schema always provides a default (8192), so this is never undefined at runtime.
+    this.workspaceTokenLimit = this.profile.context.workspaceTokenLimit ?? DEFAULT_WORKSPACE_TOKEN_LIMIT;
   }
 
   private overBudget(workspace: readonly AgentEntry[]): boolean {
