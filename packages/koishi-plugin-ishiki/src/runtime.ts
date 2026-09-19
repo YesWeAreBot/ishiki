@@ -22,10 +22,10 @@ import { Gateway } from "@yesimagent/gateway";
 import { Context, h, Logger, Session } from "koishi";
 
 import { Focus, isChannelAllowed, Profile, resolveFocus } from "./profiles.js";
-import { classify, collectFacts, formatClock, sceneKey } from "./scene.js";
+import { classify, collectLines, eventRenders, formatClock, sceneKey } from "./scene.js";
 import type { IshikiEntry, IshikiEvent } from "./types.js";
 
-/** How many facts `peek_channel` reads by default, and the most it will read in one call. */
+/** How many lines `peek_channel` reads by default, and the most it will read in one call. */
 const PEEK_DEFAULT_LIMIT = 20;
 const PEEK_MAX_LIMIT = 50;
 
@@ -56,11 +56,11 @@ interface PeekChannelInput extends TargetInput {
 }
 
 /**
- * The `<frame ...>` opening tag. The channel name comes from the first non-own fact in the workspace so
+ * The `<frame ...>` opening tag. The channel name comes from the first non-own line in the workspace so
  * earlier steps of the same turn always see the same string.
  */
 function renderFrameHead(focus: Focus, at: string, workspace: readonly AgentEntry[]): string {
-  const name = collectFacts(workspace, focus, { retractions: false }).find((fact) => !fact.own)?.channelName;
+  const name = collectLines(workspace, focus).find((line) => !line.own)?.channelName;
   return [
     `at="${at}"`,
     `focus_sid="${focus.sid}"`,
@@ -476,7 +476,7 @@ export class ProfileRuntime {
             return { ok: false as const, error: { name: "LimitTooLarge", message: `limit 必须是 1 到 ${PEEK_MAX_LIMIT} 之间的整数` } };
           }
 
-          const lines = collectFacts(await this.agent.storage.read(), target, { retractions: false }).map((fact) => fact.line);
+          const lines = collectLines(await this.agent.storage.read(), target).map((rl) => rl.line);
           const recent = lines.slice(-limit);
           const text = [`<peek sid="${target.sid}" channel="${target.channelId}" count=${recent.length}>`, ...recent].join("\n");
           return { ok: true as const, target, count: recent.length, text };
@@ -657,9 +657,9 @@ export class ProfileRuntime {
       if (entry.type !== "message") continue;
       const message = entry.data;
       if (message.role !== "custom") continue;
-      if (message.type === "ishiki.message.created" || message.type === "ishiki.self.message") {
-        const sid = `${message.data.platform}:${message.data.selfId}`;
-        const scene: Focus = { sid, channelId: message.data.channel.id };
+      const desc = eventRenders[message.type];
+      if (desc) {
+        const scene = desc.scene(message.data);
         const key = sceneKey(scene);
         if (!scenes.has(key)) scenes.set(key, scene);
       }
@@ -668,9 +668,9 @@ export class ProfileRuntime {
     // Build one segment per scene, all from storage with the same tail + time-window rule.
     const segments: Array<{ scene: Focus; lines: string[]; dropped: number; latest: number }> = [];
     for (const [key, scene] of scenes) {
-      const fresh = collectFacts(entries, scene).filter((fact) => now - fact.timestamp <= sceneWindowMs);
+      const fresh = collectLines(entries, scene).filter((rl) => now - rl.timestamp <= sceneWindowMs);
       const kept = fresh.slice(-historyEntries);
-      const lines = kept.map((fact) => fact.line);
+      const lines = kept.map((rl) => rl.line);
       const dropped = Math.max(0, fresh.length - historyEntries);
       const latest = kept.at(-1)?.timestamp ?? 0;
       if (lines.length === 0 && key !== here) continue;
