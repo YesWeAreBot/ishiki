@@ -5,6 +5,7 @@ declare module "@yesimagent/core" {
     "ishiki.message.created": CustomMessage<"ishiki.message.created", IshikiEvent.MessageCreated>;
     "ishiki.message.deleted": CustomMessage<"ishiki.message.deleted", IshikiEvent.MessageDeleted>;
     "ishiki.inner.thought": CustomMessage<"ishiki.inner.thought", IshikiMessage.InnerThought>;
+    "ishiki.self.message": CustomMessage<"ishiki.self.message", IshikiMessage.SelfMessage>;
 
     // OneBot Events
     "onebot.guild.member-added": CustomMessage<"onebot.guild.member-added", OneBotEvent.GuildMemberAdded>;
@@ -24,6 +25,8 @@ export namespace IshikiMessage {
   export interface InnerThought {
     text: string;
   }
+
+  export interface SelfMessage extends IshikiEvent.MessageCreated {}
 }
 
 export namespace IshikiEvent {
@@ -37,7 +40,7 @@ export namespace IshikiEvent {
     content: string;
     /** A snapshot: a later rename never rewrites the lines already rendered from this fact. */
     user: { id: string; name?: string };
-    channel: { id: string; name?: string; direct: boolean };
+    channel: { id: string; name?: string; direct?: boolean };
     guildId?: string;
     messageId: string;
     quote?: { id: string; content?: string; user?: { id: string; name?: string }; channel?: { id: string }; guild?: { id: string } };

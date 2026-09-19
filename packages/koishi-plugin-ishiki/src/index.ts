@@ -63,7 +63,12 @@ class Ishiki {
       this.logger.info(`--- Validated Profiles Config ---\n${JSON.stringify(profilesConfig, null, 2)}`);
 
       for (const profile of profilesConfig.profiles) {
-        const runtime = new ProfileRuntime(this.ctx, { profile, gateway: this.gateway, profilesPath: this.config.profilesPath });
+        const runtime = new ProfileRuntime(this.ctx, {
+          profile,
+          gateway: this.gateway,
+          profilesPath: this.config.profilesPath,
+          logLevel: this.config.logLevel,
+        });
         this.runtimes.push(runtime);
         await runtime.start();
       }

@@ -23,7 +23,7 @@ import { Gateway } from "@yesimagent/gateway";
 import { Context, h, Logger, Session } from "koishi";
 
 import { Focus, isChannelAllowed, Profile, resolveFocus } from "./profiles.js";
-import type { IshikiEntry, IshikiEvent } from "./types.js";
+import type { IshikiEntry, IshikiEvent, IshikiMessage } from "./types.js";
 
 /** How many facts `peek_channel` reads by default, and the most it will read in one call. */
 const PEEK_DEFAULT_LIMIT = 20;
@@ -55,12 +55,6 @@ interface PeekChannelInput extends TargetInput {
   limit?: number;
 }
 
-/** Platform failures carry a name worth keeping: `BotNotFound` tells the model to fix the address, `Error` does not. */
-function describeError(error: unknown): { name: string; message: string } {
-  if (error instanceof Error) return { name: error.name, message: error.message };
-  return { name: "Error", message: String(error) };
-}
-
 function formatClock(timestamp: number): string {
   const date = new Date(timestamp);
   return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
@@ -84,119 +78,79 @@ function lineOf(fact: IshikiEvent.MessageCreated): string {
   return `[${formatClock(fact.timestamp)}] ${who} #${fact.messageId}: ${fact.content}`;
 }
 
-/** Only scenes the mind is not in get a wrapper; the position statement already names the scene it is in. */
-function awarenessBlock(sid: string, channel: { id: string; name?: string }, lines: string[]): string {
-  const attributes = [`sid="${sid}"`, `channel="${channel.id}"`];
-  if (channel.name !== undefined && channel.name.length > 0) attributes.push(`name="${channel.name}"`);
-  return [`<awareness ${attributes.join(" ")}>`, ...lines, "</awareness>"].join("\n");
-}
-
-/** A fact as the workspace shows it: `focus` says whether it belongs to the window the cursor is on. */
-interface FactText {
-  text: string;
+/**
+ * A fact as the projection sees it: the line, the scene it belongs to, and whether the cursor is on that scene.
+ * The wrapper cannot be baked into the line itself, because a fact of another scene renders as a block.
+ */
+interface FactLine {
+  line: string;
   focus: boolean;
+  key: string;
+  sid: string;
+  channel: { id: string; name?: string };
 }
 
-function mentionsSelf(content: string, selfId: string): boolean {
-  if (!content.includes("<at")) return false;
-  try {
-    return h.parse(content).some((element) => element.type === "at" && element.attrs?.id === selfId);
-  } catch {
-    return false;
+/** A bare line for a fact in the cursor's scene, a line worth an awareness block when it comes from elsewhere. */
+function factLine(profile: Profile, cursor: Focus, fact: IshikiEvent.MessageCreated): FactLine | undefined {
+  const key = sceneKeyOf(fact);
+  const sid = sidOf(fact);
+  if (key === focusKey(cursor)) return { line: lineOf(fact), focus: true, key, sid, channel: fact.channel };
+
+  // Whether a fact from another scene still reaches the mind. The rules mirror the wake rules, so the fact that
+  // started a turn can never be invisible inside it.
+  let reaches = fact.channel.direct === true || profile.keywords.some((keyword) => keyword.length > 0 && fact.content.includes(keyword));
+  if (!reaches && fact.content.includes("<at")) {
+    try {
+      reaches = h.parse(fact.content).some((element) => element.type === "at" && element.attrs?.id === fact.selfId);
+    } catch {
+      reaches = false;
+    }
   }
+  if (!reaches) return undefined;
+  return { line: lineOf(fact), focus: false, key, sid, channel: fact.channel };
+}
+
+function deletedLine(profile: Profile, cursor: Focus, fact: IshikiEvent.MessageDeleted): FactLine | undefined {
+  const sid = sidOf(fact);
+  const key = `${sid}:${fact.channelId}`;
+  const inFocus = key === focusKey(cursor);
+  const ours = fact.operatorId !== undefined && profile.allowedChannels.some((declaration) => declaration.sid === sid);
+  if (!inFocus && !ours) return undefined;
+  return {
+    line: `[${formatClock(fact.timestamp)}] #${fact.messageId}: (已撤回)`,
+    focus: inFocus,
+    key,
+    sid,
+    channel: { id: fact.channelId },
+  };
 }
 
 /**
- * Whether a fact from another scene still reaches the mind. The rules mirror the wake rules, so the fact
- * that started a turn can never be invisible inside it.
+ * The attributes a position declares, shared by the materialized frames and the projection's own head. The name
+ * comes from the first fact of that scene in this generation: taken from anything later, the head could drift.
  */
-function reachesMind(profile: Profile, fact: IshikiEvent.MessageCreated): boolean {
-  if (fact.channel.direct) return true;
-  if (mentionsSelf(fact.content, fact.selfId)) return true;
-  return profile.keywords.some((keyword) => keyword.length > 0 && fact.content.includes(keyword));
-}
-
-/** A bare line for a fact in the cursor's scene, an awareness block when it comes from elsewhere. */
-function createdText(profile: Profile, cursor: Focus, fact: IshikiEvent.MessageCreated): FactText | undefined {
-  if (sceneKeyOf(fact) === focusKey(cursor)) return { text: lineOf(fact), focus: true };
-  return reachesMind(profile, fact) ? { text: awarenessBlock(sidOf(fact), fact.channel, [lineOf(fact)]), focus: false } : undefined;
-}
-
-function deletedText(profile: Profile, cursor: Focus, fact: IshikiEvent.MessageDeleted): FactText | undefined {
-  const sid = sidOf(fact);
-  const inFocus = `${sid}:${fact.channelId}` === focusKey(cursor);
-  const ours = fact.operatorId !== undefined && profile.allowedChannels.some((declaration) => declaration.sid === sid);
-  if (!inFocus && !ours) return undefined;
-  const line = `[${formatClock(fact.timestamp)}] #${fact.messageId}: (已撤回)`;
-  return inFocus ? { text: line, focus: true } : { text: awarenessBlock(sid, { id: fact.channelId }, [line]), focus: false };
-}
-
-function changeLine(change: IshikiEntry.FocusChanged): string {
-  const reason = change.reason === undefined || change.reason.length === 0 ? "" : `（${change.reason}）`;
-  return `[focus change] ${focusKey(change.previous)} → ${focusKey(change.next)}${reason}`;
-}
-
-/** The first fact of a scene in a generation: names taken from anything later would let the head drift. */
-function firstFactOfScene(workspace: readonly AgentEntry[], focus: Focus): IshikiEvent.MessageCreated | undefined {
+function positionAttributes(focus: Focus, at: string, workspace: readonly AgentEntry[]): string {
+  let name: string | undefined;
   for (const entry of workspace) {
     if (entry.type !== "message") continue;
     const message = entry.data;
     if (message.role !== "custom" || message.type !== "ishiki.message.created") continue;
-    if (sceneKeyOf(message.data) === focusKey(focus)) return message.data;
+    if (sceneKeyOf(message.data) === focusKey(focus)) {
+      name = message.data.channel.name;
+      break;
+    }
   }
-  return undefined;
-}
-
-/** The attributes a position declares, shared by the materialized frames and the projection's own head. */
-function positionAttributes(focus: Focus, at: string, workspace: readonly AgentEntry[]): string {
-  const name = firstFactOfScene(workspace, focus)?.channel.name;
-  return [`at="${at}"`, `sid="${focus.sid}"`, `channel="${focus.channelId}"`, ...(name === undefined || name.length === 0 ? [] : [`name="${name}"`])].join(" ");
-}
-
-/**
- * The head of a generation that has no checkpoint yet: the element a materialized frame opens with, with
- * nothing folded under it. Every value comes from the first entry or the configured focus, so every step of
- * the turn renders the identical string and the model-visible prefix never moves.
- */
-function positionEntry(profile: Profile, workspace: readonly AgentEntry[]): AgentEntry<"message"> | undefined {
-  const first = workspace[0];
-  if (first === undefined) return undefined;
-
-  const head = `<frame ${positionAttributes(profile.initialFocus, formatClock(first.timestamp), workspace)}/>`;
-  return createEntry("message", createUserMessage(head), { id: `frame:${first.id}`, timestamp: first.timestamp });
-}
-
-/** Keeps both ends of an oversized tool result; the middle is where the redundancy lives. */
-function truncateMiddle(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const half = Math.max(1, Math.floor(max / 2));
-  return `${text.slice(0, half)}\n…[已截断 ${text.length - half * 2} 字符]…\n${text.slice(-half)}`;
+  return [
+    `at="${at}"`,
+    `focus_sid="${focus.sid}"`,
+    `focus_channel="${focus.channelId}"`,
+    ...(name === undefined || name.length === 0 ? [] : [`name="${name}"`]),
+  ].join(" ");
 }
 
 function partsOf(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) return [];
   return content as Array<Record<string, unknown>>;
-}
-
-function toolOutputText(content: unknown): string {
-  if (typeof content === "string") return content;
-  const pieces: string[] = [];
-  for (const part of partsOf(content)) {
-    const output = part.output as { type?: string; value?: unknown } | undefined;
-    if (output === undefined) continue;
-    pieces.push(typeof output.value === "string" ? output.value : JSON.stringify(output.value ?? null));
-  }
-  return pieces.join("\n");
-}
-
-function userMessageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  const pieces: string[] = [];
-  for (const part of partsOf(content)) {
-    if (part.type === "text") pieces.push(String(part.text ?? ""));
-    else pieces.push("[附件]");
-  }
-  return pieces.filter((piece) => piece.length > 0).join("\n");
 }
 
 /** The generic loses the narrowing a literal type would give, so the helper owns the one cast. */
@@ -213,93 +167,44 @@ function workspaceOf(entries: readonly AgentEntry[]): readonly AgentEntry[] {
   return checkpoint === undefined ? entries : entries.slice(entries.indexOf(checkpoint) + 1);
 }
 
-function messageEntriesOf(entries: readonly AgentEntry[]): readonly AgentEntry[] {
-  return entries.filter((entry) => entry.type === "message");
-}
-
 /**
- * Pulls the assistant calls for the tool results in a selection back in, so the frame never records a result
- * whose call is missing. A tail selection can grow past its limit; that is the point.
+ * The lines of one scene's segment, in the order they happened: its facts, and the behavior and results around
+ * them. Every call and every result is printed in full, nothing here knows one tool from another, and the
+ * assistant's prose still never enters a frame.
  */
-function completeToolCalls(selection: readonly AgentEntry[], workspace: readonly AgentEntry[]): readonly AgentEntry[] {
-  const wanted = new Set<string>();
-  for (const entry of selection) {
-    if (entry.type !== "message" || entry.data.role !== "tool") continue;
-    for (const part of partsOf(entry.data.content)) {
-      if (typeof part.toolCallId === "string") wanted.add(part.toolCallId);
-    }
-  }
-  if (wanted.size === 0) return selection;
-
-  const chosen = new Set(selection.map((entry) => entry.id));
-  const calls: AgentEntry[] = [];
-  for (const entry of workspace) {
-    if (entry.type !== "message" || entry.data.role !== "assistant" || chosen.has(entry.id)) continue;
-    const matches = partsOf(entry.data.content).some((part) => part.type === "tool-call" && typeof part.toolCallId === "string" && wanted.has(part.toolCallId));
-    if (matches) calls.push(entry);
-  }
-  return [...calls, ...selection];
-}
-
-function belongsToFocus(entry: AgentEntry, focus: Focus): boolean {
-  if (entry.type !== "message") return false;
-  const message = entry.data;
-  if (message.role === "custom") {
-    if (message.type === "ishiki.message.created") return sceneKeyOf(message.data) === focusKey(focus);
-    if (message.type === "ishiki.message.deleted") return `${sidOf(message.data)}:${message.data.channelId}` === focusKey(focus);
-    return false;
-  }
-  // The mind's own actions always happened where it was: they belong to whatever focus was live then.
-  return message.role === "assistant" || message.role === "tool";
-}
-
-/**
- * The frame carries behavior and its results, never the mind's own wording: what it said is not a memory it
- * should read back and imitate.
- */
-function renderEntries(entries: readonly AgentEntry[], cursor: Focus, profile: Profile, toolResultChars: number): string[] {
+function segmentLines(entries: readonly AgentEntry[]): string[] {
   const lines: string[] = [];
-  const callNames = new Map<string, string>();
+  const calls = new Map<string, string>();
 
   for (const entry of entries) {
-    if (entry.type === "ishiki.checkpoint") continue;
-    if (entry.type === "ishiki.focus.changed") {
-      lines.push(changeLine(entry.data));
-      continue;
-    }
     if (entry.type !== "message") continue;
-
     const message = entry.data;
     if (message.role === "custom") {
-      const rendered =
-        message.type === "ishiki.message.created"
-          ? createdText(profile, cursor, message.data)
-          : message.type === "ishiki.message.deleted"
-            ? deletedText(profile, cursor, message.data)
-            : undefined;
-      if (rendered !== undefined) lines.push(rendered.text);
+      if (message.type === "ishiki.message.created" || message.type === "ishiki.self.message") lines.push(lineOf(message.data));
+      else if (message.type === "ishiki.message.deleted") lines.push(`[${formatClock(message.data.timestamp)}] #${message.data.messageId}: (已撤回)`);
       continue;
     }
     if (message.role === "assistant") {
       for (const part of partsOf(message.content)) {
-        if (part.type === "tool-call" && typeof part.toolCallId === "string") callNames.set(part.toolCallId, String(part.toolName ?? "tool"));
+        if (part.type !== "tool-call" || typeof part.toolCallId !== "string") continue;
+        const name = String(part.toolName ?? "tool");
+        calls.set(part.toolCallId, name);
+        lines.push(`[工具调用] ${name}: ${JSON.stringify(part.input ?? null)}`);
       }
       continue;
     }
     if (message.role === "tool") {
       for (const part of partsOf(message.content)) {
-        const name = callNames.get(String(part.toolCallId)) ?? String(part.toolName ?? "tool");
-        lines.push(`[工具结果] ${name}: ${truncateMiddle(toolOutputText([part]), toolResultChars)}`);
+        const name = calls.get(String(part.toolCallId)) ?? String(part.toolName ?? "tool");
+        const output = part.output as { value?: unknown } | undefined;
+        const result = output === undefined ? "" : typeof output.value === "string" ? output.value : JSON.stringify(output.value ?? null);
+        lines.push(`[工具结果] ${name}: ${result}`);
       }
-      continue;
-    }
-    if (message.role === "user") {
-      const text = userMessageText(message.content);
-      if (text.length > 0) lines.push(truncateMiddle(text, toolResultChars));
     }
   }
   return lines;
 }
+
 export class ProfileRuntime {
   private readonly ctx: Context;
   private readonly logger: Logger;
@@ -319,7 +224,8 @@ export class ProfileRuntime {
   private pendingFocus: { previous: Focus; next: Focus; reason?: string } | null = null;
   /** Monologues a step asked to record; like a focus change, they land at the step boundary. */
   private pendingThoughts: string[] = [];
-  private switchedThisTurn = false;
+  /** Messages a step actually sent; like a monologue, each lands as an ordinary fact at the step boundary. */
+  private pendingSelfMessages: IshikiMessage.SelfMessage[] = [];
   /**
    * Raised by `finish` and by a `send_message` that does not ask to continue. `onStepFinish` runs exactly
    * once per step, so it consumes the flag and never lets it leak into the next step.
@@ -342,11 +248,12 @@ export class ProfileRuntime {
   /** Workspace budget in tokens: the profile's own value, else half the window the model declares. */
   private workspaceTokenLimit = DEFAULT_WORKSPACE_TOKEN_LIMIT;
 
-  constructor(ctx: Context, options: { profile: Profile; gateway: Gateway; profilesPath: string }) {
+  constructor(ctx: Context, options: { profile: Profile; gateway: Gateway; profilesPath: string; logLevel: number }) {
     this.ctx = ctx;
     this.profile = options.profile;
     this.gateway = options.gateway;
     this.logger = ctx.logger("ishiki-profile-runtime");
+    this.logger.level = options.logLevel;
     this.profileDataPath = path.resolve(this.ctx.baseDir, path.dirname(options.profilesPath), this.profile.dataPath);
     if (!existsSync(this.profileDataPath)) {
       mkdirSync(this.profileDataPath, { recursive: true });
@@ -389,22 +296,47 @@ export class ProfileRuntime {
             if (checkpoint !== undefined) {
               out.push(createEntry("message", createUserMessage(checkpoint.data.text), { id: checkpoint.id, timestamp: checkpoint.timestamp }));
             } else {
-              // A generation that never had a frame still has a position: derived, never stored, and stable
-              // for as long as the generation lasts.
-              const position = positionEntry(this.profile, workspace);
-              if (position !== undefined) out.push(position);
+              // A generation that never had a frame still has a position: the element a frame opens with, derived
+              // from the first entry and the configured focus, so every step of the turn renders the same string.
+              const first = workspace[0];
+              if (first !== undefined) {
+                const head = `<frame ${positionAttributes(this.profile.initialFocus, formatClock(first.timestamp), workspace)}/>`;
+                out.push(createEntry("message", createUserMessage(head), { id: `frame:${first.id}`, timestamp: first.timestamp }));
+              }
             }
 
-            // The cursor starts where the generation started and only recorded switches move it: the live
-            // focus would reinterpret messages that were already rendered.
-            let cursor = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
+            // The generation starts here; only recorded switches move it, so the live focus never
+            // reinterprets messages that were already rendered.
+            const startFocus = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
+
+            // The slot sits between the frame and the workspace: re-derived on every step, never stored and never
+            // folded. The clock is the one thing the projection reads from outside the stream, quantized to a
+            // daypart so its bytes move at most four times a day. Pinned to the entry that opened the segment.
+            const anchor = checkpoint ?? workspace[0];
+            if (anchor !== undefined) {
+              const now = new Date();
+              const hour = now.getHours();
+              const daypart = hour < 6 ? "凌晨" : hour < 12 ? "上午" : hour < 18 ? "下午" : "晚上";
+              const slot = ["<state>", `当前时间:${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${daypart}`, "</state>"].join("\n");
+              out.push(
+                createEntry("message", createUserMessage(slot), { id: `slot:${anchor.id}`, timestamp: workspace.at(-1)?.timestamp ?? anchor.timestamp }),
+              );
+            }
+
+            let cursor = startFocus;
             // Lines from the open window are bare, so the first one after anything else opens with a header.
             let inWindow = false;
             for (const entry of workspace) {
               if (entry.type === "ishiki.focus.changed") {
                 cursor = { ...entry.data.next };
-                out.push(createEntry("message", createUserMessage(changeLine(entry.data)), { id: entry.id, timestamp: entry.timestamp }));
-                inWindow = false;
+                // The head declares the new scene, so the bare lines under it need no second header.
+                const reason =
+                  entry.data.reason === undefined || entry.data.reason.length === 0
+                    ? ""
+                    : ` reason="${entry.data.reason.replaceAll('"', "'").replaceAll("\n", " ")}"`;
+                const head = `<focus from="${focusKey(entry.data.previous)}" to="${focusKey(entry.data.next)}"${reason}>`;
+                out.push(createEntry("message", createUserMessage(head), { id: entry.id, timestamp: entry.timestamp }));
+                inWindow = true;
                 continue;
               }
               if (entry.type !== "message") continue;
@@ -415,6 +347,8 @@ export class ProfileRuntime {
                 inWindow = false;
                 continue;
               }
+              // A generation's live view marks what the mind said by the tool call that sent it, and a self message
+              // is its own type, so it is not projected: the branch below only knows the platform's own facts.
               // The mind's own line: it reads back as its own text, and `renderEntries` ignores the type, so
               // no frame ever carries its wording.
               if (message.type === "ishiki.inner.thought") {
@@ -422,33 +356,30 @@ export class ProfileRuntime {
                 inWindow = false;
                 continue;
               }
-              const rendered =
+              const bare =
                 message.type === "ishiki.message.created"
-                  ? createdText(this.profile, cursor, message.data)
+                  ? factLine(this.profile, cursor, message.data)
                   : message.type === "ishiki.message.deleted"
-                    ? deletedText(this.profile, cursor, message.data)
+                    ? deletedLine(this.profile, cursor, message.data)
                     : undefined;
-              if (rendered === undefined) continue;
+              if (bare === undefined) continue;
+              // A fact of another scene renders as a block: only the scene the mind is in prints bare lines.
+              const body = bare.focus
+                ? bare.line
+                : [
+                    `<awareness sid="${bare.sid}" channel="${bare.channel.id}"${bare.channel.name === undefined || bare.channel.name.length === 0 ? "" : ` name="${bare.channel.name}"`}>`,
+                    bare.line,
+                    "</awareness>",
+                  ].join("\n");
 
               // The first line of a run opens with the header; the ones after it stay bare.
-              const text = rendered.focus && !inWindow ? `<focus sid="${cursor.sid}" channel="${cursor.channelId}">\n${rendered.text}` : rendered.text;
-              inWindow = rendered.focus;
+              const text = bare.focus && !inWindow ? `<focus sid="${cursor.sid}" channel="${cursor.channelId}">\n${body}` : body;
+              inWindow = bare.focus;
               out.push(createEntry("message", createUserMessage(text), { id: message.id, timestamp: message.timestamp }));
             }
             return out;
           },
           onStepFinish: async (info) => {
-            // A step boundary is the earliest moment the switch record can land: the step's assistant and
-            // tool entries are already written, so the record never splits a tool call from its result.
-            if (this.pendingFocus) {
-              try {
-                await this.agent.storage.append(createEntry("ishiki.focus.changed", this.pendingFocus, { turnId: info.turnId }));
-                this.pendingFocus = null;
-              } catch (error) {
-                this.logger.warn(`focus change 写入失败，保留待下一次 step 边界重试：${String(error)}`);
-              }
-            }
-
             if (this.pendingThoughts.length > 0) {
               try {
                 await this.agent.storage.append(
@@ -460,13 +391,45 @@ export class ProfileRuntime {
               }
             }
 
+            // The messages that actually left land as ordinary facts of their scene, under their own type: the
+            // frame and `peek_channel` read them back like anybody else's line, while the live projection, which
+            // only knows the platform's own facts, never sees them.
+            if (this.pendingSelfMessages.length > 0) {
+              const facts = this.pendingSelfMessages.map((sent) =>
+                createEntry("message", createCustomMessage("ishiki.self.message", sent), { turnId: info.turnId }),
+              );
+              try {
+                await this.agent.storage.append(...facts);
+                this.pendingSelfMessages = [];
+              } catch (error) {
+                this.logger.warn(`自消息写入失败，保留待下一次 step 边界重试：${String(error)}`);
+              }
+            }
+
+            // A switch is the generation change itself, and a step boundary is the earliest moment it can
+            // happen: the step's assistant and tool entries are written, so the new frame never splits a call
+            // from its result. A failed checkpoint leaves a minimal change entry as the fuse instead.
+            const pending = this.pendingFocus;
+            if (pending !== null) {
+              if (await this.rebuild("switch", pending.previous)) {
+                this.pendingFocus = null;
+              } else {
+                try {
+                  await this.agent.storage.append(createEntry("ishiki.focus.changed", pending, { turnId: info.turnId }));
+                  this.pendingFocus = null;
+                  this.logger.warn("换代的 checkpoint 未写入，已落 change 条目作为保险丝。");
+                } catch (error) {
+                  this.logger.warn(`change 条目也写入失败，保留待下一次 step 边界重试：${String(error)}`);
+                }
+              }
+            }
+
             // Consume the flag: this hook runs exactly once per step, so it never leaks into the next one.
             const stop = this.stopRequestedThisStep;
             this.stopRequestedThisStep = false;
             return stop ? { continue: false } : undefined;
           },
           onTurnFinish: () => {
-            this.switchedThisTurn = false;
             this.stopRequestedThisStep = false;
             if (this.generationDirty || this.rebuildPending) this.scheduleRebuild("turn-finish");
           },
@@ -503,14 +466,17 @@ export class ProfileRuntime {
       "",
       "你的账号同时在线，但你同一时刻只打开一个频道的窗口，那就是焦点（focus）。",
       "",
-      "- 窗口里的事会以 <focus sid channel> 块头出现，块头之后的裸行都属于这个窗口。",
-      "- 其他频道留在后台。只有叫到你的消息会提醒你——别人私聊你、在群里 @ 你、或提到关键词；这类消息以 <awareness> 块出现，你可以用 peek_channel 看那个频道的近况，也可以不管。",
+      "- 帧是回顾：一个场景一段，段头写明 sid 与 channel，带 focus 的那段就是你正打开的窗口，段内裸行都属于这个场景。",
+      "- 帧之后才是正在发生的事：窗口里的行以 <focus sid channel> 块头出现，别处够得着的以 <awareness> 块出现。",
       "- 别把两处的话串起来：同一个人可能同时在私聊和群里跟你讲话，那是两场对话；答话要答在跟你说话的那个频道。",
       "- 发消息默认发到 focus：省略 channel 与 sid；要发去别的频道、或改用另一个账号，才写它们。",
-      "- 换窗口用 switch_focus；换过会留下 [focus change] 一行，一轮只能换一次。",
+      "- 换窗口用 switch_focus；换过之后本轮的后续动作默认在新窗口发生，你离开的那个场景在新帧里有自己的一段。",
       "",
       "你的账号与可发消息的频道（channel 的语义域是 sid）：",
       bodies,
+      "",
+      "你的 uid 是账号里 platform: 后面那一段。",
+      "行里括号中的 id 等于你的 uid 时，这一行就是你说的；你自己的话与别人的话写法相同。",
       "",
       "## 一次被叫到",
       "",
@@ -573,16 +539,34 @@ export class ProfileRuntime {
           }
           if (typeof input.inner_thought === "string" && input.inner_thought.length > 0) this.pendingThoughts.push(input.inner_thought);
 
-          const sent: string[] = [];
           const bot = this.ctx.bots[target.sid];
           if (!bot) return { ok: false as const, error: { name: "BotNotFound", message: `Bot with sid ${target.sid} not found` }, sent: [], failedAt: 0 };
+
+          const platform = bot.platform!;
+          const sent: string[] = [];
 
           for (let index = 0; index < messages.length; index += 1) {
             try {
               const content = input.mode === "raw" ? h.escape(messages[index]) : messages[index];
-              sent.push(...(await bot.sendMessage(target.channelId, content)));
+              const ids = await bot.sendMessage(target.channelId, content);
+              sent.push(...ids);
+              if (ids.length === 0) {
+                this.logger.warn(`平台没有返回消息 id，这条自消息不进记录：${target.sid}/${target.channelId}`);
+              } else {
+                this.pendingSelfMessages.push({
+                  platform,
+                  channel: { id: target.channelId },
+                  content: content,
+                  messageId: ids[0],
+                  timestamp: Date.now(),
+                  selfId: bot.selfId,
+                  user: { id: bot.selfId, name: bot.user?.name ?? this.profile.name },
+                });
+              }
             } catch (error) {
-              return { ok: false as const, sent, failedAt: index, error: describeError(error) };
+              // A platform failure carries a name worth keeping: `BotNotFound` tells the model to fix the address.
+              const failure = error instanceof Error ? { name: error.name, message: error.message } : { name: "Error", message: String(error) };
+              return { ok: false as const, sent, failedAt: index, error: failure };
             }
           }
 
@@ -622,13 +606,10 @@ export class ProfileRuntime {
           if (target.sid === this.currentFocus.sid && target.channelId === this.currentFocus.channelId) {
             return { ok: true as const, changed: false, target };
           }
-          if (this.switchedThisTurn) {
-            return { ok: false as const, error: { name: "FocusCooldown", message: "本轮已经切换过 focus" } };
-          }
-
+          // No cooldown: a switch ends the generation, so "once per generation" is structural. Frequent
+          // hopping pays its own frame-level misses.
           this.pendingFocus = { previous: this.currentFocus, next: target, ...(input.reason === undefined ? {} : { reason: input.reason }) };
           this.currentFocus = target;
-          this.switchedThisTurn = true;
           return { ok: true as const, changed: true, target };
         },
       }),
@@ -656,7 +637,7 @@ export class ProfileRuntime {
           for (const entry of await this.agent.storage.read()) {
             if (entry.type !== "message") continue;
             const message = entry.data;
-            if (message.role !== "custom" || message.type !== "ishiki.message.created") continue;
+            if (message.role !== "custom" || (message.type !== "ishiki.message.created" && message.type !== "ishiki.self.message")) continue;
             const fact = message.data;
             if (sidOf(fact) !== target.sid || fact.channel.id !== target.channelId) continue;
             lines.push(lineOf(fact));
@@ -710,6 +691,10 @@ export class ProfileRuntime {
 
     this.ctx.on("internal/session", async (session: Session) => {
       if (!isChannelAllowed(this.profile, session.sid, session.channelId ?? "")) return;
+      // One of this profile's own bodies speaking is not input: without this the mind reads its own words back
+      // as somebody else's message, and the same sentence enters the stream twice.
+      if (session.userId !== undefined && this.profile.allowedChannels.some((declaration) => declaration.sid === `${session.platform}:${session.userId}`))
+        return;
 
       this.logger.debug(`--- Session ---\n${JSON.stringify(session, null, 2)}`);
 
@@ -775,7 +760,7 @@ export class ProfileRuntime {
 
     const frameFocus = { ...this.profile.initialFocus };
     const text = [
-      `<frame at="${formatClock(Date.now())}" sid="${frameFocus.sid}" channel="${frameFocus.channelId}">`,
+      `<frame at="${formatClock(Date.now())}" focus_sid="${frameFocus.sid}" focus_channel="${frameFocus.channelId}">`,
       "（在此之前没有发生过任何事。）",
       "</frame>",
     ].join("\n");
@@ -826,31 +811,91 @@ export class ProfileRuntime {
   }
 
   /**
-   * The text of the next frame. A generation that switched keeps the whole trace of where the mind came from
-   * (pruned, but not cut to a window); one that did not carries over only its recent tail.
+   * The text of the next frame: one segment per scene. A fact belongs to the scene it came from; a tool call
+   * belongs to the scene the mind was in when it ran, so a switch hands the trajectory it produced to the scene it
+   * is leaving. A scene the generation was focused in keeps that slice of it; one it only heard from is read back
+   * out of storage instead, which is the only place that holds a conversation rather than fragments of attention.
+   * `startFocus` is where the generation's cursor began, which is the scene a switch is leaving.
    */
-  private frameTextFor(frameFocus: Focus, previousFrameFocus: Focus, workspace: readonly AgentEntry[]): string {
-    const { historyEntries, focusHistoryEntries, toolResultChars } = this.profile.context;
-    const messages = messageEntriesOf(workspace);
-    const switchIndex = workspace.findIndex((entry) => entry.type === "ishiki.focus.changed");
-    const parts = [`<frame ${positionAttributes(frameFocus, formatClock(Date.now()), workspace)}>`];
+  private frameTextFor(frameFocus: Focus, startFocus: Focus, entries: readonly AgentEntry[], workspace: readonly AgentEntry[]): string {
+    const at = Date.now();
+    const here = focusKey(frameFocus);
 
-    if (switchIndex >= 0) {
-      parts.push(`<last_focus_history sid="${previousFrameFocus.sid}" channel="${previousFrameFocus.channelId}">`);
-      parts.push(...renderEntries(completeToolCalls(workspace.slice(0, switchIndex + 1), workspace), previousFrameFocus, this.profile, toolResultChars));
-      parts.push("</last_focus_history>");
+    // Split the generation by scene. Only what the live path showed counts, and the mind's own send needs no reach
+    // test: speaking in a scene is what puts that scene in the frame.
+    const scenes = new Map<string, { scene: Focus; entries: AgentEntry[]; focus: boolean }>();
+    const remember = (scene: Focus, focus: boolean) => {
+      const key = focusKey(scene);
+      const seen = scenes.get(key);
+      if (seen !== undefined) {
+        if (focus) seen.focus = true;
+        return seen;
+      }
+      const slice = { scene, entries: [] as AgentEntry[], focus };
+      scenes.set(key, slice);
+      return slice;
+    };
 
-      // The new focus gets its own window searched over the whole generation, so lines may repeat what the
-      // trajectory already shows; a repeat costs fewer tokens than a gap the mind cannot account for.
-      const window = completeToolCalls(messages.filter((entry) => belongsToFocus(entry, frameFocus)).slice(-focusHistoryEntries), workspace);
-      parts.push("<history>");
-      parts.push(...renderEntries(window, frameFocus, this.profile, toolResultChars));
-      parts.push("</history>");
-    } else {
-      const tail = messages.slice(-historyEntries);
-      parts.push("<history>");
-      if (messages.length > tail.length) parts.push(`<!-- 更早 ${messages.length - tail.length} 条已折叠 -->`);
-      parts.push(...renderEntries(completeToolCalls(tail, workspace), frameFocus, this.profile, toolResultChars));
+    let cursor = startFocus;
+    remember(cursor, true);
+    for (const entry of workspace) {
+      if (entry.type === "ishiki.focus.changed") {
+        cursor = { ...entry.data.next };
+        remember(cursor, true);
+        continue;
+      }
+      if (entry.type !== "message") continue;
+
+      const message = entry.data;
+      if (message.role === "custom") {
+        if (message.type === "ishiki.self.message") {
+          remember({ sid: sidOf(message.data), channelId: message.data.channel.id }, false).entries.push(entry);
+          continue;
+        }
+        const bare =
+          message.type === "ishiki.message.created"
+            ? factLine(this.profile, cursor, message.data)
+            : message.type === "ishiki.message.deleted"
+              ? deletedLine(this.profile, cursor, message.data)
+              : undefined;
+        if (bare !== undefined) remember({ sid: bare.sid, channelId: bare.channel.id }, bare.focus).entries.push(entry);
+        continue;
+      }
+      if (message.role === "assistant" || message.role === "tool") remember(cursor, true).entries.push(entry);
+    }
+
+    const { historyEntries, sceneWindowMs } = this.profile.context;
+    const parts = [`<frame ${positionAttributes(frameFocus, formatClock(at), workspace)}>`];
+    parts.push(`<history sid="${frameFocus.sid}" channel="${frameFocus.channelId}" focus>`);
+    parts.push(...segmentLines(scenes.get(here)?.entries ?? []));
+    parts.push("</history>");
+
+    const rest: Array<{ scene: Focus; entries: AgentEntry[]; dropped: number; latest: number }> = [];
+    for (const [key, slice] of scenes) {
+      if (key === here) continue;
+      let kept = slice.entries;
+      let dropped = 0;
+      if (!slice.focus) {
+        const facts = entries.filter((entry) => {
+          if (entry.type !== "message") return false;
+          const message = entry.data;
+          if (message.role !== "custom") return false;
+          if (message.type === "ishiki.message.created" || message.type === "ishiki.self.message") return sceneKeyOf(message.data) === key;
+          return message.type === "ishiki.message.deleted" && `${sidOf(message.data)}:${message.data.channelId}` === key;
+        });
+        const fresh = facts.filter((entry) => at - entry.timestamp <= sceneWindowMs);
+        kept = fresh.slice(-historyEntries);
+        dropped = Math.max(0, fresh.length - historyEntries);
+      }
+      if (kept.length === 0) continue;
+      rest.push({ scene: slice.scene, entries: kept, dropped, latest: kept.at(-1)?.timestamp ?? 0 });
+    }
+    rest.sort((left, right) => right.latest - left.latest);
+
+    for (const segment of rest) {
+      parts.push(`<history sid="${segment.scene.sid}" channel="${segment.scene.channelId}">`);
+      if (segment.dropped > 0) parts.push(`<!-- 更早 ${segment.dropped} 条已折叠 -->`);
+      parts.push(...segmentLines(segment.entries));
       parts.push("</history>");
     }
 
@@ -858,27 +903,30 @@ export class ProfileRuntime {
     return parts.join("\n");
   }
 
-  /** The only materialized write. A failure leaves the generation untouched so the next trigger retries it. */
-  private async rebuild(reason: string): Promise<void> {
+  /**
+   * The only materialized write. A failure leaves the generation untouched so the next trigger retries it.
+   * `previous` is set by a switch — a switch *is* the generation change, so it forces the write — and the new
+   * frame then carries the ended generation's trajectory. The result lets the switch path fall back to its fuse.
+   */
+  private async rebuild(reason: string, previous?: Focus): Promise<boolean> {
     const entries = await this.storage.read();
-    const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
     const workspace = workspaceOf(entries);
     if (workspace.length === 0) {
       this.generationDirty = false;
-      return;
+      return true;
     }
 
-    const switched = workspace.some((entry) => entry.type === "ishiki.focus.changed");
     // Idle is early compression, not a budget decision: folding a quiet generation while it is still small is
-    // the point, since nobody is waiting for the answer.
-    if (!switched && reason !== "idle" && !this.overBudget(workspace)) return;
+    // the point, since nobody is waiting for the answer. A switch is not a decision at all.
+    if (previous === undefined && reason !== "idle" && !this.overBudget(workspace)) return false;
 
     const frameFocus = { ...this.currentFocus };
-    const previousFrameFocus = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
-    const text = this.frameTextFor(frameFocus, previousFrameFocus, workspace);
+    const checkpoint = lastEntryOfType(entries, "ishiki.checkpoint");
+    const startFocus = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
+    const text = this.frameTextFor(frameFocus, startFocus, entries, workspace);
     const record: IshikiEntry.Checkpoint = {
       frameFocus,
-      ...(switched ? { prevFocus: { ...previousFrameFocus } } : {}),
+      ...(previous === undefined ? {} : { prevFocus: { ...previous } }),
       text,
       createdAt: Date.now(),
     };
@@ -887,17 +935,20 @@ export class ProfileRuntime {
       await this.storage.append(createEntry("ishiki.checkpoint", record));
     } catch (error) {
       this.logger.warn(`checkpoint 写入失败（${reason}），本代保留待下次重试：${String(error)}`);
-      return;
+      return false;
     }
 
     this.generationDirty = false;
     this.rebuildPending = false;
     this.logger.debug(`帧重建完成（${reason}），${text.length} 字符`);
+    return true;
   }
 
   private scheduleRebuild(reason: string): void {
     this.rebuildChain = this.rebuildChain
-      .then(() => this.rebuild(reason))
+      .then(async () => {
+        await this.rebuild(reason);
+      })
       .catch((error: unknown) => this.logger.warn(`帧重建异常（${reason}）：${String(error)}`));
   }
 

@@ -92,6 +92,7 @@ export function makeProfile(): Profile {
     id: "test",
     dataPath: "data/ishiki/test",
     model: "test:model",
+    name: "",
     initialFocus: { sid: "onebot:1", channelId: "group:1" },
     allowedChannels: [
       { sid: "onebot:1", channels: ["group:1"] },
@@ -99,7 +100,7 @@ export function makeProfile(): Profile {
     ],
     keywords: [],
     attention: { mentions: [], quoteSelf: false },
-    context: { workspaceTokenLimit: 8192, charsPerToken: 4, idleMs: 1_800_000, historyEntries: 40, focusHistoryEntries: 40, toolResultChars: 2000 },
+    context: { workspaceTokenLimit: 8192, charsPerToken: 4, idleMs: 1_800_000, historyEntries: 40, sceneWindowMs: 24 * 60 * 60 * 1000 },
     innerThought: false,
   };
 }
@@ -142,7 +143,7 @@ export async function cleanup(): Promise<void> {
  */
 export async function createHarness(
   steps: LanguageModelV4StreamPart[][],
-  options: { failingContents?: string[]; profile?: Partial<Profile>; seed?: string[]; contextWindow?: number } = {},
+  options: { failingContents?: string[]; profile?: Partial<Profile>; seed?: string[]; contextWindow?: number; botName?: string } = {},
 ): Promise<Harness> {
   const failingContents = new Set(options.failingContents ?? []);
   let calls = 0;
@@ -170,6 +171,11 @@ export async function createHarness(
       sid,
       {
         sid,
+        platform: sid.slice(0, sid.indexOf(":")),
+        // The account id the platform reports for this body, deliberately not the sid's own component: `sandbox`
+        // reports `koishi` for `mi4dnd8k69r:koishi`, so nothing may depend on the two agreeing.
+        selfId: sid.slice(sid.indexOf(":") + 1),
+        user: { id: "koishi", ...(options.botName === "" ? {} : { name: options.botName ?? "NekoChan" }) },
         sendMessage: async (channelId: string, content: unknown) => {
           if (failingContents.has(String(content))) throw new Error("platform down");
           log.push({ channelId, content });
@@ -198,6 +204,7 @@ export async function createHarness(
     profile: { ...makeProfile(), ...options.profile },
     gateway: gateway as unknown as Gateway,
     profilesPath: "profiles.yaml",
+    logLevel: 0,
   });
   await runtime.start();
   runningRuntimes.push(runtime);

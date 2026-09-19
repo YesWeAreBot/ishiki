@@ -7,6 +7,7 @@ function makeProfile(id: string, channels: string[], initialChannel = "group:1")
     id,
     dataPath: `data/ishiki/${id}`,
     model: "test:model",
+    name: id,
     initialFocus: { sid: "onebot:1", channelId: initialChannel },
     allowedChannels: [{ sid: "onebot:1", channels }],
     keywords: [],
@@ -16,8 +17,7 @@ function makeProfile(id: string, channels: string[], initialChannel = "group:1")
       charsPerToken: 4,
       idleMs: 1_800_000,
       historyEntries: 40,
-      focusHistoryEntries: 40,
-      toolResultChars: 2000,
+      sceneWindowMs: 24 * 60 * 60 * 1000,
     },
     innerThought: false,
   };

@@ -11,19 +11,22 @@ export interface Profile {
   id: string;
   dataPath: string;
   model: string;
+  /** The mind's own display name, used when the platform reports none for the account it speaks through. */
+  name: string;
   initialFocus: Focus;
   allowedChannels: Array<{ sid: string; channels: string[] }>;
   keywords: string[];
   attention: { mentions: string[]; quoteSelf: boolean };
   context: {
     /** Tokens of workspace allowed before a rebuild. Omitted means "half the model's declared window". */
-    workspaceTokenLimit?: number;
+    workspaceTokenLimit: number;
     /** Characters per token, for the workspace budget only. CJK-heavy traffic is closer to 1.5 than to 4. */
     charsPerToken: number;
     idleMs: number;
+    /** How many facts a segment read back out of storage carries at most. */
     historyEntries: number;
-    focusHistoryEntries: number;
-    toolResultChars: number;
+    /** How old a fact may be to still enter a segment read back out of storage. */
+    sceneWindowMs: number;
   };
   innerThought: boolean;
 }
@@ -38,6 +41,7 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
       id: Schema.string().required(),
       dataPath: Schema.string().required(),
       model: Schema.string().required(),
+      name: Schema.string().description("心智自己的显示名；平台报不出账号昵称时用它").default(""),
       initialFocus: Schema.object({
         sid: Schema.string().required(),
         channelId: Schema.string().required(),
@@ -57,12 +61,11 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
         quoteSelf: Schema.boolean().default(false),
       }),
       context: Schema.object({
-        workspaceTokenLimit: Schema.number(),
+        workspaceTokenLimit: Schema.number().default(8192),
         charsPerToken: Schema.number().default(4),
         idleMs: Schema.number().default(30 * Time.minute),
         historyEntries: Schema.number().default(40),
-        focusHistoryEntries: Schema.number().default(40),
-        toolResultChars: Schema.number().default(2000),
+        sceneWindowMs: Schema.number().default(24 * Time.hour),
       }),
       innerThought: Schema.boolean().default(false),
     }),
