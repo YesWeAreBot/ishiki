@@ -298,6 +298,24 @@ describe("ingestion", () => {
     expect(harness.calls()).toBe(1);
     expect(promptText(harness.prompts(), 0)).toContain("Miaow(42) #m1: hello");
   });
+
+  it("ingests a message-deleted event into storage without triggering", async () => {
+    const harness = await createHarness([textStep("ack"), textStep("unreached")]);
+
+    // First: a normal message to trigger a turn and populate storage.
+    await harness.send();
+    // Then: a deletion event for that message — should be ingested but not trigger a new turn.
+    await harness.send({ type: "message-deleted", messageId: "m1", channelId: "group:1", userId: "42", content: undefined });
+
+    expect(harness.calls()).toBe(1);
+    // agent.send with trigger:false persists asynchronously (fire-and-forget); wait for it to land.
+    const deletion = await waitFor(async () => {
+      const entries = await harness.entries();
+      return entries.find((e) => String(e.data["type"]) === "ishiki.message.deleted");
+    });
+    expect(deletion).toBeDefined();
+    expect((deletion!.data["data"] as { messageId: string }).messageId).toBe("m1");
+  });
 });
 
 describe("three zones", () => {
@@ -362,7 +380,7 @@ describe("three zones", () => {
     await harness.send();
 
     const first = promptText(harness.prompts(), 0);
-    const head = /<frame at="\d{2}:\d{2}" focus_sid="onebot:1" focus_channel="group:1" name="开发组"\/>/;
+    const head = /<frame at="\d{2}:\d{2}" focus_sid="onebot:1" focus_channel="group:1"\/>/;
     expect(first).toMatch(head);
     expect(first).toContain("Miaow(42) #m0: hello");
     // Derived, not stored: the head is the same string on the next turn.

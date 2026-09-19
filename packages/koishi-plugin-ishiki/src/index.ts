@@ -1,7 +1,6 @@
 import { existsSync, promises as fs, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { Agent } from "@yesimagent/core";
 import { createGateway, Gateway, GatewayConfig } from "@yesimagent/gateway";
 import { Context, Logger, Schema } from "koishi";
 import { parse } from "yaml";

@@ -4,9 +4,8 @@ import path from "path";
 import {
   Agent,
   AgentCustomEntry,
-  AgentEvent,
   AgentEntry,
-  AgentMessage,
+  AgentEvent,
   AgentPlugin,
   AgentStorage,
   createAgent,
@@ -21,6 +20,7 @@ import {
 import { Gateway } from "@yesimagent/gateway";
 import { Context, h, Logger, Session } from "koishi";
 
+import { HandlerResult, sessionHandlers } from "./handlers.js";
 import { Focus, isChannelAllowed, Profile, resolveFocus } from "./profiles.js";
 import { classify, collectLines, eventRenders, formatClock, sceneKey } from "./scene.js";
 import type { IshikiEntry, IshikiEvent } from "./types.js";
@@ -56,17 +56,10 @@ interface PeekChannelInput extends TargetInput {
 }
 
 /**
- * The `<frame ...>` opening tag. The channel name comes from the first non-own line in the workspace so
- * earlier steps of the same turn always see the same string.
+ * The `<frame ...>` opening tag.
  */
-function renderFrameHead(focus: Focus, at: string, workspace: readonly AgentEntry[]): string {
-  const name = collectLines(workspace, focus).find((line) => !line.own)?.channelName;
-  return [
-    `at="${at}"`,
-    `focus_sid="${focus.sid}"`,
-    `focus_channel="${focus.channelId}"`,
-    ...(name === undefined || name.length === 0 ? [] : [`name="${name}"`]),
-  ].join(" ");
+function renderFrameHead(focus: Focus, at: string): string {
+  return [`at="${at}"`, `focus_sid="${focus.sid}"`, `focus_channel="${focus.channelId}"`].join(" ");
 }
 
 /** The generic loses the narrowing a literal type would give, so the helper owns the one cast. */
@@ -176,7 +169,7 @@ export class ProfileRuntime {
               // from the first entry and the configured focus, so every step of the turn renders the same string.
               const first = workspace[0];
               if (first !== undefined) {
-                const head = `<frame ${renderFrameHead(this.profile.initialFocus, formatClock(first.timestamp), workspace)}/>`;
+                const head = `<frame ${renderFrameHead(this.profile.initialFocus, formatClock(first.timestamp))}/>`;
                 out.push(createEntry("message", createUserMessage(head), { id: `frame:${first.id}`, timestamp: first.timestamp }));
               }
             }
@@ -219,11 +212,10 @@ export class ProfileRuntime {
               }
               // What the mind said is marked by the tool call that sent it, so its own message is projected into
               // a frame and never read back here as somebody else's line in the workspace.
-              if (record.own) continue;
+              if (record.entry.data.role !== "custom" || record.entry.data.type === "ishiki.self.message") continue;
               // Non-focus facts are compact notifications: enough to know who said what where, not full context.
               if (!record.focus) {
-                const from = record.line.match(/\] (.+?) #/)?.[1] ?? "";
-                const text = `<notification sid="${record.scene.sid}" channel="${record.scene.channelId}"${from ? ` from="${from}"` : ""}>${record.line}</notification>`;
+                const text = `<notification sid="${record.scene.sid}" channel="${record.scene.channelId}">${record.line}</notification>`;
                 out.push(createEntry("message", createUserMessage(text), { id: record.entry.data.id, timestamp: record.entry.data.timestamp }));
                 inWindow = false;
                 continue;
@@ -532,50 +524,13 @@ export class ProfileRuntime {
 
       this.logger.debug(`--- Session ---\n${JSON.stringify(session, null, 2)}`);
 
-      let shouldTrigger: boolean = false;
-      let message: AgentMessage | undefined;
-      switch (session.type) {
-        case "message-created": {
-          const authorName = session.author?.name;
-          const channelName = session.event?.channel?.name;
-          message = createCustomMessage("ishiki.message.created", {
-            content: session.content!,
-            user: { id: session.userId!, ...(authorName === undefined ? {} : { name: authorName }) },
-            channel: { id: session.channelId!, ...(channelName === undefined ? {} : { name: channelName }), direct: session.isDirect },
-            guildId: session.guildId,
-            messageId: session.messageId!,
-            timestamp: session.timestamp,
-            platform: session.platform,
-            selfId: session.selfId,
-            quote: session.quote
-              ? {
-                  id: session.quote.id!,
-                  content: session.quote.content,
-                  user: session.quote.user,
-                  channel: session.quote.channel,
-                  guild: session.quote.guild,
-                }
-              : undefined,
-          });
-          if (
-            session.isDirect ||
-            session.stripped.atSelf ||
-            (session.stripped.hasAt && session.elements?.some((el) => el.type === "at" && el.attrs?.id === session.selfId)) ||
-            this.profile.keywords.some((keyword) => session.content?.includes(keyword))
-          ) {
-            shouldTrigger = true;
-          }
-          break;
-        }
-        case "message-deleted":
-          break;
-        case "guild-member-added":
-          break;
-        default:
-          break;
+      let result: HandlerResult | undefined;
+      for (const handler of sessionHandlers) {
+        result = handler(session, this.profile);
+        if (result) break;
       }
-      if (!message) return;
-      const turnId = this.agent.send(message, { trigger: shouldTrigger, ifBusy: "join" });
+      if (!result) return;
+      const turnId = this.agent.send(result.message, { trigger: result.trigger, ifBusy: "join" });
       if (turnId) {
         this.logger.info(`Message sent to agent for profile ${this.profile.id} with turn ID ${turnId}.`);
         void (await this.agent.wait());
@@ -677,7 +632,7 @@ export class ProfileRuntime {
       segments.push({ scene, lines, dropped, latest });
     }
 
-    const parts = [`<frame ${renderFrameHead(frameFocus, formatClock(now), workspace)}>`];
+    const parts = [`<frame ${renderFrameHead(frameFocus, formatClock(now))}>`];
 
     // Focus segment first (always present, even if empty).
     const focus = segments.find((s) => sceneKey(s.scene) === here);

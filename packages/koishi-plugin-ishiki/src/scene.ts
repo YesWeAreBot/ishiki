@@ -1,7 +1,7 @@
 import { AgentEntry } from "@yesimagent/core";
 import { h } from "koishi";
 
-import type { Focus, Profile } from "./profiles.js";
+import { type Focus, type Profile } from "./profiles.js";
 import type { IshikiEvent } from "./types.js";
 
 /**
@@ -44,8 +44,6 @@ export interface EventRender<T = unknown> {
   scene(data: T): Focus;
   /** Render the event as a single text line (no notification wrapper — the framework adds that). */
   render(data: T): string;
-  /** Is this the mind's own action? Own lines enter the frame but not the workspace. */
-  own: boolean;
   /**
    * When the event is NOT in the focus scene, does it still reach the workspace (as a notification)?
    * Omit or return false for events that are only visible when in focus.
@@ -58,7 +56,6 @@ export const eventRenders: Record<string, EventRender> = {
   "ishiki.message.created": {
     scene: (d: IshikiEvent.MessageCreated) => ({ sid: sidOf(d), channelId: d.channel.id }),
     render: renderLine,
-    own: false,
     reaches(d: IshikiEvent.MessageCreated, profile) {
       if (d.channel.direct === true) return true;
       if (profile.keywords.some((kw) => kw.length > 0 && d.content.includes(kw))) return true;
@@ -76,15 +73,13 @@ export const eventRenders: Record<string, EventRender> = {
   "ishiki.self.message": {
     scene: (d: IshikiEvent.MessageCreated) => ({ sid: sidOf(d), channelId: d.channel.id }),
     render: renderLine,
-    own: true,
   } satisfies EventRender<IshikiEvent.MessageCreated>,
 
   "ishiki.message.deleted": {
     scene: (d: IshikiEvent.MessageDeleted) => ({ sid: sidOf(d), channelId: d.channelId }),
     render: (d: IshikiEvent.MessageDeleted) => `[${formatClock(d.timestamp)}] #${d.messageId}: (已撤回)`,
-    own: false,
     reaches(d: IshikiEvent.MessageDeleted, profile) {
-      return d.operatorId !== undefined && profile.allowedChannels.some((decl) => decl.sid === sidOf(d));
+      return d.operatorId !== undefined && profile.allowedChannels.some((decl) => decl.sid === `${d.platform}:${d.selfId}`);
     },
   } satisfies EventRender<IshikiEvent.MessageDeleted>,
 };
@@ -100,10 +95,6 @@ export const eventRenders: Record<string, EventRender> = {
 export interface RenderedLine {
   scene: Focus;
   line: string;
-  /** The mind's own message: read back in a frame like anybody else's line, never emitted into the workspace. */
-  own: boolean;
-  /** The channel name this entry carried. */
-  channelName?: string;
   /** The timestamp of the entry on the stream; the frame cuts its window and orders its segments by it. */
   timestamp: number;
 }
@@ -112,18 +103,9 @@ export interface RenderedLine {
 function resolveRender(type: string, data: unknown): Omit<RenderedLine, "timestamp"> | undefined {
   const desc = eventRenders[type];
   if (!desc) return undefined;
-  let channelName: string | undefined;
-  if (data && typeof data === "object" && "channel" in data) {
-    const ch = data.channel;
-    if (ch && typeof ch === "object" && "name" in ch) {
-      if (typeof ch.name === "string") channelName = ch.name;
-    }
-  }
   return {
     scene: desc.scene(data),
     line: desc.render(data),
-    own: desc.own,
-    ...(channelName !== undefined ? { channelName } : {}),
   };
 }
 
@@ -160,7 +142,7 @@ export function classify(profile: Pick<Profile, "allowedChannels" | "keywords">,
       const resolved = resolveRender(message.type, message.data);
       if (!resolved) continue;
       const inFocus = sceneKey(resolved.scene) === sceneKey(cursor);
-      const visible = resolved.own || inFocus || eventRenders[message.type]?.reaches?.(message.data, profile) === true;
+      const visible = message.type === "ishiki.self.message" || inFocus || eventRenders[message.type]?.reaches?.(message.data, profile) === true;
       if (!visible) continue;
       out.push({ kind: "fact", entry, ...resolved, focus: inFocus, timestamp: entry.timestamp });
       continue;
