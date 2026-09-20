@@ -25,7 +25,6 @@ export namespace IshikiEvent {
 
   export interface MessageCreated extends EventBase {
     content: string;
-    /** A snapshot: a later rename never rewrites the lines already rendered from this fact. */
     user: { id: string; name?: string };
     channel: { id: string; name?: string; direct?: boolean };
     guildId?: string;
@@ -57,7 +56,6 @@ export namespace OneBotEvent {
 }
 
 export namespace IshikiEntry {
-  /** Appended at a step boundary when `switch_focus` changed the scene mid-step. */
   export interface FocusChanged {
     previous: { sid: string; channelId: string };
     next: { sid: string; channelId: string };

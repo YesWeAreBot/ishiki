@@ -14,17 +14,15 @@ import {
   createEntry,
   createJsonlStorage,
   createUserMessage,
-  dynamicTool,
-  jsonSchema,
-  tool,
   ToolSet,
 } from "@yesimagent/core";
 import { Gateway } from "@yesimagent/gateway";
-import { Context, h, Logger, Session, sleep } from "koishi";
+import { Context, Logger, Session } from "koishi";
 
 import { HandlerResult, sessionHandlers } from "./handlers.js";
-import { Focus, isChannelAllowed, Profile, resolveFocus } from "./profiles.js";
+import { Focus, isChannelAllowed, Profile } from "./profiles.js";
 import { classify, collectLines, eventRenders, formatClock, sceneKey } from "./scene.js";
+import { createFinish, createPeekChannel, createReportToolIssue, createSendMessage, createSwitchFocus, createThink } from "./tools/index.js";
 import type { IshikiEntry, IshikiEvent } from "./types.js";
 
 /** Resolve a path relative to the package root's resources/ directory. Works in both ESM and CJS builds. */
@@ -42,34 +40,9 @@ function resourcePath(...segments: string[]): string {
   return path.resolve(srcDir, "..", "resources", ...segments);
 }
 
-/** How many lines `peek_channel` reads by default, and the most it will read in one call. */
-const PEEK_DEFAULT_LIMIT = 20;
-const PEEK_MAX_LIMIT = 50;
-
 /** Used when the model declares no window: the workspace budget is half of it, this is the floor. */
 const DEFAULT_WORKSPACE_TOKEN_LIMIT = 8192;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
-
-interface SendMessageInput {
-  sid?: string;
-  channel?: string;
-  messages: string[];
-  mode?: "element" | "raw";
-  continue?: boolean;
-}
-
-interface TargetInput {
-  sid?: string;
-  channel: string;
-}
-
-interface SwitchFocusInput extends TargetInput {
-  reason?: string;
-}
-
-interface PeekChannelInput extends TargetInput {
-  limit?: number;
-}
 
 /**
  * The `<frame ...>` opening tag.
@@ -353,44 +326,6 @@ export class ProfileRuntime {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Typing delay (human-like pacing between bubbles)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Computes a human-like typing delay for `text`, based on character count with separate CJK / latin rates,
-   * randomized around the configured `charPerSecond`, clamped to `[minDelay, maxDelay]`.
-   */
-  private getTypingDelay(text: string): number {
-    const { baseDelay, charPerSecond, minDelay, maxDelay } = this.profile.typing;
-    if (charPerSecond <= 0) return minDelay;
-
-    // Strip markup so only visible text contributes to the delay.
-    const plain = h
-      .parse(text)
-      .filter((e) => e.type === "text")
-      .map((e) => e.attrs?.content ?? String(e))
-      .join("");
-    if (plain.length === 0) return minDelay;
-
-    const cjkRegex = /[\u4e00-\u9fa5]/g;
-    const cjkCount = (plain.match(cjkRegex) ?? []).length;
-    const latinCount = plain.length - cjkCount;
-
-    // CJK input (pinyin) is slower; latin characters are ~1.5× faster.
-    const cjkDelay = (cjkCount / charPerSecond) * 1000;
-    const latinDelay = (latinCount / (charPerSecond * 1.5)) * 1000;
-
-    // Per-character randomness weighted by character type composition.
-    const cjkRandomFactor = 0.5;
-    const latinRandomFactor = 0.3;
-    const totalRandomness = plain.length > 0 ? (cjkCount * cjkRandomFactor + latinCount * latinRandomFactor) / plain.length : 0;
-    const randomFactor = 1 + (Math.random() - 0.5) * 2 * totalRandomness;
-
-    const computed = baseDelay + (cjkDelay + latinDelay) * randomFactor;
-    return Math.max(minDelay, Math.min(computed, maxDelay));
-  }
-
   /**
    * The tools close over this runtime: the focus they read is the live one, so a switch made mid-step
    * already applies to the rest of that step.
@@ -403,187 +338,48 @@ export class ProfileRuntime {
     const tools: ToolSet = {};
 
     // -- think (optional) ---------------------------------------------------
-    if (this.profile.innerThought) {
-      tools.think = tool({
-        description: "写下你的想法，只有你自己看得到。按 think_guide 的格式写，和本步的其他工具一起调用。",
-        inputSchema: jsonSchema<{ thought: string }>({
-          type: "object",
-          properties: {
-            thought: { type: "string", description: "按 think_guide 的格式写下你此刻的想法" },
-          },
-        }),
-        execute: async ({ thought }) => {
-          this.logger.debug(`--- 内心独白 ---\n${thought}`);
-          return { ok: true as const };
-        },
-      });
-    }
+    if (this.profile.innerThought) tools.think = createThink({ logger: this.logger });
 
     // -- send_message -------------------------------------------------------
-    tools.send_message = tool({
-      description:
-        '把话发出去。messages 里每一条是一个独立气泡，按顺序发出。省略 sid 和 channel 就发到当前窗口。element 模式下 <at id="…"/> 会被平台解析为 @。',
-      inputSchema: jsonSchema<SendMessageInput>({
-        type: "object",
-        properties: {
-          sid: { type: "string", description: "账号（platform:selfId）；省略即 focus 所在的账号" },
-          channel: { type: "string", minLength: 1, description: "目标频道；省略即 focus 的频道" },
-          messages: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string", minLength: 1 },
-            description: "要发送的消息，每一项作为一条独立消息按顺序发出",
-          },
-          mode: {
-            type: "string",
-            enum: ["element", "raw"],
-            description: 'element（默认）时正文中的 <at id="…"/> 等元素会被平台解析；raw 时正文按字面发送',
-          },
-          continue: {
-            type: "boolean",
-            description: "true 只用于本轮还有下一步要做；省略即发完结束本轮",
-          },
-        },
-        required: ["messages"],
-      }),
-      execute: async (input) => {
-        const target = resolveFocus(this.profile, this.currentFocus, input);
-        if ("error" in target) return { ok: false as const, error: target.error, sent: [], failedAt: 0 };
-
-        const messages = input.messages;
-        if (!Array.isArray(messages) || messages.length === 0 || messages.some((message) => typeof message !== "string" || message.length === 0)) {
-          return { ok: false as const, error: { name: "InvalidInput", message: "messages 必须是非空字符串数组" }, sent: [], failedAt: 0 };
-        }
-        const bot = this.ctx.bots[target.sid];
-        if (!bot) return { ok: false as const, error: { name: "BotNotFound", message: `Bot with sid ${target.sid} not found` }, sent: [], failedAt: 0 };
-
-        const platform = bot.platform!;
-        const sent: string[] = [];
-
-        for (let index = 0; index < messages.length; index += 1) {
-          try {
-            const content = input.mode === "raw" ? h.escape(messages[index]) : messages[index];
-
-            // Human-like typing delay: computed from the message text, applied before sending.
-            const delay = this.getTypingDelay(content);
-            if (delay > 0) await sleep(delay);
-
-            const ids = await bot.sendMessage(target.channelId, content);
-            sent.push(...ids);
-            if (ids.length === 0) {
-              this.logger.warn(`平台没有返回消息 id，这条自消息不进记录：${target.sid}/${target.channelId}`);
-            } else {
-              this.pendingSelfMessages.push({
-                platform,
-                channel: { id: target.channelId },
-                content: content,
-                messageId: ids[0],
-                timestamp: Date.now(),
-                selfId: bot.selfId,
-                user: { id: bot.selfId, name: bot.user?.name ?? this.profile.name },
-              });
-            }
-          } catch (error) {
-            // A platform failure carries a name worth keeping: `BotNotFound` tells the model to fix the address.
-            const failure = error instanceof Error ? { name: error.name, message: error.message } : { name: "Error", message: String(error) };
-            return { ok: false as const, sent, failedAt: index, error: failure };
-          }
-        }
-
-        if (input.continue !== true) this.sendWantsStop = true;
-        return { ok: true as const, count: sent.length };
+    tools.send_message = createSendMessage({
+      ctx: this.ctx,
+      profile: this.profile,
+      logger: this.logger,
+      currentFocus: () => this.currentFocus,
+      onSent: (sent) => this.pendingSelfMessages.push(sent),
+      onSendEndsTurn: () => {
+        this.sendWantsStop = true;
       },
     });
 
     // -- finish -------------------------------------------------------------
-    tools.finish = tool({
-      description: "结束本轮而不发言。看过消息但决定不回复时用它。",
-      inputSchema: jsonSchema<{ reason?: string }>({
-        type: "object",
-        properties: {
-          reason: { type: "string", description: "结束原因" },
-        },
-        required: [],
-      }),
-      execute: async () => {
-        requestStop();
-        return { ok: true as const };
-      },
-    });
+    tools.finish = createFinish({ onStop: requestStop });
 
     // -- switch_focus (conditional) -----------------------------------------
     if (!this.singleScene && this.profile.allowChangeFocus) {
-      tools.switch_focus = tool({
-        description: "切到另一个频道的窗口。切完后本轮后续的发送默认去新频道。",
-        inputSchema: jsonSchema<SwitchFocusInput>({
-          type: "object",
-          properties: {
-            sid: { type: "string", description: "身体 sid（platform:selfId）；省略即当前 focus 的身体" },
-            channel: { type: "string", minLength: 1, description: "目标频道 ID" },
-            reason: { type: "string", description: "切换原因" },
-          },
-          required: ["channel"],
-        }),
-        execute: async (input) => {
-          const target = resolveFocus(this.profile, this.currentFocus, input);
-          if ("error" in target) return { ok: false as const, error: target.error };
-
-          if (target.sid === this.currentFocus.sid && target.channelId === this.currentFocus.channelId) {
-            return { ok: true as const, changed: false, target };
-          }
-          this.pendingFocus = { previous: this.currentFocus, next: target, ...(input.reason === undefined ? {} : { reason: input.reason }) };
-          this.currentFocus = target;
-          return { ok: true as const, changed: true, target };
+      tools.switch_focus = createSwitchFocus({
+        profile: this.profile,
+        currentFocus: () => this.currentFocus,
+        // The pending record waits for the step boundary; the live focus moves now, so the rest of the step
+        // addresses the new scene.
+        applySwitch: (previous, next, reason) => {
+          this.pendingFocus = { previous, next, ...(reason === undefined ? {} : { reason }) };
+          this.currentFocus = next;
         },
       });
     }
 
     // -- peek_channel (conditional) -----------------------------------------
     if (!this.singleScene) {
-      tools.peek_channel = tool({
-        description: "看一眼某个频道最近的消息，不切过去，不留记录。",
-        inputSchema: jsonSchema<PeekChannelInput>({
-          type: "object",
-          properties: {
-            sid: { type: "string", description: "身体 sid（platform:selfId）；省略即当前 focus 的身体" },
-            channel: { type: "string", minLength: 1, description: "要查看的频道 ID" },
-            limit: { type: "number", description: `读取条数，默认 ${PEEK_DEFAULT_LIMIT}，上限 ${PEEK_MAX_LIMIT}` },
-          },
-          required: ["channel"],
-        }),
-        execute: async (input) => {
-          const target = resolveFocus(this.profile, this.currentFocus, input);
-          if ("error" in target) return { ok: false as const, error: target.error };
-
-          const limit = input.limit ?? PEEK_DEFAULT_LIMIT;
-          if (!Number.isInteger(limit) || limit <= 0 || limit > PEEK_MAX_LIMIT) {
-            return { ok: false as const, error: { name: "LimitTooLarge", message: `limit 必须是 1 到 ${PEEK_MAX_LIMIT} 之间的整数` } };
-          }
-
-          const lines = collectLines(await this.agent.storage.read(), target).map((rl) => rl.line);
-          const recent = lines.slice(-limit);
-          const text = [`<peek sid="${target.sid}" channel="${target.channelId}" count=${recent.length}>`, ...recent].join("\n");
-          return { ok: true as const, target, count: recent.length, text };
-        },
+      tools.peek_channel = createPeekChannel({
+        profile: this.profile,
+        currentFocus: () => this.currentFocus,
+        readEntries: () => this.agent.storage.read(),
       });
     }
 
     // -- report_tool_issue --------------------------------------------------
-    tools.report_tool_issue = tool({
-      description: "报告工具调用问题",
-      inputSchema: jsonSchema({
-        type: "object",
-        properties: {
-          tool: { type: "string", description: "工具名称" },
-          issue: { type: "string", description: "concise description of the issue" },
-        },
-        required: ["tool", "issue"],
-      }),
-      execute: async (args) => {
-        await fs.appendFile(path.resolve(this.profileDataPath, "tool_issues.log"), `[${new Date().toISOString()}] Tool: ${args.tool}, Issue: ${args.issue}\n`);
-        return { success: true, message: "Noted, thanks" };
-      },
-    });
+    tools.report_tool_issue = createReportToolIssue({ logPath: path.resolve(this.profileDataPath, "tool_issues.log") });
 
     return tools;
   }

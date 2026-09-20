@@ -205,7 +205,7 @@ export async function createHarness(
   const runtime = new ProfileRuntime(ctx as unknown as Context, {
     profile: { ...makeProfile(), ...options.profile },
     gateway: gateway as unknown as Gateway,
-    profilesPath: "profiles.yaml",
+    profilesFile: "profiles.yaml",
     logLevel: 0,
   });
   await runtime.start();
