@@ -33,7 +33,7 @@
 
 > 延迟理由：实际效果未知，不引入复杂度。
 
-**ishiki 现状**：所有事件（focus 裸行、notification、switch 标签）都作为 user message 投递。`stableZone` 里告诉模型"user message 是这台机器在跟你说话"，但实际上 user message 里放的是其他人的聊天内容。
+**ishiki 现状**：所有事件（focus 裸行、notification）都作为 user message 投递。`stableZone` 里告诉模型"user message 是这台机器在跟你说话"，但实际上 user message 里放的是其他人的聊天内容。
 
 **Cortico 的做法**：外部事件放在合成的 `function_call("external_event_frame", "{}")` + `function_result("[3 new events]\n...")` 对中。ORIENTATION.md 明确告诉模型：「外面的人说的话在 `external_event_frame` 里；user message 永远是这台机器跟你说话」。
 
