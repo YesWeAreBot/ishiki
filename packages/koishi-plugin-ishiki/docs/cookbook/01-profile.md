@@ -1,53 +1,48 @@
-# 01 · Profile
+# 01 · Profile 与场景
 
-> v1 已确认。一个 profile = 一个主心智。
+## Profile
 
-Profile 用配置文件声明，不进 Koishi Schema，不上配置页。建议路径：`data/ishiki/profiles.yaml`。
+一个 profile 是一个独立的主心智。它拥有自己的事实流、人格、模型、上下文边界和当前场景；不同 profile 之间不共享历史，也不共享名字快照。
 
-身体集合由 `allowedChannels` 的 `sid` 推导，不单独配 `bots`。
+Profile 不等于频道。它可以通过多具身体接入多个平台和多个频道，但所有接入都必须经过同一份场景白名单。
 
-下面示例使用当前 v1 配置字段；每条 `allowedChannels` 声明至少一个规则。初始 focus 必须匹配对应 sid 的规则。
+## 场景
 
-```yaml
-profiles:
-  - id: boki
-    dataPath: data/ishiki/boki
-    model: deepseek:deepseek-flash
-    initialFocus: { sid: onebot:1434974784, channelId: channelA }
-    allowedChannels:
-      - sid: onebot:1434974784
-        channels:
-          - channelA
-          - channelB
-          - private:*
-          - "!private:12345678"
+场景由两部分组成：
 
-  - id: other
-    dataPath: data/ishiki/other
-    model: deepseek:deepseek-flash
-    initialFocus: { sid: onebot:1434974784, channelId: private:12345678 }
-    allowedChannels:
-      - sid: onebot:1434974784
-        channels:
-          - private:12345678
-```
+- **身体**：`platform:selfId`，表示心智通过哪个账号出现。
+- **频道**：该身体命名空间内的频道 ID。
 
-## allowedChannels
+完整地址是 `身体 + 频道`。同一个频道 ID 挂在不同身体下，不代表同一个场景；不同平台的频道 ID 也不比较。
 
-同时是**采集白名单**和**响应白名单**。写进来 = 这个心智在这里运行；可见 = 可以响应。
+## 白名单
 
-同一 profile 的同一多方频道不能挂多具 bot。加载期拒绝。可以拆到不同 profile。
+白名单同时承担三件事：
 
-## 初始 focus 与恢复
+1. 声明 profile 拥有哪些身体。
+2. 限定这些身体接管哪些频道。
+3. 限定心智能在哪些场景接收和发送消息。
 
-- profile 配置必须指定初始 focus，指向该 profile 白名单内的具体场景。
-- 首次启动、没有可恢复状态时，用配置的初始 focus 构造初始帧；不从首条消息推断，也不引入常规的“无 focus”状态。
-- 已有持久化状态时恢复已有 focus，不用配置的初始 focus 覆盖它。检查点及后续记录的具体恢复布局在实现计划中落实。
+没有命中的事件静默忽略。身体存在由白名单派生，不再维护第二份身体清单。
 
-## 分发
+频道规则支持精确频道、前缀通配和排除项。规则只描述允许范围，不描述唤醒策略。
 
-能确定来源的事件（频道消息、带频道的事件、好友请求、加群等）**恰好进一个 profile**。
+## 分发边界
 
-同一 `sid` 可以出现在多个 profile 里，但它们的 `allowedChannels` **不准重叠**。加载期拒绝。
+事件进入 profile 前依次经过身体匹配和频道白名单判断。发送者如果是该 profile 的任一身体，事件直接跳过，避免心智自己的平台消息再次作为外部消息进入事实流。
 
-登录 / 账号状态变更没有频道归属，发给所有接管该 `sid` 的 profile。
+平台差异在事件进入事实流时归一化。后续的场景判断、通知判断和渲染不依赖平台分支。
+
+事实保存摄入时的发送者和频道名称快照。之后改名不回溯历史；没有名称时使用稳定 ID。
+
+## 配置隔离
+
+同一身体可以服务多个 profile，但这些 profile 在该身体上的场景集合不得重叠。一个 profile 内，多具同平台身体的多方场景也不得重叠；两方私聊按对方身份区分。
+
+校验在启动时完成。无法比较的跨平台频道不做字符串级去重。
+
+## 初始与恢复
+
+首次运行使用配置声明的初始场景。已有检查点时恢复检查点中的场景，不用初始配置覆盖运行中的位置。
+
+场景位置属于上下文代际的一部分。它不从最新消息猜测，也不通过当前收到的事件临时推导。
