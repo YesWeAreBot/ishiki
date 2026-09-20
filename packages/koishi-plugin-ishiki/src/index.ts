@@ -46,7 +46,7 @@ class Ishiki {
     }
 
     ctx.on("ready", async () => {
-      const profilesFile = path.resolve(this.ctx.baseDir, this.config.profilesPath);
+      const profilesFile = path.resolve(this.ctx.baseDir, this.config.dataPath, "profiles.yaml");
       if (!existsSync(profilesFile)) {
         this.logger.warn(`Profiles file not found: ${profilesFile}`);
         return;
@@ -60,7 +60,7 @@ class Ishiki {
         const runtime = new ProfileRuntime(this.ctx, {
           profile,
           gateway: this.gateway,
-          profilesPath: this.config.profilesPath,
+          profilesFile,
           logLevel: this.config.logLevel,
         });
         this.runtimes.push(runtime);
@@ -80,13 +80,11 @@ class Ishiki {
 namespace Ishiki {
   export interface Config {
     dataPath: string;
-    profilesPath: string;
     dumpRequests: boolean;
     logLevel: number;
   }
   export const Config: Schema<Ishiki.Config> = Schema.object({
     dataPath: Schema.string().role("path").description("数据存储路径").default("data/ishiki"),
-    profilesPath: Schema.string().role("path").description("配置文件路径").default("data/ishiki/profiles.yaml"),
     dumpRequests: Schema.boolean().description("是否将请求数据保存到本地").default(false),
     logLevel: Schema.union([0, 1, 2, 3]).description("日志级别").default(Logger.INFO) as Schema<number>,
   });

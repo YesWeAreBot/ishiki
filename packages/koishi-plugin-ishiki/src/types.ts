@@ -42,9 +42,17 @@ export namespace IshikiEvent {
 
 export namespace OneBotEvent {
   export interface GuildMemberAdded extends IshikiEvent.EventBase {
+    channelId: string;
     guildId: string;
     userId: string;
     operatorId?: string;
+  }
+
+  export interface NoticePoke extends IshikiEvent.EventBase {
+    channelId: string;
+    guildId: string;
+    userId: string;
+    targetId: string;
   }
 }
 

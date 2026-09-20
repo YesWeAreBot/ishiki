@@ -141,13 +141,13 @@ export class ProfileRuntime {
   /** Workspace budget in tokens: the profile's own value, else half the window the model declares. */
   private workspaceTokenLimit = DEFAULT_WORKSPACE_TOKEN_LIMIT;
 
-  constructor(ctx: Context, options: { profile: Profile; gateway: Gateway; profilesPath: string; logLevel: number }) {
+  constructor(ctx: Context, options: { profile: Profile; gateway: Gateway; profilesFile: string; logLevel: number }) {
     this.ctx = ctx;
     this.profile = options.profile;
     this.gateway = options.gateway;
     this.logger = ctx.logger("ishiki-profile-runtime");
     this.logger.level = options.logLevel;
-    this.profileDataPath = path.resolve(this.ctx.baseDir, path.dirname(options.profilesPath), this.profile.dataPath);
+    this.profileDataPath = path.resolve(this.ctx.baseDir, path.dirname(options.profilesFile), this.profile.dataPath);
     if (!existsSync(this.profileDataPath)) {
       mkdirSync(this.profileDataPath, { recursive: true });
     }
