@@ -2,7 +2,7 @@ import { jsonSchema, tool, Tool } from "@yesimagent/core";
 import { Context, h, Logger, sleep } from "koishi";
 
 import { Focus, Profile, resolveFocus } from "../profiles.js";
-import type { IshikiEvent } from "../types.js";
+import type { IshikiEvent, IshikiMessageCreated } from "../types.js";
 
 export namespace SendMessageTool {
   export interface Options {
@@ -12,7 +12,7 @@ export namespace SendMessageTool {
     /** The live focus, read at call time: a switch made mid-step already applies to the rest of that step. */
     currentFocus: () => Focus;
     /** A message that actually left is the mind's own fact; the runtime records it at the step boundary. */
-    onSent: (sent: IshikiEvent.MessageCreated) => void;
+    onSent: (sent: IshikiMessageCreated) => void;
     /** `continue` was falsy: this send ends the turn unless a non-trivial tool ran in the same step. */
     onSendEndsTurn: () => void;
   }
@@ -88,7 +88,8 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
           } else {
             options.onSent({
               platform,
-              channel: { id: target.channelId },
+              sid: target.sid,
+              channelId: target.channelId,
               content: content,
               messageId: ids[0],
               timestamp: Date.now(),

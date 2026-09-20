@@ -1,7 +1,6 @@
-import { AgentEntry, Awaitable, jsonSchema, tool, Tool } from "@yesimagent/core";
+import { Awaitable, jsonSchema, tool, Tool } from "@yesimagent/core";
 
 import { Focus, Profile, resolveFocus } from "../profiles.js";
-import { collectLines } from "../scene.js";
 
 /** How many lines `peek_channel` reads by default, and the most it will read in one call. */
 const PEEK_DEFAULT_LIMIT = 20;
@@ -12,8 +11,8 @@ export namespace PeekChannelTool {
     profile: Profile;
     /** The live focus, read at call time. */
     currentFocus: () => Focus;
-    /** The full entry stream the peek reads its lines out of. */
-    readEntries: () => Awaitable<readonly AgentEntry[]>;
+    /** The rendered lines of a scene, read at call time. */
+    lines: (scene: Focus) => Awaitable<readonly string[]>;
   }
   export interface Input {
     sid?: string;
@@ -44,7 +43,7 @@ export function createPeekChannel(options: PeekChannelTool.Options): Tool<PeekCh
         return { ok: false as const, error: { name: "LimitTooLarge", message: `limit 必须是 1 到 ${PEEK_MAX_LIMIT} 之间的整数` } };
       }
 
-      const lines = collectLines(await options.readEntries(), target).map((rl) => rl.line);
+      const lines = await options.lines(target);
       const recent = lines.slice(-limit);
       const text = [`<peek sid="${target.sid}" channel="${target.channelId}" count=${recent.length}>`, ...recent].join("\n");
       return { ok: true as const, target, count: recent.length, text };

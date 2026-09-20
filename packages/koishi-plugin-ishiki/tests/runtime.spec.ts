@@ -34,7 +34,9 @@ function storedFact(messageId: string, channelId: string, direct: boolean): stri
       data: {
         content: messageId,
         user: { id: "42", name: "Miaow" },
-        channel: { id: channelId, direct },
+        sid: "onebot:1",
+        channelId,
+        direct,
         messageId,
         timestamp,
         platform: "onebot",
@@ -159,25 +161,30 @@ describe("ending the turn", () => {
 });
 
 describe("switching focus", () => {
-  it("addresses the new scene for the rest of the step and starts a new generation", async () => {
-    const harness = await createHarness([
-      toolCallStep(
-        { toolCallId: "c1", toolName: "switch_focus", input: { sid: "onebot:2", channel: "group:9" } },
-        { toolCallId: "c2", toolName: "send_message", input: { channel: "group:9", messages: ["ping"] } },
-      ),
-      textStep("done"),
-    ]);
+  it("stages the move and starts a new generation", async () => {
+    const harness = await createHarness(
+      [
+        toolCallStep(
+          { toolCallId: "c1", toolName: "switch_focus", input: { sid: "onebot:2", channel: "group:9" } },
+          { toolCallId: "c2", toolName: "send_message", input: { channel: "group:9", messages: ["ping"] } },
+        ),
+        textStep("done"),
+      ],
+      // Both bodies can reach group:9, so the send below says which body it left through rather than being refused.
+      { profile: twoSceneProfile() },
+    );
 
     await harness.send();
 
     // send_message without continue does NOT stop the turn when another tool (switch_focus) ran in the
     // same step — the model gets a second call to see the results and decide what to do next.
     expect(harness.calls()).toBe(2);
-    expect(harness.bubbles["onebot:2"]).toEqual([{ channelId: "group:9", content: "ping" }]);
-    expect(harness.bubbles["onebot:1"]).toEqual([]);
+    // The move is staged, not taken: the rest of the step still stands where it began, so the send leaves
+    // through the body the mind was already speaking with.
+    expect(harness.bubbles["onebot:1"]).toEqual([{ channelId: "group:9", content: "ping" }]);
+    expect(harness.bubbles["onebot:2"]).toEqual([]);
 
-    // The switch is the generation change itself: it lands as a checkpoint, never as a change entry.
-    expect((await harness.entries()).filter((entry) => entry.type === "ishiki.focus.changed")).toHaveLength(0);
+    // The switch is the generation change itself, so it lands as a checkpoint and nowhere else.
     const checkpoint = await rebuiltCheckpoint(harness);
     expect(checkpoint.data.frameFocus).toEqual({ sid: "onebot:2", channelId: "group:9" });
   });
@@ -193,11 +200,10 @@ describe("switching focus", () => {
 
     await harness.send();
 
-    // No cooldown: a switch ends the generation, so the frame simply starts where the step finished and the
-    // pending hop is the trajectory it came through.
+    // The second call reads where the first one staged the mind, so the hop back is a real move rather than a
+    // no-op, and the generation starts where the step left off.
     const checkpoint = await rebuiltCheckpoint(harness);
     expect(checkpoint.data.frameFocus).toEqual({ sid: "onebot:1", channelId: "group:1" });
-    expect((await harness.entries()).filter((entry) => entry.type === "ishiki.focus.changed")).toHaveLength(0);
   });
 
   it("refuses a body the profile does not own", async () => {
@@ -209,7 +215,6 @@ describe("switching focus", () => {
     await harness.send();
 
     expect(harness.calls()).toBe(2);
-    expect((await harness.entries()).filter((entry) => entry.type === "ishiki.focus.changed")).toHaveLength(0);
   });
 });
 
@@ -282,6 +287,17 @@ describe("ingestion", () => {
     expect(harness.calls()).toBe(1);
   });
 
+  it("reads a mention of its own account out of the content", async () => {
+    // The fabricated session carries no element list, so only the content can answer this question.
+    const other = await createHarness([textStep("unreached")]);
+    await other.send({ isDirect: false, content: '在吗 <at id="9"/>' });
+    expect(other.calls()).toBe(0);
+
+    const mine = await createHarness([textStep("nothing")]);
+    await mine.send({ isDirect: false, content: '在吗 <at id="1"/>' });
+    expect(mine.calls()).toBe(1);
+  });
+
   it("ignores a message sent by one of its own bodies", async () => {
     const harness = await createHarness([textStep("unreached")]);
 
@@ -343,7 +359,7 @@ describe("three zones", () => {
     expect(promptText(harness.prompts(), 0)).toContain("括号里的 id 如果等于你的 uid");
   });
 
-  it("opens a run header once per stretch of lines from the window", async () => {
+  it("opens one run header for a stretch of lines from the window", async () => {
     const harness = await createHarness([textStep("nothing")], {
       profile: twoSceneProfile(),
       seed: [storedFact("m1", "group:1", false), storedFact("m2", "group:1", false), storedFact("m3", "group:9", true), storedFact("m4", "group:1", false)],
@@ -352,8 +368,9 @@ describe("three zones", () => {
     await harness.send({ messageId: "m5" });
 
     const text = promptText(harness.prompts(), 0);
-    // m1 opens a run, m2 shares it, the line from elsewhere closes it, m4 and m5 open the next one.
-    expect(text.match(/<focus sid="onebot:1" channel="group:1">/g)).toHaveLength(2);
+    // m3 sits in another scene and was never retold, so the projection does not read it and the run stays whole.
+    expect(text.match(/<focus sid="onebot:1" channel="group:1">/g)).toHaveLength(1);
+    expect(text).not.toContain("#m3");
     expect(text.indexOf("Miaow(42) #m1: m1")).toBeLessThan(text.indexOf("Miaow(42) #m2: m2"));
   });
 
@@ -361,7 +378,9 @@ describe("three zones", () => {
     const fact = {
       content: "hello",
       user: { id: "42", name: "Miaow" },
-      channel: { id: "group:1", name: "开发组", direct: false },
+      sid: "onebot:1",
+      channelId: "group:1",
+      direct: false,
       messageId: "m0",
       timestamp: 1_700_000_000_000,
       platform: "onebot",
@@ -408,6 +427,10 @@ describe("three zones", () => {
     const directText = promptText(direct.prompts(), 0);
     expect(directText).toContain('<notification sid="onebot:1" channel="group:9"');
     expect(directText).toContain("在吗");
+
+    // The retelling is a record of its own, and the fact it retells stays where it happened.
+    const retelling = await waitFor(async () => (await direct.entries()).find((entry) => String(entry.data["type"]) === "ishiki.notification"));
+    expect((retelling.data["data"] as { reason: string }).reason).toBe("direct");
 
     const keyword = await createHarness([textStep("nothing")], { profile: { ...twoSceneProfile(), keywords: ["上线"] } });
     await keyword.send({ channelId: "group:9", isDirect: false, content: "我们上线了" });
@@ -749,7 +772,7 @@ describe("frame rebuild", () => {
   });
 
   it("restores the frame and the live focus from the last checkpoint", async () => {
-    const frame = ['<frame at="00:00" sid="onebot:1" channel="group:1">', "<history>", "SEEDED", "</history>", "</frame>"].join("\n");
+    const frame = ['<frame at="00:00" focus_sid="onebot:2" focus_channel="group:9">', "<history>", "SEEDED", "</history>", "</frame>"].join("\n");
     const harness = await createHarness(
       [toolCallStep({ toolCallId: "c1", toolName: "send_message", input: { channel: "group:9", messages: ["ping"] } }), textStep("unreached")],
       {
@@ -758,13 +781,7 @@ describe("frame rebuild", () => {
             id: "cp",
             type: "ishiki.checkpoint",
             timestamp: 1000,
-            data: { frameFocus: { sid: "onebot:1", channelId: "group:1" }, text: frame, createdAt: 1000 },
-          }),
-          JSON.stringify({
-            id: "sw",
-            type: "ishiki.focus.changed",
-            timestamp: 1001,
-            data: { previous: { sid: "onebot:1", channelId: "group:1" }, next: { sid: "onebot:2", channelId: "group:9" } },
+            data: { frameFocus: { sid: "onebot:2", channelId: "group:9" }, text: frame, createdAt: 1000 },
           }),
         ],
       },
@@ -773,6 +790,7 @@ describe("frame rebuild", () => {
     await harness.send();
 
     expect(promptText(harness.prompts(), 0)).toContain("SEEDED");
+    // The checkpoint's own focus is the position: a send that names no body lands on that body's channel.
     expect(harness.bubbles["onebot:2"]).toEqual([{ channelId: "group:9", content: "ping" }]);
     expect(harness.bubbles["onebot:1"]).toEqual([]);
   });

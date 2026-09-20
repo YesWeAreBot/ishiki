@@ -5,9 +5,9 @@ import { Focus, Profile, resolveFocus } from "../profiles.js";
 export namespace SwitchFocusTool {
   export interface Options {
     profile: Profile;
-    /** The live focus, read at call time: a switch made mid-step already applies to the rest of that step. */
+    /** The live focus, read at call time: a staged switch has not moved it yet. */
     currentFocus: () => Focus;
-    /** Records the switch: the pending entry plus the immediate focus move. */
+    /** Stages the switch. It becomes this mind's position only when the step boundary turns it into a generation. */
     applySwitch: (previous: Focus, next: Focus, reason?: string) => void;
   }
   export interface Input {
@@ -20,7 +20,7 @@ export namespace SwitchFocusTool {
 
 export function createSwitchFocus(options: SwitchFocusTool.Options): Tool<SwitchFocusTool.Input, SwitchFocusTool.Output> {
   return tool({
-    description: "切到另一个频道的窗口。切完后本轮后续的发送默认去新频道。",
+    description: "切到另一个频道的窗口。切换在本次 step 结束时生效，从下一个 step 起默认寻址新频道；本次 step 内的发送仍旧频道。",
     inputSchema: jsonSchema<SwitchFocusTool.Input>({
       type: "object",
       properties: {

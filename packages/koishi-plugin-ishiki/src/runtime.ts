@@ -4,7 +4,6 @@ import path from "path";
 import { Template } from "@huggingface/jinja";
 import {
   Agent,
-  AgentCustomEntry,
   AgentEntry,
   AgentEvent,
   AgentPlugin,
@@ -13,17 +12,17 @@ import {
   createCustomMessage,
   createEntry,
   createJsonlStorage,
-  createUserMessage,
   ToolSet,
 } from "@yesimagent/core";
 import { Gateway } from "@yesimagent/gateway";
 import { Context, Logger, Session } from "koishi";
 
-import { HandlerResult, sessionHandlers } from "./handlers.js";
+import { ContextEngine, findLastEntry, sliceWorkspace } from "./context-engine.js";
 import { Focus, isChannelAllowed, Profile } from "./profiles.js";
-import { classify, collectLines, eventRenders, formatClock, sceneKey } from "./scene.js";
+import { SessionHandler } from "./session-handler.js";
 import { createFinish, createPeekChannel, createReportToolIssue, createSendMessage, createSwitchFocus, createThink } from "./tools/index.js";
-import type { IshikiEntry, IshikiEvent } from "./types.js";
+import type { IshikiCheckpointEntry, IshikiMessageCreated } from "./types.js";
+import { WeakUpEngine } from "./weakup-engine.js";
 
 /** Resolve a path relative to the package root's resources/ directory. Works in both ESM and CJS builds. */
 function resourcePath(...segments: string[]): string {
@@ -44,27 +43,6 @@ function resourcePath(...segments: string[]): string {
 const DEFAULT_WORKSPACE_TOKEN_LIMIT = 8192;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
 
-/**
- * The `<frame ...>` opening tag.
- */
-function renderFrameHead(focus: Focus, at: string): string {
-  return [`at="${at}"`, `focus_sid="${focus.sid}"`, `focus_channel="${focus.channelId}"`].join(" ");
-}
-
-/** The generic loses the narrowing a literal type would give, so the helper owns the one cast. */
-function findLastEntry<T extends keyof AgentCustomEntry>(entries: readonly AgentEntry[], type: T): AgentEntry<T> | undefined {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry.type === type) return entry as AgentEntry<T>;
-  }
-  return undefined;
-}
-
-function sliceWorkspace(entries: readonly AgentEntry[]): readonly AgentEntry[] {
-  const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
-  return checkpoint === undefined ? entries : entries.slice(entries.indexOf(checkpoint) + 1);
-}
-
 export class ProfileRuntime {
   private readonly ctx: Context;
   private readonly logger: Logger;
@@ -74,18 +52,24 @@ export class ProfileRuntime {
   private readonly profileDataPath: string;
   /** Whether this profile has multiple scenes (bodies × channels > 1). */
   private readonly singleScene: boolean;
+  /** The profile's ingress: sessions become the facts of its stream. */
+  private readonly sessionHandler: SessionHandler;
+  /** The single yes-or-no behind every wake: does this event start a turn? */
+  private readonly weakup: WeakUpEngine;
+  /** The projection: every part of the model context that is not a prompt part. */
+  private readonly context: ContextEngine;
 
   private agent: Agent;
   private storage: AgentStorage;
 
   /**
-   * The scene this mind sits in. `switch_focus` replaces it immediately (so the rest of the step addresses
-   * the new scene), while its record waits for the step boundary.
+   * The scene this mind sits in. `switch_focus` only stages a move; the focus changes when the step boundary
+   * turns it into a generation, and a checkpoint that will not write leaves the mind where it was.
    */
   private currentFocus: Focus;
   private pendingFocus: { previous: Focus; next: Focus; reason?: string } | null = null;
   /** Messages a step actually sent; like a monologue, each lands as an ordinary fact at the step boundary. */
-  private pendingSelfMessages: IshikiEvent.MessageCreated[] = [];
+  private pendingSelfMessages: IshikiMessageCreated[] = [];
   /**
    * Raised by `finish`. `onStepFinish` runs exactly once per step, so it consumes the flag and never lets
    * it leak into the next step.
@@ -130,6 +114,9 @@ export class ProfileRuntime {
     const totalChannels = this.profile.allowedChannels.reduce((sum, d) => sum + d.channels.length, 0);
     const hasWildcard = this.profile.allowedChannels.some((d) => d.channels.some((c) => c.includes("*")));
     this.singleScene = totalChannels <= 1 && !hasWildcard;
+    this.sessionHandler = new SessionHandler(this.profile);
+    this.weakup = new WeakUpEngine({ ctx: this.ctx, profile: this.profile, currentFocus: () => this.currentFocus });
+    this.context = new ContextEngine({ profile: this.profile });
 
     this.agent = createAgent({
       id: this.profile.id,
@@ -153,81 +140,8 @@ export class ProfileRuntime {
             this.generationDirty = true;
             return entries;
           },
-          /**
-           * The whole projection, in the one hook that sees entries. Everything before the last checkpoint
-           * already lives inside the frame text, so this walks the current generation only and its cost
-           * tracks the generation, not the history. Output is native messages: no render types, no second
-           * hook to carry a cursor across.
-           */
-          transformEntries: (entries) => {
-            const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
-            const workspace = sliceWorkspace(entries);
-            const out: AgentEntry[] = [];
-            if (checkpoint !== undefined) {
-              out.push(createEntry("message", createUserMessage(checkpoint.data.text), { id: checkpoint.id, timestamp: checkpoint.timestamp }));
-            } else {
-              // A generation that never had a frame still has a position: the element a frame opens with, derived
-              // from the first entry and the configured focus, so every step of the turn renders the same string.
-              const first = workspace[0];
-              if (first !== undefined) {
-                const head = `<frame ${renderFrameHead(this.profile.initialFocus, formatClock(first.timestamp))}/>`;
-                out.push(createEntry("message", createUserMessage(head), { id: `frame:${first.id}`, timestamp: first.timestamp }));
-              }
-            }
-
-            // The generation starts here; only recorded switches move it, so the live focus never
-            // reinterprets messages that were already rendered.
-            const startFocus = checkpoint === undefined ? this.profile.initialFocus : checkpoint.data.frameFocus;
-
-            // The slot sits between the frame and the workspace: re-derived on every step, never stored and never
-            // folded. The clock is the one thing the projection reads from outside the stream, quantized to a
-            // daypart so its bytes move at most four times a day. Pinned to the entry that opened the segment.
-            const anchor = checkpoint ?? workspace[0];
-            if (anchor !== undefined) {
-              const now = new Date();
-              const hour = now.getHours();
-              const daypart = hour < 6 ? "凌晨" : hour < 12 ? "上午" : hour < 18 ? "下午" : "晚上";
-              const slot = ["<state>", `当前时间:${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${daypart}`, "</state>"].join("\n");
-              out.push(
-                createEntry("message", createUserMessage(slot), { id: `slot:${anchor.id}`, timestamp: workspace.at(-1)?.timestamp ?? anchor.timestamp }),
-              );
-            }
-
-            // Lines from the open window are bare, so the first one after anything else opens with a header.
-            let inWindow = false;
-            for (const record of classify(this.profile, workspace, startFocus)) {
-              if (record.kind === "switch") {
-                // The head declares the new scene, so the bare lines under it need no second header.
-                const reason =
-                  record.reason === undefined || record.reason.length === 0 ? "" : ` reason="${record.reason.replaceAll('"', "'").replaceAll("\n", " ")}"`;
-                const head = `<focus from="${sceneKey(record.previous)}" to="${sceneKey(record.next)}"${reason}>`;
-                out.push(createEntry("message", createUserMessage(head), { id: record.entry.id, timestamp: record.entry.timestamp }));
-                inWindow = true;
-                continue;
-              }
-              // Assistant and tool entries pass through untouched: the mind's own behavior is a real message here.
-              if (record.kind === "trace") {
-                out.push(record.entry);
-                inWindow = false;
-                continue;
-              }
-              // What the mind said is marked by the tool call that sent it, so its own message is projected into
-              // a frame and never read back here as somebody else's line in the workspace.
-              if (record.entry.data.role !== "custom" || record.entry.data.type === "ishiki.self.message") continue;
-              // Non-focus facts are compact notifications: enough to know who said what where, not full context.
-              if (!record.focus) {
-                const text = `<notification sid="${record.scene.sid}" channel="${record.scene.channelId}">${record.line}</notification>`;
-                out.push(createEntry("message", createUserMessage(text), { id: record.entry.data.id, timestamp: record.entry.data.timestamp }));
-                inWindow = false;
-                continue;
-              }
-              // Focus fact: bare line, with a header on the first one after non-focus content.
-              const text = !inWindow ? `<focus sid="${record.scene.sid}" channel="${record.scene.channelId}">\n${record.line}` : record.line;
-              inWindow = true;
-              out.push(createEntry("message", createUserMessage(text), { id: record.entry.data.id, timestamp: record.entry.data.timestamp }));
-            }
-            return out;
-          },
+          /** The whole projection lives in `ContextEngine`; this hook is only where it attaches. */
+          transformEntries: (entries) => this.context.project(entries),
           onStepFinish: async (info) => {
             // The messages that actually left land as ordinary facts of their scene, under their own type: the
             // frame and `peek_channel` read them back like anybody else's line, while the live projection, which
@@ -246,19 +160,15 @@ export class ProfileRuntime {
 
             // A switch is the generation change itself, and a step boundary is the earliest moment it can
             // happen: the step's assistant and tool entries are written, so the new frame never splits a call
-            // from its result. A failed checkpoint leaves a minimal change entry as the fuse instead.
+            // from its result. The move is atomic — a checkpoint that will not write leaves the mind behind.
             const pending = this.pendingFocus;
             if (pending !== null) {
+              this.currentFocus = { ...pending.next };
               if (await this.rebuild("switch")) {
                 this.pendingFocus = null;
               } else {
-                try {
-                  await this.agent.storage.append(createEntry("ishiki.focus.changed", pending, { turnId: info.turnId }));
-                  this.pendingFocus = null;
-                  this.logger.warn("换代的 checkpoint 未写入，已落 change 条目作为保险丝。");
-                } catch (error) {
-                  this.logger.warn(`change 条目也写入失败，保留待下一次 step 边界重试：${String(error)}`);
-                }
+                this.currentFocus = { ...pending.previous };
+                this.logger.warn("换代的 checkpoint 未写入，本次切换不生效。");
               }
             }
 
@@ -327,8 +237,7 @@ export class ProfileRuntime {
   }
 
   /**
-   * The tools close over this runtime: the focus they read is the live one, so a switch made mid-step
-   * already applies to the rest of that step.
+   * The tools close over this runtime: the focus they read is the live one, which a staged switch has not moved.
    */
   private buildTools(): ToolSet {
     const requestStop = () => {
@@ -359,12 +268,12 @@ export class ProfileRuntime {
     if (!this.singleScene && this.profile.allowChangeFocus) {
       tools.switch_focus = createSwitchFocus({
         profile: this.profile,
-        currentFocus: () => this.currentFocus,
-        // The pending record waits for the step boundary; the live focus moves now, so the rest of the step
-        // addresses the new scene.
+        // A staged switch has not moved the mind, so this tool reads where the mind believes it stands: a second
+        // switch in the same step reads the first one's target and the hop back is a real move. Every other tool
+        // reads the live focus.
+        currentFocus: () => this.pendingFocus?.next ?? this.currentFocus,
         applySwitch: (previous, next, reason) => {
           this.pendingFocus = { previous, next, ...(reason === undefined ? {} : { reason }) };
-          this.currentFocus = next;
         },
       });
     }
@@ -374,7 +283,7 @@ export class ProfileRuntime {
       tools.peek_channel = createPeekChannel({
         profile: this.profile,
         currentFocus: () => this.currentFocus,
-        readEntries: () => this.agent.storage.read(),
+        lines: async (scene) => this.context.lines(await this.agent.storage.read(), scene).map((read) => read.line),
       });
     }
 
@@ -413,16 +322,27 @@ export class ProfileRuntime {
 
       // this.logger.debug(`--- Session ---\n${JSON.stringify(session, null, 2)}`);
 
-      let result: HandlerResult | undefined;
-      for (const handler of sessionHandlers) {
-        result = handler(session, this.profile);
-        if (result) break;
-      }
-      if (!result) return;
-      const turnId = this.agent.send(result.message, { trigger: result.trigger, ifBusy: "join" });
+      const event = this.sessionHandler.handle(session);
+      if (event === undefined) return;
+
+      // Where it stands decides whether it can wake the mind; where it cannot, it may be retold as one that can.
+      const trigger = this.weakup.handleEvent(event);
+      const retellings = trigger ? [] : this.weakup.escalate(event);
+
+      const turnId = this.agent.send(event, { trigger, ifBusy: "join" });
       if (turnId) {
         this.logger.info(`Message sent to agent for profile ${this.profile.id} with turn ID ${turnId}.`);
         void (await this.agent.wait());
+      }
+
+      for (const notification of retellings) {
+        // The engine has the last word even over a retelling it produced itself.
+        if (!this.weakup.handleEvent(notification)) continue;
+        const retold = this.agent.send(notification, { trigger: true, ifBusy: "join" });
+        if (retold) {
+          this.logger.info(`Notification sent to agent for profile ${this.profile.id} with turn ID ${retold}.`);
+          void (await this.agent.wait());
+        }
       }
     });
   }
@@ -437,12 +357,8 @@ export class ProfileRuntime {
     if (entries.length > 0) return;
 
     const frameFocus = { ...this.profile.initialFocus };
-    const text = [
-      `<frame at="${formatClock(Date.now())}" focus_sid="${frameFocus.sid}" focus_channel="${frameFocus.channelId}">`,
-      "（在此之前没有发生过任何事。）",
-      "</frame>",
-    ].join("\n");
-    const record: IshikiEntry.Checkpoint = { frameFocus, text, createdAt: Date.now() };
+    const text = this.context.openingFrame(frameFocus);
+    const record: IshikiCheckpointEntry = { frameFocus, text, createdAt: Date.now() };
 
     try {
       await this.storage.append(createEntry("ishiki.checkpoint", record));
@@ -453,9 +369,9 @@ export class ProfileRuntime {
   }
 
   /**
-   * The live focus is the switch recorded after the last checkpoint; only a profile without any checkpoint
-   * falls back to the configured `initialFocus`. The frame needs no restoring — it lives in the checkpoint
-   * payload and the projection reads it from the entry stream.
+   * The live focus is the scene the last checkpoint says this generation is in; only a profile without any
+   * checkpoint falls back to the configured `initialFocus`. The frame needs no restoring — it lives in the
+   * checkpoint payload and the projection reads it from the entry stream.
    */
   private async restoreContext(): Promise<void> {
     const entries = await this.storage.read();
@@ -465,10 +381,8 @@ export class ProfileRuntime {
       return;
     }
 
-    const after = entries.slice(entries.indexOf(checkpoint) + 1);
-    const lastSwitch = findLastEntry(after, "ishiki.focus.changed");
-    this.currentFocus = lastSwitch === undefined ? { ...checkpoint.data.frameFocus } : { ...lastSwitch.data.next };
-    this.generationDirty = after.length > 0;
+    this.currentFocus = { ...checkpoint.data.frameFocus };
+    this.generationDirty = entries.length > entries.indexOf(checkpoint) + 1;
   }
 
   /** The workspace budget: an explicit token limit, else half of the window the model declares. */
@@ -484,70 +398,10 @@ export class ProfileRuntime {
   }
 
   /**
-   * Renders the frame text: every admitted scene gets a rolling window of recent facts pulled from the full
-   * storage stream. No distinction between "worked in" and "only heard from" — all scenes use the same rule.
-   *
-   * Scene admission: focus always enters; any scene whose facts appeared in this generation's workspace also enters.
-   */
-  private renderFrame(frameFocus: Focus, entries: readonly AgentEntry[], workspace: readonly AgentEntry[]): string {
-    const now = Date.now();
-    const here = sceneKey(frameFocus);
-    const { historyEntries, sceneWindowMs } = this.profile.context;
-
-    // Discover every scene that appeared in this generation (for non-focus admission).
-    const scenes = new Map<string, Focus>();
-    scenes.set(here, frameFocus);
-    for (const entry of workspace) {
-      if (entry.type !== "message") continue;
-      const message = entry.data;
-      if (message.role !== "custom") continue;
-      const desc = eventRenders[message.type];
-      if (desc) {
-        const scene = desc.scene(message.data);
-        const key = sceneKey(scene);
-        if (!scenes.has(key)) scenes.set(key, scene);
-      }
-    }
-
-    // Build one segment per scene, all from storage with the same tail + time-window rule.
-    const segments: Array<{ scene: Focus; lines: string[]; dropped: number; latest: number }> = [];
-    for (const [key, scene] of scenes) {
-      const fresh = collectLines(entries, scene).filter((rl) => now - rl.timestamp <= sceneWindowMs);
-      const kept = fresh.slice(-historyEntries);
-      const lines = kept.map((rl) => rl.line);
-      const dropped = Math.max(0, fresh.length - historyEntries);
-      const latest = kept.at(-1)?.timestamp ?? 0;
-      if (lines.length === 0 && key !== here) continue;
-      segments.push({ scene, lines, dropped, latest });
-    }
-
-    const parts = [`<frame ${renderFrameHead(frameFocus, formatClock(now))}>`];
-
-    // Focus segment first (always present, even if empty).
-    const focus = segments.find((s) => sceneKey(s.scene) === here);
-    parts.push(`<history sid="${frameFocus.sid}" channel="${frameFocus.channelId}" focus>`);
-    if (focus && focus.dropped > 0) parts.push(`<!-- 更早 ${focus.dropped} 条已折叠 -->`);
-    parts.push(...(focus?.lines ?? []));
-    parts.push("</history>");
-
-    // Other scenes sorted by recency.
-    const rest = segments.filter((s) => sceneKey(s.scene) !== here).sort((a, b) => b.latest - a.latest);
-    for (const segment of rest) {
-      parts.push(`<history sid="${segment.scene.sid}" channel="${segment.scene.channelId}">`);
-      if (segment.dropped > 0) parts.push(`<!-- 更早 ${segment.dropped} 条已折叠 -->`);
-      parts.push(...segment.lines);
-      parts.push("</history>");
-    }
-
-    parts.push("</frame>");
-    return parts.join("\n");
-  }
-
-  /**
    * The only materialized write. A failure leaves the generation untouched so the next trigger retries it.
    * A switch forces the write — a switch *is* the generation change — and the new frame then carries the ended
-   * generation's trajectory, because it is built from the previous checkpoint's focus. The result lets the
-   * switch path fall back to its fuse.
+   * generation's trajectory, because it is built from the previous checkpoint's focus. Its success is what makes
+   * a switch atomic: until the write lands, the mind keeps the position it started the step in.
    */
   private async rebuild(reason: string): Promise<boolean> {
     const entries = await this.storage.read();
@@ -562,8 +416,8 @@ export class ProfileRuntime {
     if (reason !== "switch" && reason !== "idle" && !this.overBudget(workspace)) return false;
 
     const frameFocus = { ...this.currentFocus };
-    const text = this.renderFrame(frameFocus, entries, workspace);
-    const record: IshikiEntry.Checkpoint = {
+    const text = this.context.renderFrame(frameFocus, entries, workspace);
+    const record: IshikiCheckpointEntry = {
       frameFocus,
       text,
       createdAt: Date.now(),
