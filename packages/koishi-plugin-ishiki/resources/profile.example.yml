@@ -1,0 +1,52 @@
+# Profile 示例：一份人设 = 一个通信域。
+# 放在 <dataPath>/profiles/<目录名>/profile.yml（或 .yaml）；目录名即 id 的缺省值。
+id: neko # 可选，缺省为所在目录名
+description: 示例人设 # 仅用于显示
+
+presets:
+  # Preset 是可复用的运行模式；Scene 引用它，铺平后就是那个 Scene 的运行参数。
+  chat:
+    description: 日常聊天
+    model: openai:gpt-5.6-luna # provider:model，或 gateway 里定义的组名
+    context:
+      # 上下文引擎：standard 线性增长，到上限后把最旧的一段压成摘要
+      engine: standard
+      standard:
+        maxChars: 32000 # 单轮模型输入的字符上限
+        refillRatio: 0.8 # 压缩后压到上限的多少，留出余量
+    wakeup:
+      # 唤醒引擎：standard 按下面几条判定一条消息要不要理
+      engine: standard
+      standard:
+        direct: true # 私聊必醒
+        atSelf: true # 被 @ 必醒
+        quoteSelf: true # 被引用回复必醒
+        keywords: [neko, 喵酱] # 提到这些词也醒
+    # 发消息前等多久，模拟打字
+    typing:
+      baseDelay: 500
+      charPerSecond: 5
+      minDelay: 800
+      maxDelay: 4000
+
+scenes:
+  # 一个 Scene 绑定一个账号，认领该账号名下一组频道（工厂）；
+  # 每个匹配到的频道各起一个独立的意识实例，历史互不相通。
+  groups:
+    description: 群聊
+    preset: chat
+    sid: onebot:10000 # 必填：该 Scene 绑定的账号
+    whitelist:
+      - "group:*" # `*` 全部，尾随 `*` 按前缀，其余精确匹配
+      - "123456789"
+    blacklist:
+      - "987654321" # 排除的频道，写法同 whitelist
+    # 也可在 Scene 上局部覆写 preset
+    typing:
+      charPerSecond: 8
+  dms:
+    description: 私聊
+    preset: chat
+    sid: onebot:10000
+    whitelist:
+      - "private:*"

@@ -1,24 +1,21 @@
 import { jsonSchema, tool, Tool } from "@yesimagent/core";
 import { Context, h, Logger, sleep } from "koishi";
 
-import { Focus, Profile, resolveFocus } from "../profiles.js";
-import type { IshikiEvent, IshikiMessageCreated } from "../types.js";
+import type { TypingConfig } from "../profile.js";
 
 export namespace SendMessageTool {
   export interface Options {
     ctx: Context;
-    profile: Profile;
     logger: Logger;
-    /** The live focus, read at call time: a switch made mid-step already applies to the rest of that step. */
-    currentFocus: () => Focus;
-    /** A message that actually left is the mind's own fact; the runtime records it at the step boundary. */
-    onSent: (sent: IshikiMessageCreated) => void;
-    /** `continue` was falsy: this send ends the turn unless a non-trivial tool ran in the same step. */
-    onSendEndsTurn: () => void;
+    /** 该实例发言所在的账号与频道；工具只发到这里，没有目标参数。 */
+    sid: string;
+    channelId: string;
+    /** 每条消息发出前等待多久，模拟打字节奏。 */
+    typing: TypingConfig;
+    /** `continue` 未置真时请求结束本轮；是否真的结束由容器的步边界决定。 */
+    onEndTurn: () => void;
   }
   export interface Input {
-    sid?: string;
-    channel?: string;
     messages: string[];
     mode?: "element" | "raw";
     continue?: boolean;
@@ -29,15 +26,13 @@ export namespace SendMessageTool {
 export function createSendMessage(options: SendMessageTool.Options): Tool<SendMessageTool.Input, SendMessageTool.Output> {
   return tool({
     description: [
-      "向指定频道发送消息。这是消息到达平台的唯一途径——只有本工具发出的内容会被别人看到。",
-      "省略 sid 和 channel 就发到当前窗口，也可以显式发往其他允许的场景。一轮里可以多次调用。",
-      "返回 {ok: true, count} 或 {ok: false, error, sent, failedAt}：sent 是已经成功发出的消息 ID，failedAt 是出错的 messages 下标；发送遇错会立即停止，failedAt 及其之后的消息都没有发出。必须检查 ok，不要假设发送成功。",
+      "在当前场景里发言。这是消息到达平台的唯一途径——只有本工具发出的内容会被别人看到。",
+      "说给别的场景听要用 dispatch_stimulus：本工具只发到当前频道，没有目标参数。",
+      "一轮里可以多次调用。返回 {ok: true, count} 或 {ok: false, error, sent, failedAt}：sent 是已经成功发出的消息 ID，failedAt 是出错的 messages 下标；发送遇错会立即停止，failedAt 及其之后的消息都没有发出。必须检查 ok，不要假设发送成功。",
     ].join("\n"),
     inputSchema: jsonSchema<SendMessageTool.Input>({
       type: "object",
       properties: {
-        sid: { type: "string", description: "账号 sid（platform:selfId）。只有要用另一个账号发送时才写；省略即 focus 所在的账号。" },
-        channel: { type: "string", minLength: 1, description: "目标频道 ID。省略即 focus 的频道；填写其他频道 ID 可以发往该频道。" },
         messages: {
           type: "array",
           minItems: 1,
@@ -60,86 +55,67 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
       required: ["messages"],
     }),
     execute: async (input) => {
-      const target = resolveFocus(options.profile, options.currentFocus(), input);
-      if ("error" in target) return { ok: false as const, error: target.error, sent: [], failedAt: 0 };
-
       const messages = input.messages;
       if (!Array.isArray(messages) || messages.length === 0 || messages.some((message) => typeof message !== "string" || message.length === 0)) {
         return { ok: false as const, error: { name: "InvalidInput", message: "messages 必须是非空字符串数组" }, sent: [], failedAt: 0 };
       }
-      const bot = options.ctx.bots[target.sid];
-      if (!bot) return { ok: false as const, error: { name: "BotNotFound", message: `Bot with sid ${target.sid} not found` }, sent: [], failedAt: 0 };
 
-      const platform = bot.platform!;
+      const { sid, channelId } = options;
+      const bot = options.ctx.bots[sid];
+      if (bot === undefined) {
+        return { ok: false as const, error: { name: "BotNotFound", message: `account "${sid}" is not connected` }, sent: [], failedAt: 0 };
+      }
+
       const sent: string[] = [];
-
       for (let index = 0; index < messages.length; index += 1) {
         try {
+          // raw 模式走转义：写下的每个字符原样到达接收方，不需要用户自己处理元素语法。
           const content = input.mode === "raw" ? h.escape(messages[index]) : messages[index];
 
-          // Human-like typing delay: computed from the message text, applied before sending.
-          const delay = calculateTypingDelay(content, options);
+          // 人不是瞬间打完字的：按可见文本估算等待时间，在发送之前等掉。
+          const delay = calculateTypingDelay(content, options.typing);
           if (delay > 0) await sleep(delay);
 
-          const ids = await bot.sendMessage(target.channelId, content);
+          const ids = await bot.sendMessage(channelId, content);
           sent.push(...ids);
-          if (ids.length === 0) {
-            options.logger.warn(`平台没有返回消息 id，这条自消息不进记录：${target.sid}/${target.channelId}`);
-          } else {
-            options.onSent({
-              platform,
-              sid: target.sid,
-              channelId: target.channelId,
-              content: content,
-              messageId: ids[0],
-              timestamp: Date.now(),
-              selfId: bot.selfId,
-              user: { id: bot.selfId, name: bot.user?.name ?? options.profile.name },
-            });
-          }
+          if (ids.length === 0) options.logger.warn(`[${sid}/${channelId}] platform returned no message id`);
         } catch (error) {
-          // A platform failure carries a name worth keeping: `BotNotFound` tells the model to fix the address.
+          // 平台失败带着名字（如 BotNotFound）时保留它：模型据此才知道该改地址还是重试。
           const failure = error instanceof Error ? { name: error.name, message: error.message } : { name: "Error", message: String(error) };
           return { ok: false as const, sent, failedAt: index, error: failure };
         }
       }
 
-      if (input.continue !== true) options.onSendEndsTurn();
+      if (input.continue !== true) options.onEndTurn();
       return { ok: true as const, count: sent.length };
     },
   });
 }
 
 /**
- * Computes a human-like typing delay for `text`, based on character count with separate CJK / latin rates,
- * randomized around the configured `charPerSecond`, clamped to `[minDelay, maxDelay]`.
+ * 按可见字符数估算一条消息的打字延迟：CJK 与拉丁字符分别按 `charPerSecond` 与 1.5 倍速计，
+ * 乘一个随机系数后夹在 `[minDelay, maxDelay]`，再加上 `baseDelay`。
  */
-function calculateTypingDelay(content: string, options: SendMessageTool.Options): number {
-  const { baseDelay, charPerSecond, minDelay, maxDelay } = options.profile.typing;
+function calculateTypingDelay(content: string, typing: TypingConfig): number {
+  const { baseDelay, charPerSecond, minDelay, maxDelay } = typing;
   if (charPerSecond <= 0) return minDelay;
 
-  // Strip markup so only visible text contributes to the delay.
+  // 只算看得见的文字：元素语法不占打字时间。
   const plain = h
     .parse(content)
-    .filter((e) => e.type === "text")
-    .map((e) => e.attrs?.content ?? String(e))
+    .filter((element) => element.type === "text")
+    .map((element) => element.attrs?.content ?? String(element))
     .join("");
   if (plain.length === 0) return minDelay;
 
-  const cjkRegex = /[\u4e00-\u9fa5]/g;
-  const cjkCount = (plain.match(cjkRegex) ?? []).length;
-  const latinCount = plain.length - cjkCount;
+  const cjk = (plain.match(/[\u4e00-\u9fa5]/g) ?? []).length;
+  const latin = plain.length - cjk;
 
-  // CJK input (pinyin) is slower; latin characters are ~1.5× faster.
-  const cjkDelay = (cjkCount / charPerSecond) * 1000;
-  const latinDelay = (latinCount / (charPerSecond * 1.5)) * 1000;
+  // 拼音输入比拉丁输入慢，所以拉丁按 1.5 倍速折算时间。
+  const typed = (cjk / charPerSecond + latin / (charPerSecond * 1.5)) * 1000;
 
-  // Per-character randomness weighted by character type composition.
-  const cjkRandomFactor = 0.5;
-  const latinRandomFactor = 0.3;
-  const totalRandomness = plain.length > 0 ? (cjkCount * cjkRandomFactor + latinCount * latinRandomFactor) / plain.length : 0;
-  const randomFactor = 1 + (Math.random() - 0.5) * 2 * totalRandomness;
-
-  const computed = baseDelay + (cjkDelay + latinDelay) * randomFactor;
-  return Math.max(minDelay, Math.min(computed, maxDelay));
+  // 随机波动按字符构成加权：CJK 更不稳定，拉丁更稳定。
+  const spread = (cjk * 0.5 + latin * 0.3) / plain.length;
+  const delay = baseDelay + typed * (1 + (Math.random() - 0.5) * 2 * spread);
+  return Math.max(minDelay, Math.min(delay, maxDelay));
 }

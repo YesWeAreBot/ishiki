@@ -1,38 +1,33 @@
 import { createCustomMessage } from "@yesimagent/core";
 import type { Session } from "koishi";
 
-import type { Profile } from "./profiles.js";
 import type { IshikiEvent } from "./types.js";
 
-/** One event type's normalization rule: a session it claims becomes that fact, anything else yields nothing. */
-export type SessionHandlerRule = (session: Session) => IshikiEvent | undefined;
+export interface SessionHandler {
+  handle(session: Session): IshikiEvent | undefined;
+}
 
-/**
- * The profile's ingress: Koishi sessions become the facts of its stream. Ordered rules, first match wins.
- * Nothing here judges the fact — whether it wakes the mind is `WeakUpEngine`'s question, not this one's.
- */
-export class SessionHandler {
-  constructor(private readonly profile: Profile) {}
+export class StandardHandler implements SessionHandler {
+  readonly platform = "*";
+  readonly priority = 1000;
 
-  private readonly rules: SessionHandlerRule[] = [
+  handle(session: Session): IshikiEvent | undefined {
     // message-created
-    (session) => {
-      if (session.type !== "message-created") return undefined;
-      const authorName = session.author?.name;
+    if (session.type === "message-created") {
+      const authorName = session.author?.nick ?? session.author?.name ?? session.userId;
       return createCustomMessage("ishiki.message.created", {
-        content: session.content!,
-        user: { id: session.userId!, ...(authorName === undefined ? {} : { name: authorName }) },
-        sid: session.sid,
-        channelId: session.channelId!,
-        direct: session.isDirect,
-        guildId: session.guildId,
-        messageId: session.messageId!,
         timestamp: session.timestamp,
         platform: session.platform,
+        channelId: session.channelId!,
         selfId: session.selfId,
+        isDirect: session.isDirect === true,
+        guildId: session.guildId,
+        messageId: session.messageId!,
+        content: session.content!,
+        user: { id: session.userId!, name: authorName },
         quote: session.quote
           ? {
-              id: session.quote.id!,
+              id: session.quote.messageId!,
               content: session.quote.content,
               user: session.quote.user,
               channel: session.quote.channel,
@@ -40,29 +35,21 @@ export class SessionHandler {
             }
           : undefined,
       });
-    },
+    }
 
     // message-deleted
-    (session) => {
-      if (session.type !== "message-deleted") return undefined;
+    if (session.type === "message-deleted") {
       if (!session.messageId || !session.channelId) return undefined;
       return createCustomMessage("ishiki.message.deleted", {
-        messageId: session.messageId,
-        sid: session.sid,
-        channelId: session.channelId,
-        operatorId: session.userId,
         timestamp: session.timestamp,
         platform: session.platform,
+        channelId: session.channelId,
         selfId: session.selfId,
+        messageId: session.messageId,
+        operatorId: session.operatorId,
       });
-    },
-  ];
-
-  handle(session: Session): IshikiEvent | undefined {
-    for (const rule of this.rules) {
-      const event = rule(session);
-      if (event !== undefined) return event;
     }
+
     return undefined;
   }
 }

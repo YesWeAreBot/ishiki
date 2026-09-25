@@ -1,464 +1,503 @@
-import { existsSync, promises as fs, mkdirSync } from "fs";
-import path from "path";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 
 import { Template } from "@huggingface/jinja";
 import {
-  Agent,
-  AgentEntry,
-  AgentEvent,
-  AgentPlugin,
-  AgentStorage,
   createAgent,
   createCustomMessage,
-  createEntry,
   createJsonlStorage,
-  ToolSet,
+  type Agent,
+  type AgentEvent,
+  type AgentPlugin,
+  type AgentStorage,
+  type LanguageModel,
+  type LanguageModelUsage,
+  type StepFinishDecision,
+  type StepFinishInfo,
+  type ToolSet,
 } from "@yesimagent/core";
-import { Gateway } from "@yesimagent/gateway";
-import { Context, Logger, Session } from "koishi";
+import type { Gateway } from "@yesimagent/gateway";
+import type { Context, Logger } from "koishi";
+import { parse } from "yaml";
 
-import { ContextEngine, findLastEntry, sliceWorkspace } from "./context-engine.js";
-import { Focus, isChannelAllowed, Profile } from "./profiles.js";
-import { SessionHandler } from "./session-handler.js";
-import { createFinish, createPeekChannel, createReportToolIssue, createSendMessage, createSwitchFocus, createThink } from "./tools/index.js";
-import type { IshikiCheckpointEntry, IshikiMessageCreated } from "./types.js";
-import { WeakUpEngine } from "./weakup-engine.js";
+import { renderLine, StandardContextEngine } from "./context-engine.js";
+import { matchSceneSpec, ProfileConfig, resolveProfile, sceneDirectoryName, type SceneSpec } from "./profile.js";
+import { createDispatchStimulus } from "./tools/dispatch-stimulus.js";
+import { createFinish } from "./tools/finish.js";
+import { createPeekChannelHistory } from "./tools/peek-channel-history.js";
+import { createReportToolIssue } from "./tools/report-tool-issue.js";
+import { createSendMessage } from "./tools/send-message.js";
+import { createThink } from "./tools/think.js";
+import type { IshikiEvent, IshikiInnerStimulus } from "./types.js";
+import { StandardWakeupEngine, type WakeupEngine } from "./wakeup-engine.js";
 
-/** Resolve a path relative to the package root's resources/ directory. Works in both ESM and CJS builds. */
-function resourcePath(...segments: string[]): string {
-  // In ESM import.meta.url is a file URL; in CJS (esbuild) import.meta is empty but __dirname is a global.
-  let srcDir: string;
-  if (import.meta.url) {
-    srcDir = path.dirname(new URL(import.meta.url).pathname);
-    // On Windows, URL pathname starts with /C:/... — strip the leading slash.
-    if (process.platform === "win32" && srcDir.startsWith("/")) srcDir = srcDir.slice(1);
-  } else {
-    // eslint-disable-next-line no-restricted-globals -- CJS global, not available in ESM type definitions
-    srcDir = __dirname;
-  }
-  return path.resolve(srcDir, "..", "resources", ...segments);
+/** 实例键，同时是目录名的来源：sid 与 channelId 一并编码，避免不同账号下的同名频道冲突。 */
+function channelKey(sid: string, channelId: string): string {
+  return `${sid}/${channelId}`;
 }
 
-/** Used when the model declares no window: the workspace budget is half of it, this is the floor. */
-const DEFAULT_WORKSPACE_TOKEN_LIMIT = 8192;
-const IDLE_CHECK_INTERVAL_MS = 60_000;
+/** 包内 resources/ 下的路径；ESM 与 CJS 构建都能用（CJS 下 import.meta 为空，靠 __dirname）。 */
+function resourcePath(...segments: string[]): string {
+  let here: string;
+  if (import.meta.url) {
+    here = path.dirname(new URL(import.meta.url).pathname);
+    // Windows 下 URL 的 pathname 以 /C:/… 开头，去掉这个多余的斜杠。
+    if (process.platform === "win32" && here.startsWith("/")) here = here.slice(1);
+  } else {
+    // eslint-disable-next-line no-restricted-globals -- CJS 全局，ESM 类型定义里没有
+    here = __dirname;
+  }
+  return path.resolve(here, "..", "resources", ...segments);
+}
 
-export class ProfileRuntime {
-  private readonly ctx: Context;
+/** 只表达「说完了」、不构成实义动作的工具名；其余工具都算这一轮的实义动作。 */
+const SPEAKING_TOOLS = new Set(["send_message", "think"]);
+
+/**
+ * 一轮的收尾控制：工具只置标志，收尾在步边界决定。
+ * `finish` 直接请求结束；`send_message` 的请求要等本步没有别的实义工具才生效，
+ * 免得同一批调用里的失败被静默地当成「说完了」。
+ */
+class TurnControl implements AgentPlugin {
+  readonly name = "ishiki.turn-control";
+
+  private stopRequested = false;
+  private sendRequested = false;
+
+  requestStop(): void {
+    this.stopRequested = true;
+  }
+
+  requestSendStop(): void {
+    this.sendRequested = true;
+  }
+
+  /** core 会摘取这些 hook 单独调用，因此必须绑定在实例上（箭头属性）。 */
+  onStepFinish = (info: StepFinishInfo): StepFinishDecision | undefined => {
+    const blocking = info.result.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === "tool-call" && !SPEAKING_TOOLS.has(part.toolName)),
+    );
+    const stop = this.stopRequested || (this.sendRequested && !blocking);
+    this.stopRequested = false;
+    this.sendRequested = false;
+    return stop ? { continue: false } : undefined;
+  };
+
+  onTurnFinish = (): void => {
+    this.stopRequested = false;
+    this.sendRequested = false;
+  };
+}
+
+/** 一个频道实例的完整运行配置：身份、地址、目录，以及已就绪的构造件。 */
+export interface SceneRuntimeConfig {
+  /** 实例标识，用于日志与 agent id。 */
+  label: string;
+  /** 该频道所属账号；跨频道投递的默认目标。 */
+  sid: string;
+  channelId: string;
+  /** 该账号的平台身份。 */
+  address: { platform: string; selfId: string };
+  /** 该频道的独立目录，存放 `events.jsonl` 及后续的附件。 */
+  directory: string;
+  model: LanguageModel;
+  instructions: string;
+  /** 该实例要装的插件：上下文引擎、收尾控制等，由容器装配。 */
+  plugins: readonly AgentPlugin[];
+  /** 该实例可用的工具集，由容器按 spec 与该频道装配。 */
+  tools: ToolSet;
+  /** 按 spec 共享。 */
+  wakeup: WakeupEngine;
+  logger: Logger;
+}
+
+/** 一次工具调用的键：优先用 provider 给的 id，缺了就用轮次加名字兜底。 */
+function toolCallKey(event: { turnId: string; toolName: string; toolCallId?: string }): string {
+  return event.toolCallId ?? `${event.turnId}:${event.toolName}`;
+}
+
+/** 距离起点过了多少毫秒；起点缺席（没见到对应的 start 事件）时不报数。 */
+function formatElapsed(startedAt: number | undefined): string {
+  return startedAt === undefined ? "elapsed=?" : `elapsed=${Date.now() - startedAt}ms`;
+}
+
+/** 一步的用量。provider 少给字段就少报字段，不拿 0 冒充。 */
+function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
+  if (usage === undefined) return "usage=?";
+  const parts = [`in=${usage.inputTokens ?? "?"}`, `out=${usage.outputTokens ?? "?"}`, `total=${usage.totalTokens ?? "?"}`];
+  const cached = usage.inputTokenDetails?.cacheReadTokens;
+  if (cached !== undefined) parts.push(`cached=${cached}`);
+  const reasoning = usage.outputTokenDetails?.reasoningTokens;
+  if (reasoning !== undefined) parts.push(`reasoning=${reasoning}`);
+  return `usage(${parts.join(" ")})`;
+}
+
+/** 一 Scene = 一 Channel = 一 Agent。 */
+export class SceneRuntime {
+  /** 实例标识，用于日志与 agent id。 */
+  readonly label: string;
+  /** 该频道所属账号。 */
+  readonly sid: string;
+  readonly channelId: string;
+  /** 该账号的平台身份；sid 始终不解析。 */
+  readonly address: { platform: string; selfId: string };
+  readonly directory: string;
+  readonly storage: AgentStorage;
+
   private readonly logger: Logger;
+  private readonly wakeup: WakeupEngine;
+  private readonly agent: Agent;
+  /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
+  private readonly toolStartedAt = new Map<string, number>();
+  private readonly stepStartedAt = new Map<string, number>();
 
-  private readonly profile: Profile;
-  private readonly gateway: Gateway;
-  private readonly profileDataPath: string;
-  /** Whether this profile has multiple scenes (bodies × channels > 1). */
-  private readonly singleScene: boolean;
-  /** The profile's ingress: sessions become the facts of its stream. */
-  private readonly sessionHandler: SessionHandler;
-  /** The single yes-or-no behind every wake: does this event start a turn? */
-  private readonly weakup: WeakUpEngine;
-  /** The projection: every part of the model context that is not a prompt part. */
-  private readonly context: ContextEngine;
+  constructor(config: SceneRuntimeConfig) {
+    this.label = config.label;
+    this.sid = config.sid;
+    this.channelId = config.channelId;
+    this.address = config.address;
+    this.directory = config.directory;
+    this.logger = config.logger;
+    this.wakeup = config.wakeup;
 
-  private agent: Agent;
-  private storage: AgentStorage;
-
-  /**
-   * The scene this mind sits in. `switch_focus` only stages a move; the focus changes when the step boundary
-   * turns it into a generation, and a checkpoint that will not write leaves the mind where it was.
-   */
-  private currentFocus: Focus;
-  private pendingFocus: { previous: Focus; next: Focus; reason?: string } | null = null;
-  /** Messages a step actually sent; like a monologue, each lands as an ordinary fact at the step boundary. */
-  private pendingSelfMessages: IshikiMessageCreated[] = [];
-  /**
-   * Raised by `finish`. `onStepFinish` runs exactly once per step, so it consumes the flag and never lets
-   * it leak into the next step.
-   */
-  private stopRequestedThisStep = false;
-  /**
-   * Set by `send_message` when `continue` is falsy. The actual stop only fires in `onStepFinish` if no
-   * other non-trivial tool (anything besides `think`) ran in the same step — so a parallel switch_focus
-   * failure does not silently end the turn.
-   */
-  private sendWantsStop = false;
-
-  /**
-   * Prompt parts, frozen until `start()` reloads them. Assembly runs every turn, so without the freeze a
-   * source that re-reads or rebuilds would rewrite the model-visible prefix every turn.
-   */
-  private cachedInstructions: string | undefined;
-  private cachedTools: ToolSet | undefined;
-
-  /** Set by any appended entry; cleared by a successful rebuild and used to skip idle checks on a quiet mind. */
-  private generationDirty = false;
-  /** A trigger fired while a turn was running: run it at the turn boundary instead. */
-  private rebuildPending = false;
-  private rebuildChain: Promise<void> = Promise.resolve();
-  private idleTimer: NodeJS.Timeout | undefined;
-  /** Workspace budget in tokens: the profile's own value, else half the window the model declares. */
-  private workspaceTokenLimit = DEFAULT_WORKSPACE_TOKEN_LIMIT;
-
-  constructor(ctx: Context, options: { profile: Profile; gateway: Gateway; profilesFile: string; logLevel: number }) {
-    this.ctx = ctx;
-    this.profile = options.profile;
-    this.gateway = options.gateway;
-    this.logger = ctx.logger("ishiki-profile-runtime");
-    this.logger.level = options.logLevel;
-    this.profileDataPath = path.resolve(this.ctx.baseDir, path.dirname(options.profilesFile), this.profile.dataPath);
-    if (!existsSync(this.profileDataPath)) {
-      mkdirSync(this.profileDataPath, { recursive: true });
-    }
-    this.currentFocus = { ...this.profile.initialFocus };
-    this.storage = createJsonlStorage(path.resolve(this.profileDataPath, "messages.jsonl"));
-    // A single scene means exactly one body with exactly one non-wildcard channel.
-    const totalChannels = this.profile.allowedChannels.reduce((sum, d) => sum + d.channels.length, 0);
-    const hasWildcard = this.profile.allowedChannels.some((d) => d.channels.some((c) => c.includes("*")));
-    this.singleScene = totalChannels <= 1 && !hasWildcard;
-    this.sessionHandler = new SessionHandler(this.profile);
-    this.weakup = new WeakUpEngine({ ctx: this.ctx, profile: this.profile, currentFocus: () => this.currentFocus });
-    this.context = new ContextEngine({ profile: this.profile });
-
+    mkdirSync(this.directory, { recursive: true });
+    this.storage = createJsonlStorage(path.join(this.directory, "events.jsonl"));
     this.agent = createAgent({
-      id: this.profile.id,
-      model: this.gateway.languageModel(this.profile.model),
+      id: this.label,
+      model: config.model,
+      instructions: config.instructions,
       storage: this.storage,
-      plugins: [
-        {
-          name: "ishiki-prompt-cache",
-          extendInstructions: async () => {
-            await this.loadPromptParts();
-            return this.cachedInstructions;
-          },
-          extendTools: async () => {
-            await this.loadPromptParts();
-            return this.cachedTools;
-          },
-        } satisfies AgentPlugin,
-        {
-          name: "ishiki-agent-plugin",
-          onAppend: (entries) => {
-            this.generationDirty = true;
-            return entries;
-          },
-          /** The whole projection lives in `ContextEngine`; this hook is only where it attaches. */
-          transformEntries: (entries) => this.context.project(entries),
-          onStepFinish: async (info) => {
-            // The messages that actually left land as ordinary facts of their scene, under their own type: the
-            // frame and `peek_channel` read them back like anybody else's line, while the live projection, which
-            // only knows the platform's own facts, never sees them.
-            if (this.pendingSelfMessages.length > 0) {
-              const facts = this.pendingSelfMessages.map((sent) =>
-                createEntry("message", createCustomMessage("ishiki.self.message", sent), { turnId: info.turnId }),
-              );
-              try {
-                await this.agent.storage.append(...facts);
-                this.pendingSelfMessages = [];
-              } catch (error) {
-                this.logger.warn(`自消息写入失败，保留待下一次 step 边界重试：${String(error)}`);
-              }
-            }
-
-            // A switch is the generation change itself, and a step boundary is the earliest moment it can
-            // happen: the step's assistant and tool entries are written, so the new frame never splits a call
-            // from its result. The move is atomic — a checkpoint that will not write leaves the mind behind.
-            const pending = this.pendingFocus;
-            if (pending !== null) {
-              this.currentFocus = { ...pending.next };
-              if (await this.rebuild("switch")) {
-                this.pendingFocus = null;
-              } else {
-                this.currentFocus = { ...pending.previous };
-                this.logger.warn("换代的 checkpoint 未写入，本次切换不生效。");
-              }
-            }
-
-            // Consume the flag: this hook runs exactly once per step, so it never leaks into the next one.
-            // send_message's stop is deferred: it only fires when no other non-trivial tool ran in the
-            // same step, so a parallel switch_focus failure doesn't silently end the turn.
-            const hasBlockingTool = info.result.messages.some(
-              (m) =>
-                m.role === "assistant" &&
-                Array.isArray(m.content) &&
-                m.content.some((p) => p.type === "tool-call" && p.toolName !== "send_message" && p.toolName !== "think"),
-            );
-            const stop = this.stopRequestedThisStep || (this.sendWantsStop && !hasBlockingTool);
-            this.stopRequestedThisStep = false;
-            this.sendWantsStop = false;
-            return stop ? { continue: false } : undefined;
-          },
-          onTurnFinish: () => {
-            this.stopRequestedThisStep = false;
-            this.sendWantsStop = false;
-            if (this.generationDirty || this.rebuildPending) this.scheduleRebuild("turn-finish");
-          },
-        } satisfies AgentPlugin,
-      ],
+      plugins: config.plugins,
+      tools: config.tools,
     });
-  }
 
-  /** Loads what the two halves of the assembly need, once per `start()`. */
-  private async loadPromptParts(): Promise<void> {
-    if (this.cachedInstructions === undefined) {
-      const personaFile = path.resolve(this.profileDataPath, "persona.md");
-      const persona = existsSync(personaFile) ? (await fs.readFile(personaFile, "utf-8")).trim() : "";
-      this.cachedInstructions = [persona, await this.renderSystemPrompt()].filter((part) => part.length > 0).join("\n\n");
-    }
-    if (this.cachedTools === undefined) this.cachedTools = this.buildTools();
+    this.agent.channel.subscribe("agent", (event) => this.logEvent(event));
   }
 
   /**
-   * Renders the system prompt from the Jinja template, resolving the optional think.md overlay.
-   * All template variables are configuration-time constants, so the rendered result is byte-stable.
+   * agent 事件的日志面。`tool.done` 与 `turn.step` 是仅有的两个带数据的边界：
+   * 前者报本次工具调用的耗时，后者报这一步的用量、结束原因与耗时；其余事件只记类型。
+   * 步耗时自上一步结束（首个步自 turn.start）算起，含该步的模型流与其中的工具调用。
    */
-  private async renderSystemPrompt(): Promise<string> {
-    // Resolve think prompt: profile data dir overrides the bundled default.
-    let thinkPrompt = "";
-    if (this.profile.innerThought) {
-      const userThink = path.resolve(this.profileDataPath, "think.md");
-      const thinkSource = existsSync(userThink) ? userThink : resourcePath("templates", "think.md");
-      const thinkRaw = (await fs.readFile(thinkSource, "utf-8")).trim();
-      // The think template itself may use Jinja variables.
-      thinkPrompt = new Template(thinkRaw).render({
-        singleScene: this.singleScene,
-        allowChangeFocus: this.profile.allowChangeFocus,
-        bodies: this.profile.allowedChannels,
-        profileName: this.profile.name,
-      });
-    }
+  private logEvent(event: AgentEvent): void {
+    const tag = `[${this.label}]`;
 
-    const systemRaw = await fs.readFile(resourcePath("templates", "system.md.jinja"), "utf-8");
-    return new Template(systemRaw).render({
-      thinkPrompt,
-      singleScene: this.singleScene,
-      allowChangeFocus: this.profile.allowChangeFocus,
-      bodies: this.profile.allowedChannels,
-      profileName: this.profile.name,
-    });
-  }
-
-  /**
-   * The tools close over this runtime: the focus they read is the live one, which a staged switch has not moved.
-   */
-  private buildTools(): ToolSet {
-    const requestStop = () => {
-      this.stopRequestedThisStep = true;
-    };
-
-    const tools: ToolSet = {};
-
-    // -- think (optional) ---------------------------------------------------
-    if (this.profile.innerThought) tools.think = createThink({ logger: this.logger });
-
-    // -- send_message -------------------------------------------------------
-    tools.send_message = createSendMessage({
-      ctx: this.ctx,
-      profile: this.profile,
-      logger: this.logger,
-      currentFocus: () => this.currentFocus,
-      onSent: (sent) => this.pendingSelfMessages.push(sent),
-      onSendEndsTurn: () => {
-        this.sendWantsStop = true;
-      },
-    });
-
-    // -- finish -------------------------------------------------------------
-    tools.finish = createFinish({ onStop: requestStop });
-
-    // -- switch_focus (conditional) -----------------------------------------
-    if (!this.singleScene && this.profile.allowChangeFocus) {
-      tools.switch_focus = createSwitchFocus({
-        profile: this.profile,
-        // A staged switch has not moved the mind, so this tool reads where the mind believes it stands: a second
-        // switch in the same step reads the first one's target and the hop back is a real move. Every other tool
-        // reads the live focus.
-        currentFocus: () => this.pendingFocus?.next ?? this.currentFocus,
-        applySwitch: (previous, next, reason) => {
-          this.pendingFocus = { previous, next, ...(reason === undefined ? {} : { reason }) };
-        },
-      });
-    }
-
-    // -- peek_channel (conditional) -----------------------------------------
-    if (!this.singleScene) {
-      tools.peek_channel = createPeekChannel({
-        profile: this.profile,
-        currentFocus: () => this.currentFocus,
-        lines: async (scene) => this.context.lines(await this.agent.storage.read(), scene).map((read) => read.line),
-      });
-    }
-
-    // -- report_tool_issue --------------------------------------------------
-    tools.report_tool_issue = createReportToolIssue({ logPath: path.resolve(this.profileDataPath, "tool_issues.log") });
-
-    return tools;
-  }
-
-  async start() {
-    // Reloading eagerly surfaces a failing source here instead of inside a turn.
-    this.cachedInstructions = undefined;
-    this.cachedTools = undefined;
-    await this.loadPromptParts();
-    await this.openFrame();
-    await this.restoreContext();
-    this.resolveBudget();
-
-    // The tools close over this runtime, so the agent has to be reachable before the first prompt assembly.
-    await this.agent.init();
-
-    this.logger.info(`Agent for profile ${this.profile.id} initialized with model ${this.profile.model}.`);
-
-    this.agent.channel.subscribe("agent", (event: AgentEvent) => {
-      this.logger.debug(`--- Agent Event ---\n${JSON.stringify(event, null, 2)}`);
-    });
-
-    this.idleTimer = setInterval(() => void this.checkIdle(), IDLE_CHECK_INTERVAL_MS);
-
-    this.ctx.on("internal/session", async (session: Session) => {
-      if (!isChannelAllowed(this.profile, session.sid, session.channelId ?? "")) return;
-      // One of this profile's own bodies speaking is not input: without this the mind reads its own words back
-      // as somebody else's message, and the same sentence enters the stream twice.
-      if (session.userId !== undefined && this.profile.allowedChannels.some((declaration) => declaration.sid === `${session.platform}:${session.userId}`))
+    switch (event.type) {
+      case "turn.start":
+        this.stepStartedAt.set(event.turnId, Date.now());
+        break;
+      case "turn.step": {
+        const startedAt = this.stepStartedAt.get(event.turnId);
+        this.stepStartedAt.set(event.turnId, Date.now());
+        this.logger.debug(
+          `${tag} turn.step #${event.stepNumber} ${formatUsage(event.usage)} finish=${event.finishReason ?? "unknown"} ${formatElapsed(startedAt)}`,
+        );
         return;
-
-      // this.logger.debug(`--- Session ---\n${JSON.stringify(session, null, 2)}`);
-
-      const event = this.sessionHandler.handle(session);
-      if (event === undefined) return;
-
-      // Where it stands decides whether it can wake the mind; where it cannot, it may be retold as one that can.
-      const trigger = this.weakup.handleEvent(event);
-      const retellings = trigger ? [] : this.weakup.escalate(event);
-
-      const turnId = this.agent.send(event, { trigger, ifBusy: "join" });
-      if (turnId) {
-        this.logger.info(`Message sent to agent for profile ${this.profile.id} with turn ID ${turnId}.`);
-        void (await this.agent.wait());
       }
-
-      for (const notification of retellings) {
-        // The engine has the last word even over a retelling it produced itself.
-        if (!this.weakup.handleEvent(notification)) continue;
-        const retold = this.agent.send(notification, { trigger: true, ifBusy: "join" });
-        if (retold) {
-          this.logger.info(`Notification sent to agent for profile ${this.profile.id} with turn ID ${retold}.`);
-          void (await this.agent.wait());
-        }
-      }
-    });
-  }
-
-  /**
-   * A profile with an empty stream gets its position written before the first turn. Materializing it here —
-   * instead of after a turn has already been sent — keeps every request's prefix untouched, and from then on
-   * it is an ordinary checkpoint: the projection, the rebuild and the restore need no special case.
-   */
-  private async openFrame(): Promise<void> {
-    const entries = await this.storage.read();
-    if (entries.length > 0) return;
-
-    const frameFocus = { ...this.profile.initialFocus };
-    const text = this.context.openingFrame(frameFocus);
-    const record: IshikiCheckpointEntry = { frameFocus, text, createdAt: Date.now() };
-
-    try {
-      await this.storage.append(createEntry("ishiki.checkpoint", record));
-    } catch (error) {
-      // The projection derives a head on its own, so a failed opening frame costs the greeting, not the run.
-      this.logger.warn(`开局帧写入失败，本代由投影自行给出位置：${String(error)}`);
+      case "turn.done":
+      case "turn.failed":
+      case "turn.aborted":
+        this.stepStartedAt.delete(event.turnId);
+        break;
+      case "tool.start":
+        this.toolStartedAt.set(toolCallKey(event), Date.now());
+        break;
+      case "tool.done":
+        this.logger.debug(`${tag} tool.done ${event.toolName} ${formatElapsed(this.toolStartedAt.get(toolCallKey(event)))}`);
+        this.toolStartedAt.delete(toolCallKey(event));
+        return;
+      case "tool.failed":
+        this.toolStartedAt.delete(toolCallKey(event));
+        break;
+      default:
+        // 其余事件没有要算的量，落到下面统一记一行类型。
+        break;
     }
-  }
 
-  /**
-   * The live focus is the scene the last checkpoint says this generation is in; only a profile without any
-   * checkpoint falls back to the configured `initialFocus`. The frame needs no restoring — it lives in the
-   * checkpoint payload and the projection reads it from the entry stream.
-   */
-  private async restoreContext(): Promise<void> {
-    const entries = await this.storage.read();
-    const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
-    if (checkpoint === undefined) {
-      this.generationDirty = entries.length > 0;
+    if (event.type === "turn.failed") {
+      this.logger.warn(`${tag} turn failed: ${event.error?.message ?? "unknown error"}`);
       return;
     }
-
-    this.currentFocus = { ...checkpoint.data.frameFocus };
-    this.generationDirty = entries.length > entries.indexOf(checkpoint) + 1;
+    this.logger.debug(`${tag} ${event.type}`);
   }
 
-  /** The workspace budget: an explicit token limit, else half of the window the model declares. */
-  private resolveBudget(): void {
-    // The schema always provides a default (8192), so this is never undefined at runtime.
-    this.workspaceTokenLimit = this.profile.context.workspaceTokenLimit ?? DEFAULT_WORKSPACE_TOKEN_LIMIT;
+  /** 向该频道投递一条事件：仅写入事件流，或按唤醒结果触发一轮。 */
+  deliver(event: IshikiEvent, force = false): void {
+    const trigger = force || this.wakeup.decide(event) === "trigger";
+    this.agent.send(event, { trigger, ifBusy: "join" });
   }
 
-  private overBudget(workspace: readonly AgentEntry[]): boolean {
-    let chars = 0;
-    for (const entry of workspace) chars += JSON.stringify(entry).length;
-    return chars / this.profile.context.charsPerToken >= this.workspaceTokenLimit;
+  /** 等待当前轮次结束。 */
+  async idle(): Promise<void> {
+    await this.agent.wait();
   }
 
-  /**
-   * The only materialized write. A failure leaves the generation untouched so the next trigger retries it.
-   * A switch forces the write — a switch *is* the generation change — and the new frame then carries the ended
-   * generation's trajectory, because it is built from the previous checkpoint's focus. Its success is what makes
-   * a switch atomic: until the write lands, the mind keeps the position it started the step in.
-   */
-  private async rebuild(reason: string): Promise<boolean> {
-    const entries = await this.storage.read();
-    const workspace = sliceWorkspace(entries);
-    if (workspace.length === 0) {
-      this.generationDirty = false;
-      return true;
-    }
-
-    // Idle is early compression, not a budget decision: folding a quiet generation while it is still small is
-    // the point, since nobody is waiting for the answer. A switch is not a decision at all.
-    if (reason !== "switch" && reason !== "idle" && !this.overBudget(workspace)) return false;
-
-    const frameFocus = { ...this.currentFocus };
-    const text = this.context.renderFrame(frameFocus, entries, workspace);
-    const record: IshikiCheckpointEntry = {
-      frameFocus,
-      text,
-      createdAt: Date.now(),
-    };
-
-    try {
-      await this.storage.append(createEntry("ishiki.checkpoint", record));
-    } catch (error) {
-      this.logger.warn(`checkpoint 写入失败（${reason}），本代保留待下次重试：${String(error)}`);
-      return false;
-    }
-
-    this.generationDirty = false;
-    this.rebuildPending = false;
-    this.logger.debug(`帧重建完成（${reason}），${text.length} 字符`);
-    return true;
-  }
-
-  private scheduleRebuild(reason: string): void {
-    this.rebuildChain = this.rebuildChain
-      .then(async () => {
-        await this.rebuild(reason);
-      })
-      .catch((error: unknown) => this.logger.warn(`帧重建异常（${reason}）：${String(error)}`));
-  }
-
-  /** Early compression: a quiet generation is folded before the next message has to pay for it. */
-  private async checkIdle(): Promise<void> {
-    if (!this.generationDirty) return;
-    if (!this.agent.isIdle()) {
-      this.rebuildPending = true;
-      return;
-    }
-    const entries = await this.storage.read();
-    const last = entries.at(-1);
-    if (last === undefined || Date.now() - last.timestamp < this.profile.context.idleMs) return;
-    this.scheduleRebuild("idle");
-  }
-
-  async stop() {
-    clearInterval(this.idleTimer);
+  async stop(): Promise<void> {
     await this.agent.stop();
   }
+}
+
+/** 投递目标；`sid` 省略时取来源频道的账号。 */
+export interface StimulusTarget {
+  sid?: string;
+  channelId: string;
+}
+
+/**
+ * 投递的迫近程度。`idle` 只写进目标的事件流，目标按自己的节奏在下次醒来时读到；
+ * `urgent` 强制打断目标并立刻起一轮，是代价最高的一种。
+ */
+export type StimulusUrgency = "idle" | "urgent";
+
+export interface StimulusRefusal {
+  target: string;
+  error: string;
+}
+
+export interface StimulusReport {
+  delivered: number;
+  refused: StimulusRefusal[];
+}
+
+export interface ProfileRuntimeOptions {
+  id: string;
+  /** 这个 profile 的目录，`scenes/` 与 `persona.md` 都在里面。 */
+  directory: string;
+  specs: SceneSpec[];
+  ctx: Context;
+  gateway: Gateway;
+  logger: Logger;
+}
+
+/** 一份人设的运行态：静态的工厂清单，加上按需长出来的频道实例。 */
+export class ProfileRuntime {
+  readonly id: string;
+
+  private readonly ctx: Context;
+  private readonly logger: Logger;
+  private readonly directory: string;
+  private readonly scenesDir: string;
+  /** 本 profile 的装配清单；加载后不变。 */
+  readonly specs: SceneSpec[] = [];
+  /** 每个可用 spec 一份：模型与唤醒引擎在 profile 内共享，由实例引用。 */
+  private readonly plans: Record<string, { model: LanguageModel; wakeup: WakeupEngine } | undefined> = {};
+  private readonly scenes: Record<string, SceneRuntime | undefined> = {};
+  /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
+  private persona?: string;
+  private thinkPrompt?: string;
+  private systemTemplate?: string;
+
+  constructor(options: ProfileRuntimeOptions) {
+    this.id = options.id;
+    this.ctx = options.ctx;
+    this.logger = options.logger;
+    this.directory = options.directory;
+    this.scenesDir = path.join(options.directory, "scenes");
+
+    for (const spec of options.specs) {
+      try {
+        this.plans[spec.name] = {
+          model: options.gateway.languageModel(spec.model),
+          wakeup: new StandardWakeupEngine(spec.wakeup[spec.wakeup.engine]),
+        };
+        this.specs.push(spec);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.logger.error(`[${this.id}/${spec.name}] model "${spec.model}" unavailable, spec skipped: ${reason}`);
+      }
+    }
+  }
+
+  /** 按事件定位其归属频道实例，未创建时按需创建。 */
+  route(event: IshikiEvent): SceneRuntime | undefined {
+    const { platform, selfId, channelId } = event.data;
+    const spec = matchSceneSpec(this.specs, { sid: `${platform}:${selfId}`, channelId });
+    return spec === undefined ? undefined : this.ensure(spec, channelId, { platform, selfId });
+  }
+
+  /**
+   * 读取指定频道最近的记录行：只读，不创建实例、不触发轮次。
+   * 该频道不属于本 profile 时返回 undefined，与本 profile 下的空记录区分开。
+   */
+  async peek(sid: string, channelId: string, limit: number): Promise<string[] | undefined> {
+    if (matchSceneSpec(this.specs, { sid, channelId }) === undefined) return undefined;
+
+    const file = path.join(this.scenesDir, sceneDirectoryName(channelKey(sid, channelId)), "events.jsonl");
+    const lines: string[] = [];
+    for (const entry of await createJsonlStorage(file).read()) {
+      if (entry.type !== "message") continue;
+      const line = renderLine(entry.data);
+      if (line !== undefined && line.length > 0) lines.push(line);
+    }
+    return lines.slice(-limit);
+  }
+
+  /**
+   * 向本 profile 内其他频道投递 stimulus；目标实例不存在时按需创建。
+   * `from` 只需给出投递方的地址与账号：来源身份按值取，不必持有实例。
+   * 只有 `urgency` 为 `urgent` 才叫醒目标，其余情况只写入事件流。
+   */
+  dispatch(
+    from: Pick<SceneRuntime, "sid" | "channelId" | "address">,
+    targets: readonly StimulusTarget[],
+    body: { reason: string; content: string; urgency?: StimulusUrgency },
+  ): StimulusReport {
+    const refused: StimulusRefusal[] = [];
+    let delivered = 0;
+
+    for (const target of targets) {
+      const sid = target.sid ?? from.sid;
+      const key = channelKey(sid, target.channelId);
+      if (key === channelKey(from.sid, from.channelId)) {
+        refused.push({ target: key, error: "target channel is the source channel" });
+        continue;
+      }
+
+      // 目标账号的平台身份：同一账号复用来源实例，否则从在线 bot 读取。
+      const bot = this.ctx.bots[sid];
+      const address = sid === from.sid ? from.address : bot?.platform === undefined ? undefined : { platform: bot.platform, selfId: bot.selfId };
+      if (address === undefined) {
+        refused.push({ target: key, error: `cannot resolve address: account "${sid}" is not connected` });
+        continue;
+      }
+
+      // 已存在的实例直接投递；没见过的频道按配置匹配，首条命中的 spec 就是它的归属。
+      let scene = this.scenes[key];
+      if (scene === undefined) {
+        const spec = matchSceneSpec(this.specs, { sid, channelId: target.channelId });
+        if (spec === undefined) {
+          refused.push({ target: key, error: "channel is not configured in this profile" });
+          continue;
+        }
+        scene = this.ensure(spec, target.channelId, address);
+      }
+
+      const payload: IshikiInnerStimulus = {
+        timestamp: Date.now(),
+        platform: address.platform,
+        selfId: address.selfId,
+        channelId: target.channelId,
+        source: { platform: from.address.platform, selfId: from.address.selfId, channelId: from.channelId },
+        reason: body.reason,
+        content: body.content,
+      };
+      scene.deliver(createCustomMessage("ishiki.inner_stimulus", payload), body.urgency === "urgent");
+      delivered += 1;
+    }
+
+    return { delivered, refused };
+  }
+
+  async stop(): Promise<void> {
+    await Promise.all(Object.values(this.scenes).map((scene) => scene?.stop()));
+  }
+
+  /** 按需创建频道实例：首次投递时创建，同时初始化目录、引擎与存储。 */
+  private ensure(spec: SceneSpec, channelId: string, address: { platform: string; selfId: string }): SceneRuntime {
+    const key = channelKey(spec.sid, channelId);
+    const existing = this.scenes[key];
+    if (existing !== undefined) return existing;
+
+    const plan = this.plans[spec.name];
+    if (plan === undefined) throw new Error(`spec "${spec.name}" has no usable model and must not receive deliveries`);
+
+    const self = { sid: spec.sid, channelId, address };
+    const control = new TurnControl();
+    const tools: ToolSet = {
+      think: createThink({ logger: this.logger }),
+      send_message: createSendMessage({
+        ctx: this.ctx,
+        logger: this.logger,
+        sid: spec.sid,
+        channelId,
+        typing: spec.typing,
+        onEndTurn: () => control.requestSendStop(),
+      }),
+      finish: createFinish({ onStop: () => control.requestStop() }),
+      peek_channel_history: createPeekChannelHistory({ self, peek: (target) => this.peek(target.sid, target.channelId, target.limit) }),
+      dispatch_stimulus: createDispatchStimulus({ self, dispatch: (targets, body) => this.dispatch(self, targets, body) }),
+      report_tool_issue: createReportToolIssue({ logPath: path.join(this.directory, "tool_issues.log") }),
+    };
+
+    const scene = new SceneRuntime({
+      label: `${spec.profile}/${spec.name}/${channelId}`,
+      sid: spec.sid,
+      channelId,
+      address,
+      directory: path.join(this.scenesDir, sceneDirectoryName(key)),
+      model: plan.model,
+      instructions: this.instructions(spec, channelId),
+      // 上下文引擎每实例一个：压缩水位与后台压缩任务都是实例状态。
+      plugins: [new StandardContextEngine(spec.context["standard"], this.logger), control],
+      tools,
+      wakeup: plan.wakeup,
+      logger: this.logger,
+    });
+    this.scenes[key] = scene;
+    this.logger.info(`[${spec.profile}/${spec.name}] scene created: ${key}`);
+    return scene;
+  }
+
+  /**
+   * 系统提示词：人设文件，加上渲染后的 `resources/templates/system.jinja`。
+   * 人设取自 profile 目录的 `persona.md`；think 指南取自 profile 目录的 `think.md`，
+   * 没有就退回包内默认。源码按 profile 缓存，当前频道每次渲染时注入。
+   */
+  private instructions(spec: SceneSpec, channelId: string): string {
+    if (this.persona === undefined) this.persona = readSnippet(path.join(this.directory, "persona.md")) ?? "";
+    if (this.thinkPrompt === undefined) {
+      this.thinkPrompt = readSnippet(path.join(this.directory, "think.md")) ?? readSnippet(resourcePath("templates", "think.md")) ?? "";
+    }
+    if (this.systemTemplate === undefined) this.systemTemplate = readFileSync(resourcePath("templates", "system.jinja"), "utf8");
+
+    // 地址簿按账号合并：没有认领频道的 spec 既不会被唤醒，也投递不进去，不列。
+    const bySid = new Map<string, string[]>();
+    for (const other of this.specs) {
+      if (other.whitelist.length === 0) continue;
+      bySid.set(other.sid, [...(bySid.get(other.sid) ?? []), ...other.whitelist]);
+    }
+    const bodies = [...bySid].map(([sid, channels]) => ({ sid, channels }));
+    const rendered = new Template(this.systemTemplate).render({ thinkPrompt: this.thinkPrompt, self: { sid: spec.sid, channelId }, bodies });
+    return [this.persona, rendered.trim()].filter((part) => part.length > 0).join("\n\n");
+  }
+}
+
+/** 读一段文本，文件不存在返回 undefined。 */
+function readSnippet(file: string): string | undefined {
+  return existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
+}
+
+/**
+ * 扫描 profile 根目录并建出全部 ProfileRuntime：每个子目录读一份 profile.yml 或 profile.yaml，
+ * 解析、展开成 spec，再交给对应的实例容器。
+ *
+ * 坏掉的目录只跳过它自己：读不动、preset 悬空、缺 sid，各记一条 error，其余 profile 照常加载。
+ */
+export function loadProfiles(root: string, deps: { ctx: Context; gateway: Gateway; logger: Logger }): ProfileRuntime[] {
+  const profiles: ProfileRuntime[] = [];
+
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const file = ["profile.yml", "profile.yaml"].map((name) => path.join(root, entry.name, name)).find((candidate) => existsSync(candidate));
+    if (file === undefined) {
+      deps.logger.warn(`no profile.yml under "${entry.name}", directory skipped`);
+      continue;
+    }
+    try {
+      const profile = ProfileConfig(parse(readFileSync(file, "utf8")));
+      const id = profile.id?.trim() || entry.name;
+      profiles.push(new ProfileRuntime({ id, directory: path.join(root, entry.name), specs: resolveProfile(profile, id), ...deps }));
+    } catch (error) {
+      deps.logger.error(`[${entry.name}] profile skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (profiles.length === 0) {
+    deps.logger.warn(`No profile to load under ${root}`);
+  }
+
+  return profiles;
 }

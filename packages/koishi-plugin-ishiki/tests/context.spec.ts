@@ -2,29 +2,27 @@ import { createCustomMessage, createEntry } from "@yesimagent/core";
 import { describe, expect, it } from "vitest";
 
 import "../src/types.js";
-import { ContextEngine, formatClock } from "../src/context-engine.js";
-import type { Focus } from "../src/profiles.js";
-import { makeProfile } from "./helpers.js";
+import { assembleScene, formatClock, readSceneLines } from "../src/context-engine.js";
+import { createRegistry } from "../src/registry.js";
+import type { SceneAddress, SceneType } from "../src/types.js";
 
-const ONE: Focus = { sid: "onebot:1", channelId: "group:1" };
-const NINE: Focus = { sid: "onebot:2", channelId: "group:9" };
-/** One timestamp for the whole file, so no assertion below depends on the machine's time zone. */
+const ONE = { sid: "onebot:1", channelId: "group:1", platform: "onebot", sceneType: "group" as SceneType };
+const NINE: SceneAddress = { sid: "onebot:2", channelId: "group:9" };
 const AT = 1_700_000_000_000;
 const CLOCK = `[${formatClock(AT)}]`;
 
-/** The bodies as the platform reports them, stated rather than derived: nothing splits a sid. */
 const BODIES: Record<string, { platform: string; selfId: string }> = {
   "onebot:1": { platform: "onebot", selfId: "1" },
   "onebot:2": { platform: "onebot", selfId: "2" },
 };
 
-function bodyOf(scene: Focus): { platform: string; selfId: string } {
+function bodyOf(scene: SceneAddress): { platform: string; selfId: string } {
   const body = BODIES[scene.sid];
   if (body === undefined) throw new Error(`unknown body ${scene.sid}`);
   return body;
 }
 
-function fact(messageId: string, scene: Focus, options: { content?: string; direct?: boolean } = {}) {
+function fact(messageId: string, scene: SceneAddress, options: { content?: string; sceneType?: SceneType } = {}) {
   return createEntry(
     "message",
     createCustomMessage("ishiki.message.created", {
@@ -33,7 +31,7 @@ function fact(messageId: string, scene: Focus, options: { content?: string; dire
       channelId: scene.channelId,
       content: options.content ?? messageId,
       user: { id: "42", name: "Miaow" },
-      direct: options.direct,
+      sceneType: options.sceneType ?? "group",
       messageId,
       timestamp: AT,
     }),
@@ -41,7 +39,7 @@ function fact(messageId: string, scene: Focus, options: { content?: string; dire
   );
 }
 
-function own(messageId: string, scene: Focus) {
+function own(messageId: string, scene: SceneAddress) {
   const { selfId } = bodyOf(scene);
   return createEntry(
     "message",
@@ -51,6 +49,7 @@ function own(messageId: string, scene: Focus) {
       channelId: scene.channelId,
       content: messageId,
       user: { id: selfId, name: "NekoChan" },
+      sceneType: "group",
       messageId,
       timestamp: AT,
     }),
@@ -58,13 +57,14 @@ function own(messageId: string, scene: Focus) {
   );
 }
 
-function retraction(messageId: string, scene: Focus) {
+function retraction(messageId: string, scene: SceneAddress) {
   return createEntry(
     "message",
     createCustomMessage("ishiki.message.deleted", {
       ...bodyOf(scene),
       sid: scene.sid,
       channelId: scene.channelId,
+      sceneType: "group",
       messageId,
       operatorId: "42",
       timestamp: AT,
@@ -73,19 +73,57 @@ function retraction(messageId: string, scene: Focus) {
   );
 }
 
-/** Reading lines depends on nothing but the stream, so the engine carries no profile of its own. */
-const ENGINE = new ContextEngine({ profile: makeProfile(), currentFocus: () => ONE });
+const REGISTRY = createRegistry();
 
 describe("scene reads", () => {
-  it("reads one scene's rendered lines in stream order", () => {
+  it("reads one scene's rendered lines in stream order", async () => {
     const entries = [fact("m1", ONE), fact("a1", NINE), own("m2", ONE), retraction("m1", ONE), fact("m3", ONE)];
 
-    expect(ENGINE.lines(entries, ONE).map((read) => read.line)).toEqual([
+    const lines = await readSceneLines(REGISTRY.transforms, entries, ONE);
+
+    expect(lines.map((line) => line.line)).toEqual([
       `${CLOCK} Miaow(42) #m1: m1`,
       `${CLOCK} NekoChan(1) #m2: m2`,
       `${CLOCK} #m1: (已撤回)`,
       `${CLOCK} Miaow(42) #m3: m3`,
     ]);
-    expect(ENGINE.lines(entries, NINE).map((read) => read.line)).toEqual([`${CLOCK} Miaow(42) #a1: a1`]);
+  });
+});
+
+describe("assembly", () => {
+  it("keeps the last maxMessages facts and the tool trace after them", async () => {
+    const entries = [fact("m1", ONE), fact("m2", ONE), fact("a1", NINE), fact("m3", ONE)];
+
+    const assembled = await assembleScene(entries, ONE, REGISTRY.transforms, 2);
+    const text = JSON.stringify(assembled);
+
+    expect(text).not.toContain("#m1");
+    expect(text).toContain("#m2");
+    expect(text).toContain("#m3");
+    expect(text).not.toContain("#a1");
+  });
+
+  it("skips a checkpoint left by an older log and still shows the fact after it", async () => {
+    const checkpoint = createEntry(
+      "message",
+      createCustomMessage("ishiki.message.created", {
+        ...bodyOf(ONE),
+        sid: ONE.sid,
+        channelId: ONE.channelId,
+        content: "seed",
+        user: { id: "42", name: "Miaow" },
+        sceneType: "group",
+        messageId: "seed",
+        timestamp: AT,
+      }),
+    );
+    const legacy = { ...checkpoint, type: "ishiki.checkpoint", data: { text: "<frame>SEEDED</frame>" } };
+    const entries = [legacy as unknown as typeof checkpoint, fact("m1", ONE), own("m2", ONE)];
+
+    const text = JSON.stringify(await assembleScene(entries, ONE, REGISTRY.transforms, 40));
+
+    expect(text).not.toContain("SEEDED");
+    expect(text).toContain("Miaow(42) #m1: m1");
+    expect(text).toContain("NekoChan(1) #m2: m2");
   });
 });

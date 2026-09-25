@@ -12,8 +12,10 @@ import {
 import type { Gateway } from "@yesimagent/gateway";
 import type { Context, Logger, Session } from "koishi";
 
-import type { Focus, Profile } from "../src/profiles.js";
+import type { Profile, SceneAddress } from "../src/profiles.js";
+import { createRegistry, type CapabilityRegistry } from "../src/registry.js";
 import { ProfileRuntime } from "../src/runtime.js";
+import { sceneDirectoryOf } from "../src/scene-runtime.js";
 import "../src/types.js";
 
 const USAGE: LanguageModelV4Usage = {
@@ -47,7 +49,7 @@ export function toolCallStep(...calls: Array<{ toolCallId: string; toolName: str
 
 export interface StoredEntry {
   type: string;
-  data: { next?: Focus; previous?: Focus; frameFocus?: Focus; text?: string } & Record<string, unknown>;
+  data: Record<string, unknown>;
 }
 
 export interface Bubble {
@@ -55,14 +57,22 @@ export interface Bubble {
   content: unknown;
 }
 
+/** The scene every test starts from unless it names another one. */
+export const DEFAULT_SCENE: SceneAddress = { sid: "onebot:1", channelId: "group:1" };
+
 export interface Harness {
   send(overrides?: Record<string, unknown>): Promise<void>;
   bubbles: Record<string, Bubble[]>;
   calls(): number;
   /** Every prompt the model was asked with, in call order. */
   prompts(): unknown[];
-  entries(): Promise<StoredEntry[]>;
-  /** Stops the profile so its idle timer does not outlive the test. */
+  /** The entries of one scene's own stream; the default scene unless one is named. */
+  entries(scene?: SceneAddress): Promise<StoredEntry[]>;
+  /** The scene's stream file, so a test can assert it exists or not. */
+  sceneFile(scene?: SceneAddress): string;
+  /** The scenes the profile holds in memory right now, by scene key. */
+  mountedScenes(): readonly string[];
+  /** Stops the profile so its timers do not outlive the test. */
   close(): Promise<void>;
 }
 
@@ -87,28 +97,26 @@ export async function waitFor<T>(produce: () => Promise<T | undefined> | T | und
   }
 }
 
+/** A profile whose rules cover onebot:1 in group:1 and group:9, and onebot:2 in group:9. */
 export function makeProfile(): Profile {
   return {
     id: "test",
-    dataPath: "data/ishiki/test",
+    catalog: "test",
+    profilePath: path.join(tmpdir(), "ishiki-profiles/test/profile.yaml"),
     model: "test:model",
+    systemPrompt: "（测试人格）",
     name: "",
-    initialFocus: { sid: "onebot:1", channelId: "group:1" },
-    allowedChannels: [
-      { sid: "onebot:1", channels: ["group:1"] },
-      { sid: "onebot:2", channels: ["group:9"] },
+    sids: ["onebot:1", "onebot:2"],
+    channelRules: [
+      { match: { sid: "onebot:1", channelId: "group:1" }, preset: "default" },
+      { match: { sid: "onebot:1", channelId: "group:9" }, preset: "default" },
+      { match: { sid: "onebot:2", channelId: "group:9" }, preset: "default" },
     ],
-    keywords: [],
-    attention: { mentions: [], quoteSelf: false },
-    context: { workspaceTokenLimit: 8192, charsPerToken: 4, idleMs: 1_800_000, historyEntries: 40, sceneWindowMs: 24 * 60 * 60 * 1000 },
+    defaults: {},
+    presets: { default: {} },
     innerThought: false,
-    allowChangeFocus: true,
     typing: { baseDelay: 0, charPerSecond: 5, minDelay: 0, maxDelay: 0 },
   };
-}
-
-export function makeContext(overrides: Partial<Profile["context"]>): Profile["context"] {
-  return { ...makeProfile().context, ...overrides };
 }
 
 export function makeSession(overrides: Record<string, unknown> = {}): Session {
@@ -134,18 +142,40 @@ export function makeSession(overrides: Record<string, unknown> = {}): Session {
 const temporaryDirectories: string[] = [];
 const runningRuntimes: ProfileRuntime[] = [];
 
+/** A directory the harness may reuse across instances, removed by `cleanup()`. */
+export async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), "ishiki-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
+/** A profile override laying the given context numbers under every scene. */
+export function contextDefaults(settings: NonNullable<Profile["defaults"]["context"]>): Partial<Profile> {
+  return { defaults: { context: settings } };
+}
+
 export async function cleanup(): Promise<void> {
   for (const runtime of runningRuntimes.splice(0)) await runtime.stop();
   for (const directory of temporaryDirectories.splice(0)) await rm(directory, { recursive: true, force: true });
 }
 
 /**
- * Runs one profile against a scripted model, real jsonl storage and a fake platform. Everything the tests
- * assert is either what the model saw, what the platform received, or what landed in storage.
+ * Runs one profile against a scripted model, real per-scene jsonl storage and a fake platform. Everything the
+ * tests assert is either what the model saw, what the platform received, or what landed in a scene's stream.
  */
 export async function createHarness(
   steps: LanguageModelV4StreamPart[][],
-  options: { failingContents?: string[]; profile?: Partial<Profile>; seed?: string[]; contextWindow?: number; botName?: string } = {},
+  options: {
+    failingContents?: string[];
+    profile?: Partial<Profile>;
+    seed?: string[];
+    contextWindow?: number;
+    botName?: string;
+    /** Reuse a directory across harnesses to model a restart. */
+    baseDir?: string;
+    /** The capability registry the runtime reads; a fresh one with the built-ins unless a test extends it. */
+    registry?: CapabilityRegistry;
+  } = {},
 ): Promise<Harness> {
   const failingContents = new Set(options.failingContents ?? []);
   let calls = 0;
@@ -159,10 +189,15 @@ export async function createHarness(
     },
   });
 
-  const baseDir = await mkdtemp(path.join(tmpdir(), "ishiki-"));
-  temporaryDirectories.push(baseDir);
-  const file = path.join(baseDir, "data/ishiki/test/messages.jsonl");
+  const baseDir = options.baseDir ?? (await mkdtemp(path.join(tmpdir(), "ishiki-")));
+  if (options.baseDir === undefined) temporaryDirectories.push(baseDir);
+  const dataRoot = path.join(baseDir, "data/ishiki");
+  const profile = { ...makeProfile(), ...options.profile };
+  const sceneFile = (scene: SceneAddress = DEFAULT_SCENE) =>
+    path.join(sceneDirectoryOf(path.join(dataRoot, "profiles", profile.catalog), scene), "session.jsonl");
+
   if (options.seed !== undefined && options.seed.length > 0) {
+    const file = sceneFile();
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, `${options.seed.join("\n")}\n`, "utf-8");
   }
@@ -203,9 +238,10 @@ export async function createHarness(
   };
 
   const runtime = new ProfileRuntime(ctx as unknown as Context, {
-    profile: { ...makeProfile(), ...options.profile },
+    profile,
     gateway: gateway as unknown as Gateway,
-    profilesFile: "profiles.yaml",
+    dataRoot,
+    registry: options.registry ?? createRegistry(),
     logLevel: 0,
   });
   await runtime.start();
@@ -215,6 +251,8 @@ export async function createHarness(
     bubbles,
     calls: () => calls,
     prompts: () => prompts,
+    sceneFile,
+    mountedScenes: () => runtime.mountedScenes(),
     async close() {
       await runtime.stop();
     },
@@ -223,8 +261,8 @@ export async function createHarness(
       if (!handler) throw new Error("ingestion handler was not registered");
       await handler(makeSession(overrides));
     },
-    async entries() {
-      const content = await readFile(file, "utf-8");
+    async entries(scene: SceneAddress = DEFAULT_SCENE) {
+      const content = await readFile(sceneFile(scene), "utf-8").catch(() => "");
       return content
         .split("\n")
         .filter((line) => line.trim().length > 0)

@@ -1,269 +1,318 @@
-import { type AgentCustomMessage, AgentCustomEntry, AgentEntry, createEntry, createUserMessage } from "@yesimagent/core";
+import { createEntry, createUserMessage, generateText, type Agent, type AgentEntry, type AgentMessage, type AgentPlugin } from "@yesimagent/core";
+import type { Logger } from "koishi";
 
-import type { Focus, Profile } from "./profiles.js";
-import type { IshikiEventBase, IshikiMessageCreated, IshikiNotification } from "./types.js";
+import type { IshikiInnerStimulus, IshikiMessageCreated, IshikiMessageDeleted } from "./types.js";
 
-/**
- * The projection: everything the model sees that is not the mind's own prompt parts. One render rule per event
- * type, one reader for the fact stream, one place that decides what a generation's workspace looks like.
- */
-
-// ---------------------------------------------------------------------------
-// Text primitives
-// ---------------------------------------------------------------------------
-
-/** 场景身份 = 身体 + 频道;地址写作 `platform:selfId:channelId`(`channelId` 的语义域是 `selfId`)。 */
-function sceneKey(scene: Focus): string {
-  return `${scene.sid}:${scene.channelId}`;
+declare module "@yesimagent/core" {
+  interface AgentCustomEntry {
+    "ishiki.compact": IshikiCompact;
+  }
 }
 
-/** 事实行与帧头共用的时钟写法。 */
-export function formatClock(timestamp: number): string {
+/**
+ * `lastEntryId` 及其之前的流已压缩为 `summary`。该记录属于流本身而非对话消息，
+ * 仅在上下文引擎将其渲染为摘要行时对模型可见。
+ */
+export interface IshikiCompact {
+  summary: string;
+  lastEntryId: string;
+}
+
+export interface ContextEngines {
+  standard: StandardContextConfig;
+}
+
+/**
+ * 上下文引擎是一枚 AgentPlugin：把本轮 entries 与 messages 装配成模型可见的输入。
+ * 基类只固定名字与配置；实现哪些 hook、如何装配由策略自行决定。
+ */
+export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> implements AgentPlugin {
+  public readonly name: K;
+  public readonly config: ContextEngines[K];
+
+  constructor(name: K, config: ContextEngines[K]) {
+    this.name = name;
+    this.config = config;
+  }
+}
+
+/** 未配置时的字符预算上限；显式写 0 表示只线性增长、不压缩。 */
+const DEFAULT_CONTEXT_CHARS = 24_000;
+
+export interface StandardContextConfig {
+  /** 单轮模型输入的文本上限（字符数）；超出时最旧的一段退出模型视野，交给后台并入摘要。 */
+  maxChars: number;
+  /** 装配留下的水位比例。0.8 表示压到 `maxChars * 0.8`，为后续轮次留出余量。 */
+  refillRatio?: number;
+}
+
+/** 摘要行的固定首行标记。 */
+const MEMORY_HEAD = "（以下是此前的对话记录，已压缩为摘要）";
+const DEFAULT_REFILL_RATIO = 0.8;
+
+/** 渲染行的时间部分，格式 `HH:mm`。 */
+function formatClock(timestamp: number): string {
   const date = new Date(timestamp);
   return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
 }
 
-/** The `<frame ...>` attributes. */
-function frameHead(focus: Focus, at: string): string {
-  return [`at="${at}"`, `focus_sid="${focus.sid}"`, `focus_channel="${focus.channelId}"`].join(" ");
+/** 将一条 ishiki 消息渲染为上下文中的一行；非本命名空间返回 undefined。 */
+export function renderLine(message: AgentMessage): string | undefined {
+  if (message.role !== "custom") return undefined;
+
+  switch (message.type) {
+    case "ishiki.message.created": {
+      const data: IshikiMessageCreated = message.data;
+      const who = data.user.name === undefined || data.user.name.length === 0 ? data.user.id : `${data.user.name}(${data.user.id})`;
+      return `[${formatClock(data.timestamp)}] ${who} #${data.messageId}: ${data.content}`;
+    }
+    case "ishiki.message.deleted": {
+      const data: IshikiMessageDeleted = message.data;
+      return `[${formatClock(data.timestamp)}] #${data.messageId}: (已删除)`;
+    }
+    case "ishiki.inner_stimulus": {
+      const data: IshikiInnerStimulus = message.data;
+      const from = data.source === undefined ? "external" : `${data.source.platform}:${data.source.selfId}/${data.source.channelId}`;
+      const reason = data.reason.replaceAll('"', "'").replaceAll("\n", " ").trim();
+      return `[${formatClock(data.timestamp)}] <stimulus from="${from}" reason="${reason}">${data.content}</stimulus>`;
+    }
+    default:
+      // 无渲染规则的类型不进入上下文输入，仍保留在事件流中。
+      return undefined;
+  }
 }
 
-/** `[21:40] Miaow(42) #m1: 内容` — a message event's canonical line. */
-export function renderLine(fact: IshikiMessageCreated): string {
-  const who = fact.user.name === undefined || fact.user.name.length === 0 ? fact.user.id : `${fact.user.name}(${fact.user.id})`;
-  return `[${formatClock(fact.timestamp)}] ${who} #${fact.messageId}: ${fact.content}`;
+/** 消息在体积统计与摘要输入中的文本：本命名空间按渲染行计，其余按消息内容计。 */
+function textOf(message: AgentMessage): string {
+  const line = renderLine(message);
+  if (line !== undefined) return line;
+
+  switch (message.role) {
+    case "user":
+    case "system":
+      return typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+    case "assistant":
+    case "tool":
+      return JSON.stringify(message.content);
+    default:
+      return JSON.stringify(message.data);
+  }
 }
 
-/**
- * A retelling of facts from elsewhere. The common section names where the retold content came from — its own
- * address is where the reader already stands — and every source renders through its own type's rule.
- */
-function renderNotification(fact: IshikiNotification): string {
-  const [first, ...rest] = fact.sources;
-  if (first === undefined) return "";
-  const at = sceneOf(first.data);
-  const body = [first, ...rest].map((source) => readEvent(source)?.line).filter((line) => line !== undefined);
-  const reason = fact.reason.replaceAll('"', "'").replaceAll("\n", " ");
-  return `<notification sid="${at.sid}" channel="${at.channelId}" reason="${reason}">${body.join("\n")}</notification>`;
+/** 连续的 ishiki 消息合并为单条 user 消息；其余消息原样透传，并中断行序列。 */
+export function collapse(messages: readonly AgentMessage[]): AgentMessage[] {
+  const collapsed: AgentMessage[] = [];
+  const lines: string[] = [];
+
+  const flush = (): void => {
+    if (lines.length === 0) return;
+    collapsed.push(createUserMessage(lines.join("\n")));
+    lines.length = 0;
+  };
+
+  for (const message of messages) {
+    const line = renderLine(message);
+    if (line === undefined) {
+      flush();
+      collapsed.push(message);
+      continue;
+    }
+    if (line.length > 0) lines.push(line);
+  }
+  flush();
+
+  return collapsed;
 }
 
-// ---------------------------------------------------------------------------
-// Event render registry
-// ---------------------------------------------------------------------------
-
-/**
- * Type name to render rule, keyed by the declarations themselves: a key cannot be invented, and the payload its
- * renderer receives is the one that type declares. A type with no entry here is invisible (fail-closed).
- */
-type EventRenders = { [K in keyof AgentCustomMessage]?: (data: AgentCustomMessage[K]["data"]) => string };
-
-const eventRenders: EventRenders = {
-  "ishiki.message.created": renderLine,
-  "ishiki.self.message": renderLine,
-  "ishiki.message.deleted": (d) => `[${formatClock(d.timestamp)}] #${d.messageId}: (已撤回)`,
-  "ishiki.notification": renderNotification,
-};
-
-/**
- * Where a fact belongs. Every declared event carries this in its own payload, so it is a field read and not a
- * per-type rule. A record arrives typed as `unknown`, so this is also where that promise gets asserted.
- */
-function sceneOf(data: unknown): Focus {
-  const fact = data as IshikiEventBase;
-  return { sid: fact.sid, channelId: fact.channelId };
-}
-
-/** A stream entry after render resolution. */
-export interface RenderedLine {
-  scene: Focus;
-  line: string;
-  /** The timestamp of the entry on the stream; the frame cuts its window and orders its segments by it. */
-  timestamp: number;
-}
-
-/**
- * The registry's one reader. A record's type and payload only relate at runtime — the table's own type holds that
- * promise at the definition, not here — so this is where it gets asserted, once, for the render call and the
- * address read alike.
- */
-function readEvent(message: AgentCustomMessage[keyof AgentCustomMessage]): Omit<RenderedLine, "timestamp"> | undefined {
-  const render = eventRenders[message.type] as ((data: unknown) => string) | undefined;
-  if (render === undefined) return undefined;
-  return { scene: sceneOf(message.data), line: render(message.data) };
-}
-
-// ---------------------------------------------------------------------------
-// Stream reads
-// ---------------------------------------------------------------------------
-
-/** The generic loses the narrowing a literal type would give, so the helper owns the one cast. */
-export function findLastEntry<T extends keyof AgentCustomEntry>(entries: readonly AgentEntry[], type: T): AgentEntry<T> | undefined {
+/** 流中最后一条 compact 条目即当前生效的摘要。 */
+function lastCompact(entries: readonly AgentEntry[]): AgentEntry<"ishiki.compact"> | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (entry.type === type) return entry as AgentEntry<T>;
+    if (entry.type === "ishiki.compact") return entry;
   }
   return undefined;
 }
 
-/** Everything written since the generation's frame was materialized. */
-export function sliceWorkspace(entries: readonly AgentEntry[]): readonly AgentEntry[] {
-  const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
-  return checkpoint === undefined ? entries : entries.slice(entries.indexOf(checkpoint) + 1);
+/** 本命名空间的消息参与装配，其余条目（状态、水位）只是流的一部分。 */
+function isMessage(entry: AgentEntry): entry is AgentEntry<"message"> {
+  return entry.type === "message";
 }
 
-// ---------------------------------------------------------------------------
-// The engine
-// ---------------------------------------------------------------------------
+/**
+ * 切点：让「摘要头 + 切点之后的可见行」落进 `target` 以内的最小位置，返回它在 `tail` 里的下标。
+ * 切点必须落在 user / custom 行上：截断 tool call / tool result 配对会被提供商拒绝，所以工具轨迹整段留在切点之后。
+ * 没有这样的点返回 -1。
+ */
+function cutOf(tail: readonly AgentEntry[], head: number, target: number): number {
+  let suffix = 0;
+  for (const entry of tail) {
+    if (isMessage(entry)) suffix += textOf(entry.data).length;
+  }
+
+  for (let at = 0; at < tail.length; at += 1) {
+    const entry = tail[at];
+    if (!isMessage(entry)) continue;
+    if ((entry.data.role === "user" || entry.data.role === "custom") && head + suffix <= target) return at;
+    suffix -= textOf(entry.data).length;
+  }
+
+  return -1;
+}
 
 /**
- * Reads the entry stream as model context: the frame a checkpoint carries, the state slot, and the facts and
- * traces of the current generation. Reads only; every write and every decision about waking lives elsewhere.
+ * 线性增长 + 空闲压缩，两条轨道各自独立：
+ *
+ * - 前台 `transformEntries` 只做同步裁剪：预算内原样交给模型，超预算就把最旧的可见行切出模型视野。
+ *   这一步不调模型，任何一轮的附加延迟都是零。
+ * - 后台 `onTurnFinish` 在一轮结束之后，把上次切掉的那段并进摘要，水位以 `ishiki.compact`
+ *   条目追加到流中。压缩成功前聊天照常进行；压缩失败不影响本轮，下一轮结束再试。
+ *
+ * 除压缩成功时追加的那一条 compact 外，本引擎只读不写。
  */
-export class ContextEngine {
-  constructor(private readonly options: { profile: Profile }) {}
+export class StandardContextEngine extends ContextEngine<"standard"> {
+  private agent?: Agent;
+  private readonly logger?: Logger;
+  private readonly ceiling: number;
+  private readonly target: number;
+  /** 上一次装配是否超预算：后台压缩的触发条件。 */
+  private over = false;
+  /** 在跑的压缩；非空即单飞，同一实例不并发压第二次。 */
+  private compacting?: Promise<void>;
+  private abort?: AbortController;
 
-  /** One scene's rendered lines, in stream order. */
-  lines(entries: readonly AgentEntry[], scene: Focus): RenderedLine[] {
-    const key = sceneKey(scene);
-    const out: RenderedLine[] = [];
-
-    for (const entry of entries) {
-      if (entry.type !== "message") continue;
-      const message = entry.data;
-      if (message.role !== "custom") continue;
-
-      const resolved = readEvent(message);
-      if (!resolved) continue;
-      if (sceneKey(resolved.scene) !== key) continue;
-      out.push({ ...resolved, timestamp: entry.timestamp });
-    }
-    return out;
+  constructor(config: Partial<StandardContextConfig> = {}, logger?: Logger) {
+    const maxChars = config.maxChars ?? DEFAULT_CONTEXT_CHARS;
+    const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
+    super("standard", { maxChars, refillRatio });
+    this.logger = logger;
+    this.ceiling = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : 0;
+    this.target = this.ceiling * refillRatio;
+    if (this.ceiling === 0) this.logger?.warn("context budget disabled: maxChars is non-positive, compaction off");
   }
 
-  /** The position a stream with no history opens with. */
-  openingFrame(focus: Focus): string {
-    return [`<frame ${frameHead(focus, formatClock(Date.now()))}>`, "（在此之前没有发生过任何事。）", "</frame>"].join("\n");
+  /** core 会摘取这些 hook 单独调用，因此必须绑定在实例上（箭头属性）。 */
+  init = (agent: Agent): void => {
+    this.agent = agent;
+  };
+
+  /** agent 停止时收尾：压缩中的请求一并中止。 */
+  stop = (): void => {
+    this.abort?.abort();
+  };
+
+  /** 前台：只裁窗口，不调模型。 */
+  transformEntries = async (entries: readonly AgentEntry[]): Promise<readonly AgentEntry[]> => {
+    if (this.ceiling === 0) return entries;
+
+    const compact = lastCompact(entries);
+    const anchor = compact === undefined ? -1 : entries.findIndex((entry) => entry.id === compact.data.lastEntryId);
+    if (compact !== undefined && anchor < 0) this.logger?.warn(`memory anchor ${compact.data.lastEntryId} not found in stream, memory ignored`);
+
+    const memory = anchor < 0 ? undefined : compact;
+    const tail = memory === undefined ? entries : entries.slice(anchor + 1);
+    const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
+
+    let size = head.length;
+    for (const entry of tail) {
+      if (isMessage(entry)) size += textOf(entry.data).length;
+    }
+    if (size <= this.ceiling) {
+      this.over = false;
+      return this.prepend(head, tail);
+    }
+
+    this.over = true;
+    const cut = cutOf(tail, head.length, this.target);
+    if (cut < 0) {
+      this.logger?.warn("context over budget with no valid cut point, entries passed through");
+      return this.prepend(head, tail);
+    }
+    return this.prepend(head, tail.slice(cut));
+  };
+
+  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages);
+
+  /** 后台：一轮结束后，若刚才是超预算装配的，把切掉的那段并进摘要。不阻塞轮次结束。 */
+  onTurnFinish = (): void => {
+    if (!this.over || this.compacting !== undefined) return;
+    this.compacting = this.compact().finally(() => {
+      this.compacting = undefined;
+    });
+  };
+
+  /** 等在做的那次压缩收尾。 */
+  async settle(): Promise<void> {
+    await this.compacting;
   }
 
-  /**
-   * Renders the frame text: every admitted scene gets a rolling window of recent facts pulled from the full
-   * storage stream. No distinction between "worked in" and "only heard from" — all scenes use the same rule.
-   *
-   * Scene admission: focus always enters; any scene whose facts appeared in this generation's workspace also enters.
-   */
-  renderFrame(frameFocus: Focus, entries: readonly AgentEntry[], workspace: readonly AgentEntry[]): string {
-    const now = Date.now();
-    const here = sceneKey(frameFocus);
-    const { historyEntries, sceneWindowMs } = this.options.profile.context;
+  /** 把切掉的一段并入摘要，水位以 compact 条目追加到流中。全程在后台，失败只记一条日志。 */
+  private async compact(): Promise<void> {
+    const agent = this.agent;
+    if (agent === undefined) return;
 
-    // Discover every scene that appeared in this generation (for non-focus admission).
-    const scenes = new Map<string, Focus>();
-    scenes.set(here, frameFocus);
-    for (const entry of workspace) {
-      if (entry.type !== "message") continue;
-      const message = entry.data;
-      if (message.role !== "custom") continue;
-      if (eventRenders[message.type] === undefined) continue;
-      const scene = sceneOf(message.data);
-      const key = sceneKey(scene);
-      if (!scenes.has(key)) scenes.set(key, scene);
+    const entries = await agent.storage.read();
+    const compact = lastCompact(entries);
+    const anchor = compact === undefined ? -1 : entries.findIndex((entry) => entry.id === compact.data.lastEntryId);
+
+    const memory = anchor < 0 ? undefined : compact;
+    const tail = memory === undefined ? entries : entries.slice(anchor + 1);
+    const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
+
+    const cut = cutOf(tail, head.length, this.target);
+    const dropped = cut > 0 ? tail.slice(0, cut).filter(isMessage) : [];
+    if (dropped.length === 0) {
+      // 没有可切的点，或切出来没有可见行：等下一次装配重新判定。
+      this.over = false;
+      return;
     }
 
-    // Build one segment per scene, all from storage with the same tail + time-window rule.
-    const segments: Array<{ scene: Focus; lines: string[]; dropped: number; latest: number }> = [];
-    for (const [key, scene] of scenes) {
-      const fresh = this.lines(entries, scene).filter((read) => now - read.timestamp <= sceneWindowMs);
-      const kept = fresh.slice(-historyEntries);
-      const lines = kept.map((read) => read.line);
-      const dropped = Math.max(0, fresh.length - historyEntries);
-      const latest = kept.at(-1)?.timestamp ?? 0;
-      if (lines.length === 0 && key !== here) continue;
-      segments.push({ scene, lines, dropped, latest });
+    const abort = new AbortController();
+    this.abort = abort;
+    try {
+      const summary = await this.summarize(memory?.data.summary, dropped, abort.signal);
+      // 失败就留着 `over`，下一轮结束再试；本轮与后续轮次照常跑。
+      // 停止之后才回来的摘要一律丢掉：这条流已经不属于任何活着的实例了。
+      if (summary === undefined || abort.signal.aborted) return;
+      // 直接写入存储：该条目是关于流的元数据，不经过 onAppend 的条目处理。
+      await agent.storage.append(createEntry("ishiki.compact", { summary, lastEntryId: dropped[dropped.length - 1].id }));
+      this.over = false;
+    } finally {
+      if (this.abort === abort) this.abort = undefined;
     }
-
-    const parts = [`<frame ${frameHead(frameFocus, formatClock(now))}>`];
-
-    // Focus segment first (always present, even if empty).
-    const focus = segments.find((segment) => sceneKey(segment.scene) === here);
-    parts.push(`<history sid="${frameFocus.sid}" channel="${frameFocus.channelId}" focus>`);
-    if (focus && focus.dropped > 0) parts.push(`<!-- 更早 ${focus.dropped} 条已折叠 -->`);
-    parts.push(...(focus?.lines ?? []));
-    parts.push("</history>");
-
-    // Other scenes sorted by recency.
-    const rest = segments.filter((segment) => sceneKey(segment.scene) !== here).sort((a, b) => b.latest - a.latest);
-    for (const segment of rest) {
-      parts.push(`<history sid="${segment.scene.sid}" channel="${segment.scene.channelId}">`);
-      if (segment.dropped > 0) parts.push(`<!-- 更早 ${segment.dropped} 条已折叠 -->`);
-      parts.push(...segment.lines);
-      parts.push("</history>");
-    }
-
-    parts.push("</frame>");
-    return parts.join("\n");
   }
 
-  /**
-   * The whole model-visible projection, in the one hook that sees entries. Everything before the last checkpoint
-   * already lives inside the frame text, so this walks the current generation only and its cost tracks the
-   * generation, not the history. Output is native messages: no render types, no second hook to carry a cursor.
-   */
-  project(entries: readonly AgentEntry[]): readonly AgentEntry[] {
-    const checkpoint = findLastEntry(entries, "ishiki.checkpoint");
-    const workspace = sliceWorkspace(entries);
-    const out: AgentEntry[] = [];
+  /** 让模型把新记录并进既有摘要。失败返回 undefined。 */
+  private async summarize(previous: string | undefined, dropped: ReadonlyArray<AgentEntry<"message">>, signal: AbortSignal): Promise<string | undefined> {
+    const agent = this.agent;
+    if (agent === undefined) return undefined;
 
-    if (checkpoint !== undefined) {
-      out.push(createEntry("message", createUserMessage(checkpoint.data.text), { id: checkpoint.id, timestamp: checkpoint.timestamp }));
-    } else {
-      // A generation that never had a frame still has a position: the element a frame opens with, derived from
-      // the first entry and the configured focus, so every step of the turn renders the same string.
-      const first = workspace[0];
-      if (first !== undefined) {
-        const head = `<frame ${frameHead(this.options.profile.initialFocus, formatClock(first.timestamp))}/>`;
-        out.push(createEntry("message", createUserMessage(head), { id: `frame:${first.id}`, timestamp: first.timestamp }));
-      }
+    const material = dropped.map((entry) => textOf(entry.data)).join("\n");
+    const prompt = [
+      "将新增记录并入既有摘要，输出更新后的摘要。",
+      "保留后续仍需的信息：事实、约定、关系与称谓的变化、未完成事项、对方偏好。",
+      "舍弃：寒暄、重复内容、已了结且无后续影响的过程细节。",
+      "以第一人称输出摘要正文，不要标题、前言或说明。",
+      "",
+      "既有摘要：",
+      previous ?? "（空）",
+      "",
+      "新增记录：",
+      material,
+    ].join("\n");
+
+    try {
+      const generated = await generateText({ model: agent.getModel(), prompt, abortSignal: signal });
+      const summary = generated.text.trim();
+      return summary.length === 0 ? undefined : summary;
+    } catch (error) {
+      this.logger?.warn(`compaction failed, oldest segment dropped: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
     }
+  }
 
-    // The generation's own scene. A switch is atomic and starts a new generation, so one generation reads
-    // exactly one scene and never reinterprets what it has already rendered.
-    const startFocus = checkpoint === undefined ? this.options.profile.initialFocus : checkpoint.data.frameFocus;
-    const here = sceneKey(startFocus);
-
-    // The slot sits between the frame and the workspace: re-derived on every step, never stored and never
-    // folded. The clock is the one thing the projection reads from outside the stream, quantized to a daypart
-    // so its bytes move at most four times a day. Pinned to the entry that opened the segment.
-    const anchor = checkpoint ?? workspace[0];
-    if (anchor !== undefined) {
-      const now = new Date();
-      const hour = now.getHours();
-      const daypart = hour < 6 ? "凌晨" : hour < 12 ? "上午" : hour < 18 ? "下午" : "晚上";
-      const slot = ["<state>", `当前时间:${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${daypart}`, "</state>"].join("\n");
-      out.push(createEntry("message", createUserMessage(slot), { id: `slot:${anchor.id}`, timestamp: workspace.at(-1)?.timestamp ?? anchor.timestamp }));
-    }
-
-    // Lines from the open window are bare, so the first one after anything else opens with a header.
-    let inWindow = false;
-    for (const entry of workspace) {
-      if (entry.type !== "message") continue;
-      const message = entry.data;
-      // Assistant and tool entries pass through untouched: the mind's own behavior is a real message here.
-      if (message.role !== "custom") {
-        out.push(entry);
-        inWindow = false;
-        continue;
-      }
-      // What the mind said is marked by the tool call that sent it, so its own message is projected into a frame
-      // and never read back here as somebody else's line in the workspace.
-      if (message.type === "ishiki.self.message") continue;
-      // Anything that did not happen in the generation's own scene is not read at all.
-      const resolved = readEvent(message);
-      if (!resolved || sceneKey(resolved.scene) !== here) continue;
-      // Fact: bare line, with a header on the first one after anything else.
-      const text = !inWindow ? `<focus sid="${resolved.scene.sid}" channel="${resolved.scene.channelId}">\n${resolved.line}` : resolved.line;
-      inWindow = true;
-      out.push(createEntry("message", createUserMessage(text), { id: message.id, timestamp: message.timestamp }));
-    }
-    return out;
+  /** 把摘要作为首条 user 消息插入可见条目之前。 */
+  private prepend(lead: string, tail: readonly AgentEntry[]): readonly AgentEntry[] {
+    if (lead.length === 0) return tail;
+    return [createEntry("message", createUserMessage(lead)), ...tail];
   }
 }

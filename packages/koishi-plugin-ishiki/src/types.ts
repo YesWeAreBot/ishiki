@@ -1,85 +1,56 @@
-import { AgentCustomMessage, CustomMessage } from "@yesimagent/core";
+import type { AgentCustomMessage, CustomMessages } from "@yesimagent/core";
 
 declare module "@yesimagent/core" {
   interface AgentCustomMessage {
-    "ishiki.message.created": CustomMessage<"ishiki.message.created", IshikiMessageCreated>;
-    "ishiki.message.deleted": CustomMessage<"ishiki.message.deleted", IshikiMessageDeleted>;
-    "ishiki.self.message": CustomMessage<"ishiki.self.message", IshikiMessageCreated>;
-    "ishiki.notification": CustomMessage<"ishiki.notification", IshikiNotification>;
-
-    // OneBot Events
-    "onebot.guild.member-added": CustomMessage<"onebot.guild.member-added", OneBotGuildMemberAdded>;
-  }
-
-  interface AgentCustomEntry {
-    "ishiki.checkpoint": IshikiCheckpointEntry;
+    "ishiki.message.created": IshikiMessageCreated;
+    "ishiki.message.deleted": IshikiMessageDeleted;
+    "ishiki.inner_stimulus": IshikiInnerStimulus;
   }
 }
 
-/**
- * A declared event in a profile's stream. `AgentCustomMessage` is open and its bare `custom` member carries no
- * payload at all, so it is not one of these: an undeclared type is the renderer's fail-closed business, not a fact.
- */
-export type IshikiEvent = Exclude<AgentCustomMessage[keyof AgentCustomMessage], { type: "custom" }>;
+export type IshikiEvent = CustomMessages<Extract<keyof AgentCustomMessage, `ishiki.${string}`>>;
 
 /**
- * Ishiki Event Types
+ * 事件的落址：一个 bot 账号下的一个频道。`(platform:selfId, channelId)` 是唯一标识，
+ * 场景容器只按这一对寻址，不再携带频道形态。
  */
 export interface IshikiEventBase {
   timestamp: number;
-  /** Body address, `platform:selfId`. Addressing and matching both read it; nothing ever splits it. */
-  sid: string;
-  /** Channel id, whose meaning is scoped to the body named by `sid`. */
-  channelId: string;
   platform: string;
   selfId: string;
+  channelId: string;
 }
 
 export interface IshikiMessageCreated extends IshikiEventBase {
-  content: string;
-  user: { id: string; name?: string };
-  direct?: boolean;
-  guildId?: string;
   messageId: string;
-  quote?: { id: string; content?: string; user?: { id: string; name?: string }; channel?: { id: string }; guild?: { id: string } };
-}
-
-export interface IshikiNotification extends IshikiEventBase {
-  /** Which of the profile's attention rules made this worth interrupting for. */
-  reason: string;
-  /** The events that contributed. Each renders through its own type's rule. */
-  sources: IshikiEvent[];
+  content: string;
+  /** 这条消息来自私聊。事件的瞬时属性，不进场景容器：唤醒判定读它，场景本身不关心。 */
+  isDirect: boolean;
+  user: { id: string; name?: string };
+  guildId?: string;
+  quote?: {
+    id: string;
+    content?: string;
+    user?: { id: string; name?: string };
+    channel?: { id: string };
+    guild?: { id: string };
+  };
 }
 
 export interface IshikiMessageDeleted extends IshikiEventBase {
   messageId: string;
-  channelId: string;
   operatorId?: string;
 }
 
 /**
- * OneBot Event Types
+ * 由一个频道实例投递给另一个频道实例的刺激。它写入目标自身的事件流，
+ * 目标在下一次唤醒时将其作为本地事件读取，并自行决定是否发起轮次。
  */
-export interface OneBotGuildMemberAdded extends IshikiEventBase {
-  channelId: string;
-  guildId: string;
-  userId: string;
-  operatorId?: string;
-}
-
-export interface OneBotNoticePoke extends IshikiEventBase {
-  channelId: string;
-  guildId: string;
-  userId: string;
-  targetId: string;
-}
-
-/**
- * The generation boundary: the frame is materialized here (its text plus the focus the generation started
- * in), so every later step reuses one stable string instead of re-rendering the previous generation.
- */
-export interface IshikiCheckpointEntry {
-  frameFocus: { sid: string; channelId: string };
-  text: string;
-  createdAt: number;
+export interface IshikiInnerStimulus extends IshikiEventBase {
+  /** 来源频道实例当时的地址；由宿主插件直接投递时缺席。 */
+  source?: { platform: string; selfId: string; channelId: string };
+  /** 投递原因，供目标实例理解上下文。 */
+  reason: string;
+  /** 投递内容。 */
+  content: string;
 }

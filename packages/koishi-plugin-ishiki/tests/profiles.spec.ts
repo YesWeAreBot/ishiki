@@ -1,151 +1,323 @@
 import { describe, expect, it } from "vitest";
 
-import { isChannelAllowed, matchesChannelRules, parseProfileConfig, resolveFocus, type Profile, validateProfileConfig } from "../src/profiles.js";
+import {
+  DEFAULT_CONTEXT_SETTINGS,
+  isSceneAllowed,
+  matchingRuleByAddress,
+  matchingRule,
+  parseProfileFile,
+  resolveScenePolicy,
+  sceneDirectoryName,
+  validateProfiles,
+  type Profile,
+  type Scene,
+} from "../src/profiles.js";
 
-function makeProfile(id: string, channels: string[], initialChannel = "group:1"): Profile {
-  return {
-    id,
-    dataPath: `data/ishiki/${id}`,
-    model: "test:model",
-    name: id,
-    initialFocus: { sid: "onebot:1", channelId: initialChannel },
-    allowedChannels: [{ sid: "onebot:1", channels }],
-    keywords: [],
-    attention: { mentions: [], quoteSelf: false },
-    context: {
-      workspaceTokenLimit: 8192,
-      charsPerToken: 4,
-      idleMs: 1_800_000,
-      historyEntries: 40,
-      sceneWindowMs: 24 * 60 * 60 * 1000,
-    },
-    innerThought: false,
-  };
+const SOURCE = `
+id: neko
+name: 猫猫
+model: test:model
+systemPrompt: |
+  你是猫猫。
+sid:
+  - onebot:1
+  - discord:9
+defaults:
+  promptExtension: 全局补充
+  context:
+    maxMessages: 40
+    evictMs: 120000
+  wakeup:
+    atMe: true
+    direct: true
+    keywords: ["猫猫"]
+presets:
+  public_group:
+    promptExtension: 公开群聊，保持克制。
+    context:
+      maxMessages: 50
+    wakeup:
+      quoteSelf: true
+    disabledTools: ["run_bash"]
+  direct_chat:
+    promptExtension: 私聊，温柔一点。
+    wakeup:
+      keywords: ["neko"]
+channels:
+  - match:
+      type: direct
+    preset: direct_chat
+  - match:
+      sid: onebot:1
+      type: group
+      channelId: ["*", "!12345678"]
+    preset: public_group
+  - match:
+      sid: onebot:1
+      type: group
+      channelId: "12345678"
+    preset: public_group
+    promptExtension: 这是研发群，别用口癖。
+    disabledTools: []
+`;
+
+function parse(source: string, catalog = "im-neko"): Profile {
+  return parseProfileFile(source, { catalog, profilePath: `/data/ishiki/profiles/${catalog}/profile.yaml` });
 }
 
-describe("channel rules", () => {
-  it("matches exact ids and prefix wildcards with exclusions", () => {
-    expect(matchesChannelRules(["*", "!private:*"], "group:1")).toBe(true);
-    expect(matchesChannelRules(["*", "!private:*"], "private:1")).toBe(false);
-    expect(matchesChannelRules(["private:*", "!private:10001"], "private:10000")).toBe(true);
-    expect(matchesChannelRules(["private:*", "!private:10001"], "private:10001")).toBe(false);
-    expect(matchesChannelRules(["*", "!12345678"], "12345679")).toBe(true);
-    expect(matchesChannelRules(["*", "!12345678"], "12345678")).toBe(false);
-    expect(matchesChannelRules(["*"], "@user-id")).toBe(true);
+function scene(sid: string, channelId: string, sceneType: Scene["sceneType"] = "group"): Scene {
+  return { sid, channelId, platform: sid.slice(0, sid.indexOf(":")), sceneType };
+}
+
+/** A minimal profile whose one rule covers one channel, plus whatever block the test wants to vary. */
+function minimal(block: string, options: { sid?: string; channel?: string } = {}): string {
+  return `
+id: minimal
+model: test:model
+systemPrompt: hi
+sid: ["${options.sid ?? "onebot:1"}"]
+${block}
+presets:
+  everything: {}
+channels:
+  - match: { channelId: "${options.channel ?? "group:1"}" }
+    preset: everything
+`;
+}
+
+describe("profile file", () => {
+  it("parses the scene rules and applies the schema defaults", () => {
+    const profile = parse(SOURCE);
+
+    expect(profile.id).toBe("neko");
+    expect(profile.catalog).toBe("im-neko");
+    expect(profile.sids).toEqual(["onebot:1", "discord:9"]);
+    expect(profile.channelRules).toHaveLength(3);
+    expect(profile.channelRules[0].match.type).toBe("direct");
+    expect(profile.innerThought).toBe(false);
+    expect(profile.typing.charPerSecond).toBe(5);
+    expect(profile.presets.public_group.disabledTools).toEqual(["run_bash"]);
   });
 
-  it("allows an exclusion-only declaration to mean all except the exclusions", () => {
-    expect(matchesChannelRules(["!private:*"], "group:1")).toBe(true);
-    expect(matchesChannelRules(["!private:*"], "private:1")).toBe(false);
+  it("reads a rule without a match block as the catch-all rule", () => {
+    const profile = parse(`
+id: mini
+model: test:model
+systemPrompt: hi
+sid: ["onebot:1"]
+presets:
+  everything: {}
+channels:
+  - preset: everything
+`);
+
+    expect(profile.channelRules[0].match).toEqual({});
+    expect(isSceneAllowed(profile, scene("onebot:1", "group:1"))).toBe(true);
   });
 
-  it("rejects unsupported rule syntax", () => {
-    expect(() => matchesChannelRules(["group*1"], "group1")).toThrow(/only allowed once at the end/);
-    expect(() => matchesChannelRules(["group!1"], "group1")).toThrow(/only allowed at the beginning/);
-    expect(() => matchesChannelRules(["!"], "group1")).toThrow(/must contain/);
+  it("refuses a rule that names no preset", () => {
+    expect(() =>
+      parse(`
+id: mini
+model: test:model
+systemPrompt: hi
+sid: ["onebot:1"]
+presets:
+  everything: {}
+channels:
+  - match: { channelId: "group:1" }
+`),
+    ).toThrow(/must name its preset/);
+  });
+});
+
+describe("scene matching", () => {
+  const profile = parse(SOURCE);
+
+  it("matches on type, sid, platform and channel with wildcards and exclusions", () => {
+    // The rule for one channel carries its own extension and clears the preset's tool cut.
+    expect(matchingRule(profile, scene("onebot:1", "12345678"))?.promptExtension).toContain("研发群");
+    expect(matchingRule(profile, scene("onebot:1", "12345678"))?.disabledTools).toEqual([]);
+    // The wildcard rule owns every other group and adds nothing of its own.
+    expect(matchingRule(profile, scene("onebot:1", "group:1"))?.preset).toBe("public_group");
+    expect(matchingRule(profile, scene("onebot:1", "group:1"))?.promptExtension).toBeUndefined();
+    expect(matchingRule(profile, scene("onebot:1", "group:2"))?.preset).toBe("public_group");
+    expect(matchingRule(profile, scene("discord:9", "private:1", "direct"))?.preset).toBe("direct_chat");
   });
 
-  it("uses channel id as the only matching value", () => {
-    const profile = makeProfile("boki", ["*"]);
-    expect(isChannelAllowed(profile, "onebot:1", "@user-id")).toBe(true);
-    expect(isChannelAllowed(profile, "onebot:1", "private:1")).toBe(true);
-    expect(isChannelAllowed(profile, "onebot:2", "group:1")).toBe(false);
+  it("leaves a scene another body owns unclaimed", () => {
+    expect(isSceneAllowed(profile, scene("discord:9", "group:1"))).toBe(false);
+    expect(isSceneAllowed(profile, scene("onebot:1", "group:1", "guild"))).toBe(false);
+  });
+});
+
+describe("scene policy", () => {
+  const profile = parse(SOURCE);
+
+  it("layers defaults, preset and rule: prompt extensions add up, numbers override", () => {
+    const policy = resolveScenePolicy(profile, scene("onebot:1", "12345678"));
+
+    expect(policy.promptExtension).toBe("全局补充\n\n公开群聊，保持克制。\n\n这是研发群，别用口癖。");
+    expect(policy.context.maxMessages).toBe(50);
+    expect(policy.context.evictMs).toBe(120000);
+    // The rule's own empty list means "no tool is cut here", not "inherit the preset's list".
+    expect(policy.disabledTools).toEqual([]);
+  });
+
+  it("keeps the preset's tool list when the rule does not mention one", () => {
+    const policy = resolveScenePolicy(profile, scene("onebot:1", "group:2"));
+
+    expect(policy.disabledTools).toEqual(["run_bash"]);
+    expect(policy.context.maxMessages).toBe(50);
+  });
+
+  it("layers the wakeup parameters over the profile defaults", () => {
+    const group = resolveScenePolicy(profile, scene("onebot:1", "group:2"));
+    expect(group.wakeup).toEqual({ atMe: true, direct: true, quoteSelf: true, keywords: ["猫猫"] });
+
+    // The preset's keyword list replaces the profile's, and the untouched fields keep their earlier value.
+    const direct = resolveScenePolicy(profile, scene("discord:9", "private:1", "direct"));
+    expect(direct.wakeup).toEqual({ atMe: true, direct: true, quoteSelf: false, keywords: ["neko"] });
+    expect(direct.context.maxMessages).toBe(DEFAULT_CONTEXT_SETTINGS.maxMessages);
   });
 });
 
 describe("profile validation", () => {
-  it("parses yaml and applies schema defaults before semantic validation", () => {
-    const config = parseProfileConfig(`
-profiles:
-  - id: boki
-    dataPath: data/ishiki/boki
-    model: test:model
-    initialFocus:
-      sid: "onebot:1"
-      channelId: group:1
-    allowedChannels:
-      - sid: "onebot:1"
-        channels:
-          - "*"
-          - "!private:*"
+  it("lets the earlier rule win when two rules could both match", () => {
+    expect(() =>
+      parse(`
+id: overlap
+model: test:model
+systemPrompt: hi
+sid: ["onebot:1"]
+presets:
+  everything: {}
+channels:
+  - match: { channelId: "*" }
+    preset: everything
+  - match: { channelId: "group:1" }
+    preset: everything
+`),
+    ).not.toThrow();
+    const profile = parse(`
+id: overlap
+model: test:model
+systemPrompt: hi
+sid: ["onebot:1"]
+presets:
+  wide: {}
+  narrow:
+    promptExtension: 窄规则
+channels:
+  - match: { channelId: "*" }
+    preset: wide
+  - match: { channelId: "group:1" }
+    preset: narrow
 `);
-
-    expect(config.profiles).toHaveLength(1);
-    expect(config.profiles[0].keywords).toEqual([]);
-    expect(config.profiles[0].context.historyEntries).toBe(40);
+    expect(matchingRule(profile, scene("onebot:1", "group:1"))?.preset).toBe("wide");
   });
 
-  it("requires the initial focus to be allowed", () => {
-    expect(() => validateProfileConfig({ profiles: [makeProfile("boki", ["group:1"], "private:1")] })).toThrow(/initial focus/);
+  it("refuses a rule that names a preset the profile never declares", () => {
+    expect(() =>
+      parse(`
+id: dangling
+model: test:model
+systemPrompt: hi
+sid: ["onebot:1"]
+presets:
+  everything: {}
+channels:
+  - match: { channelId: "group:1" }
+    preset: missing
+`),
+    ).toThrow(/unknown preset/);
   });
 
-  it("rejects duplicate profile ids and duplicate sids within one profile", () => {
-    const first = makeProfile("boki", ["group:1"]);
-    expect(() => validateProfileConfig({ profiles: [first, { ...first }] })).toThrow(/duplicated/);
-
-    const duplicateSid = { ...first, allowedChannels: [...first.allowedChannels, { sid: "onebot:1", channels: ["group:2"] }] };
-    expect(() => validateProfileConfig({ profiles: [duplicateSid] })).toThrow(/more than once/);
+  it("refuses a rule that names a sid the profile never declared", () => {
+    expect(() =>
+      parse(`
+id: stranger
+model: test:model
+systemPrompt: hi
+sid: ["onebot:1"]
+presets:
+  everything: {}
+channels:
+  - match: { sid: "onebot:2", channelId: "group:1" }
+    preset: everything
+`),
+    ).toThrow(/unknown sid/);
   });
 
-  it("rejects overlapping channel sets for the same sid across profiles", () => {
-    const group = makeProfile("group", ["*", "!private:*"]);
-    const privateChat = makeProfile("private", ["private:*"], "private:1");
-    expect(() => validateProfileConfig({ profiles: [group, privateChat] })).not.toThrow();
-
-    const overlap = makeProfile("overlap", ["group:*"]);
-    expect(() => validateProfileConfig({ profiles: [group, overlap] })).toThrow(/overlap/);
+  it("refuses a parameter this build reads when it is not the type it reads", () => {
+    expect(() => parse(minimal(`defaults:\n  context:\n      maxMessages: "many"`))).toThrow(/expected a number/);
   });
 
-  it("recognizes fully excluded prefixes as disjoint", () => {
-    const allExceptPrivate = makeProfile("all-except-private", ["*", "!private:*"]);
-    const privateChat = makeProfile("private", ["private:*"], "private:1");
-    expect(() => validateProfileConfig({ profiles: [allExceptPrivate, privateChat] })).not.toThrow();
+  it("refuses an engine name where a setting belongs", () => {
+    expect(() => parse(minimal(`defaults:\n  wakeup:\n    engine: standard-rule`))).toThrow(/unknown key "engine"/);
   });
 
-  it("considers exclusions when checking cross-profile overlap", () => {
-    const exceptOne = makeProfile("except-one", ["private:*", "!private:1"], "private:2");
-    const one = makeProfile("one", ["private:1"], "private:1");
-    const two = makeProfile("two", ["private:2"], "private:2");
+  it("refuses malformed channel rules and sids", () => {
+    expect(() => parse(minimal("", { channel: "group*1" }))).toThrow(/only allowed once at the end/);
+    expect(() => parse(minimal("", { channel: "group!1" }))).toThrow(/only allowed at the beginning/);
+    expect(() => parse(minimal("", { sid: "onebot" }))).toThrow(/invalid sid/);
+  });
 
-    expect(() => validateProfileConfig({ profiles: [exceptOne, one] })).not.toThrow();
-    expect(() => validateProfileConfig({ profiles: [exceptOne, two] })).toThrow(/overlap/);
+  it("refuses two profiles that drive the same body, and allows two personalities in one channel", () => {
+    const mine = parse(SOURCE, "im-neko");
+    const sameBody: Profile = { ...parse(SOURCE, "im-copy"), id: "neko-copy" };
+    expect(() => validateProfiles([mine, sameBody])).toThrow(/both claim sid/);
+
+    // Another personality in the same channels, speaking through its own body.
+    const other = parse(
+      `
+id: neko-other
+model: test:model
+systemPrompt: hi
+sid: ["onebot:7"]
+presets:
+  everything: {}
+channels:
+  - match: { channelId: "*" }
+    preset: everything
+`,
+      "im-other",
+    );
+    expect(() => validateProfiles([mine, other])).not.toThrow();
+
+    const duplicate: Profile = { ...parse(SOURCE, "im-again") };
+    expect(() => validateProfiles([mine, duplicate])).toThrow(/duplicated/);
   });
 });
 
-describe("focus resolution", () => {
-  const profile = makeProfile("boki", ["group:1", "group:2"]);
-  const focus = { sid: "onebot:1", channelId: "group:1" };
+describe("address matching", () => {
+  const addressed = parse(`
+id: addressed
+model: test:model
+systemPrompt: hi
+sid: ["onebot:1"]
+presets:
+  group: {}
+  direct: {}
+channels:
+  - match: { channelId: "private:*" }
+    preset: direct
+  - match: { sid: "onebot:1", channelId: "group:*" }
+    preset: group
+`);
 
-  it("defaults the body to the current focus", () => {
-    expect(resolveFocus(profile, focus, { channel: "group:2" })).toEqual({ sid: "onebot:1", channelId: "group:2" });
+  it("answers an address whose scene type nobody knows", () => {
+    // Only `sid` and `channel` are given: a scene type cannot be read out of an address, so it is not consulted.
+    expect(matchingRuleByAddress(addressed, { sid: "onebot:1", channelId: "private:7", platform: "onebot" })?.preset).toBe("direct");
+    expect(matchingRuleByAddress(addressed, { sid: "onebot:1", channelId: "group:5", platform: "onebot" })?.preset).toBe("group");
+    expect(matchingRuleByAddress(addressed, { sid: "onebot:2", channelId: "group:5", platform: "onebot" })).toBeUndefined();
   });
+});
 
-  it("defaults the whole target to the open window", () => {
-    expect(resolveFocus(profile, focus, {})).toEqual(focus);
-    expect(resolveFocus(profile, focus, { sid: "onebot:1" })).toEqual(focus);
-  });
-
-  it("rejects a body the profile does not own", () => {
-    const result = resolveFocus(profile, focus, { sid: "onebot:9", channel: "group:1" });
-    expect("error" in result && result.error.name).toBe("UnknownBody");
-  });
-
-  it("rejects a channel outside the declaration of that body", () => {
-    const result = resolveFocus(profile, focus, { channel: "group:3" });
-    expect("error" in result && result.error.name).toBe("TargetNotAllowed");
-    expect("error" in result && result.error.message).toContain("group:1, group:2");
-  });
-
-  it("refuses another body without a channel", () => {
-    const twoBodies: Profile = { ...profile, allowedChannels: [...profile.allowedChannels, { sid: "onebot:2", channels: ["group:3"] }] };
-
-    const result = resolveFocus(twoBodies, focus, { sid: "onebot:2" });
-    expect("error" in result && result.error.name).toBe("InvalidInput");
-    expect(resolveFocus(twoBodies, focus, { sid: "onebot:2", channel: "group:3" })).toEqual({ sid: "onebot:2", channelId: "group:3" });
-  });
-
-  it("rejects an empty channel", () => {
-    const result = resolveFocus(profile, focus, { channel: "" });
-    expect("error" in result && result.error.name).toBe("InvalidInput");
+describe("scene directory names", () => {
+  it("keeps safe characters and folds every other run into one dash", () => {
+    expect(sceneDirectoryName("onebot:123:group:456")).toBe("onebot-123-group-456");
+    expect(sceneDirectoryName("onebot:1/group:2")).toBe("onebot-1-group-2");
+    expect(sceneDirectoryName("sandbox:abcd.v1_koishi:private:1")).toBe("sandbox-abcd.v1_koishi-private-1");
   });
 });
