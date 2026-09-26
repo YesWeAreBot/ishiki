@@ -1,23 +1,7 @@
 import { h } from "koishi";
 
-import type { IshikiEvent, IshikiMessageCreated } from "./types.js";
-
-export interface WakeupEngines {
-  standard: StandardWakeupConfig;
-}
-
-export type WakeupDecision = "trigger" | "wait";
-
-export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupEngines> {
-  public readonly name: K;
-  public readonly config: WakeupEngines[K];
-
-  constructor(name: K, config: WakeupEngines[K]) {
-    this.name = name;
-    this.config = config;
-  }
-  abstract decide(event: IshikiEvent): WakeupDecision;
-}
+import type { IshikiEvent, IshikiMessageCreated } from "../types.js";
+import { WakeupEngine, registerWakeupEngine, type WakeupDecision } from "./engine.js";
 
 const DEFAULT_WAKEUP: StandardWakeupConfig = { direct: true, atSelf: true, quoteSelf: true, keywords: [] };
 
@@ -55,3 +39,11 @@ export class StandardWakeupEngine extends WakeupEngine<"standard"> {
     }
   }
 }
+
+declare module "./engine.js" {
+  interface WakeupEngines {
+    standard: StandardWakeupConfig;
+  }
+}
+
+registerWakeupEngine("standard", (config) => new StandardWakeupEngine(config));

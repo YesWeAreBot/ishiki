@@ -15,7 +15,7 @@ import {
 import type { Logger } from "koishi";
 import { describe, expect, it } from "vitest";
 
-import { StandardContextEngine, collapse } from "../src/context-engine.js";
+import { StandardContextEngine, collapse } from "../src/context/index.js";
 
 const logger = { warn: () => undefined } as unknown as Logger;
 const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
