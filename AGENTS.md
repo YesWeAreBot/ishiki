@@ -1,0 +1,2 @@
+- Use `bun run test` for test
+- Use `bun run build` for type-check & build

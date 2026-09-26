@@ -1,8 +1,8 @@
 import { Schema } from "koishi";
 
-import { ContextEngines } from "./context-engine.js";
-import { ToolcallEngines } from "./toolcall/config.js";
-import { WakeupEngines } from "./wakeup-engine.js";
+import { ContextEngines } from "./context/index.js";
+import { ToolcallEngines } from "./toolcall/index.js";
+import { WakeupEngines } from "./wakeup/index.js";
 
 /**
  * 按 `engine` 判别的联合类型，同名键下为该引擎的参数（可省略，引擎自行填充默认值）。
@@ -35,8 +35,8 @@ export type ToolcallConfig = EngineConfig<ToolcallEngines>;
 
 export const ToolcallConfig: Schema<ToolcallConfig> = Schema.intersect([
   Schema.object({
-    engine: Schema.string().default("native").description("工具调用方式：native 用模型原生 function call，json 由解析引擎从纯文本输出提取"),
-  }),
+    engine: Schema.string(),
+  }).required(),
   Schema.union([Schema.any()]),
 ]);
 
@@ -55,22 +55,15 @@ export interface TypingConfig {
   maxDelay: number;
 }
 
-/** 未配置时的打字节奏；Schema 默认值与展开时的兜底都取自这里。 */
-export const DEFAULT_TYPING: TypingConfig = { baseDelay: 500, charPerSecond: 5, minDelay: 800, maxDelay: 4000 };
-
-export const TypingConfig: Schema<TypingConfig> = Schema.object({
-  baseDelay: Schema.number().default(DEFAULT_TYPING.baseDelay).description("基础延迟（毫秒）"),
-  charPerSecond: Schema.number().default(DEFAULT_TYPING.charPerSecond).description("模拟打字速度（字符/秒）"),
-  minDelay: Schema.number().default(DEFAULT_TYPING.minDelay).description("单条延迟下限（毫秒）"),
-  maxDelay: Schema.number().default(DEFAULT_TYPING.maxDelay).description("单条延迟上限（毫秒）"),
-});
-
-/** 覆写形状：字段与 {@link TypingConfig} 相同但不带默认值，未写的字段留给 preset。 */
-export const TypingOverride: Schema<Partial<TypingConfig>> = Schema.object({
-  baseDelay: Schema.number().description("基础延迟（毫秒）"),
+/**
+ * 唯一一份声明：preset 与 scene 共用它。
+ * 不给默认值——被它补上的值与用户写的值在合并层形状相同、无从分辨，覆写语义会因此失效；缺省值在 {@link FALLBACK}。
+ */
+export const TypingConfig: Schema<Partial<TypingConfig>> = Schema.object({
+  baseDelay: Schema.number().description("每条消息的基础延迟（毫秒）"),
   charPerSecond: Schema.number().description("模拟打字速度（字符/秒）"),
-  minDelay: Schema.number().description("单条延迟下限（毫秒）"),
-  maxDelay: Schema.number().description("单条延迟上限（毫秒）"),
+  minDelay: Schema.number().description("单条消息延迟下限（毫秒）"),
+  maxDelay: Schema.number().description("单条消息延迟上限（毫秒）"),
 });
 
 /**
@@ -126,13 +119,13 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
   description: Schema.string(),
   sid: Schema.string().required(),
   preset: Schema.string().required(),
-  whitelist: Schema.array(Schema.string()).default([]),
-  blacklist: Schema.array(Schema.string()).default([]),
+  whitelist: Schema.array(Schema.string()),
+  blacklist: Schema.array(Schema.string()),
   model: Schema.string(),
   context: ContextConfig,
   wakeup: WakeupConfig,
   toolcall: ToolcallConfig,
-  typing: TypingOverride,
+  typing: TypingConfig,
 });
 
 /**
@@ -179,7 +172,7 @@ export interface PresetConfig {
   context: ContextConfig;
   wakeup: WakeupConfig;
   toolcall?: ToolcallConfig;
-  typing: TypingConfig;
+  typing?: Partial<TypingConfig>;
 }
 
 export const PresetConfig: Schema<PresetConfig> = Schema.object({
@@ -257,9 +250,6 @@ export interface SceneSpec {
   blacklist: string[];
 }
 
-const STANDARD = { engine: "standard" } as const;
-const NATIVE_TOOLCALL: ToolcallConfig = { engine: "native" };
-
 /** 目录名安全化：生成由 sid 与 channelId 拼成的单段文件名时使用。 */
 export function sceneDirectoryName(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, "_");
@@ -275,40 +265,63 @@ export function claimsChannel(spec: Pick<SceneSpec, "whitelist" | "blacklist">, 
   return matchesChannel(spec.whitelist, channelId) && !matchesChannel(spec.blacklist, channelId);
 }
 
-/** Scene 对 Preset 的覆写：引擎名相同时合并参数，不同时整体替换。 */
-function mergeEngine<T extends { engine: string; [k: string]: unknown }>(preset: T, scene?: Partial<T>): T {
-  if (!scene?.engine) return { ...preset };
-  if (scene.engine !== preset.engine) return { ...scene } as T;
-  const key = preset.engine;
-  const presetParams = preset[key] as Record<string, unknown> | undefined;
-  const sceneParams = scene[key] as Record<string, unknown> | undefined;
-  return { ...preset, ...scene, [key]: { ...presetParams, ...sceneParams } } as T;
+/** 普通对象：合并只在它们之间递归，数组与标量一律整体替换。 */
+function isPlain(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/**
+ * 按层合并配置：后一层覆盖前一层，未写的键沿用前一层。
+ * `undefined` 与不含键的对象都算「未写」——Schema 会为空缺的块物化出空对象，这里不必特判。
+ * 引擎参数按引擎名分键，换引擎后旧引擎的参数会留在结果里；消费端只读 `config[config.engine]`，那些键不会被读到。
+ */
+function merge<T>(base: T, ...layers: readonly unknown[]): T {
+  const overlay = (current: unknown, override: unknown): unknown => {
+    if (override === undefined) return current;
+    if (!isPlain(current) || !isPlain(override)) return override;
+    const merged: Record<string, unknown> = { ...current };
+    for (const [key, value] of Object.entries(override)) {
+      if (value === undefined) continue;
+      merged[key] = overlay(merged[key], value);
+    }
+    return merged;
+  };
+  // 入参已过 Schema 校验，故按 base 的形状断言：这一层只管结构，不管取值合法性。
+  return layers.reduce<unknown>(overlay, base) as T;
+}
+
+/**
+ * Spec 的缺省层：三层合并的最底层，也是配置面唯一的默认值来源。
+ * Schema 里一律不留 default——被它补上的值与用户写的值在合并层形状相同，覆写语义会因此失效。
+ */
+const FALLBACK: Pick<SceneSpec, "context" | "wakeup" | "toolcall" | "typing" | "whitelist" | "blacklist"> = {
+  context: { engine: "standard" },
+  wakeup: { engine: "standard" },
+  toolcall: { engine: "native" },
+  typing: { baseDelay: 500, charPerSecond: 5, minDelay: 800, maxDelay: 4000 },
+  whitelist: [],
+  blacklist: [],
+};
 
 /** 将 Preset 展开到单个 Scene；此处校验悬空 preset 引用与缺失的 sid。`id` 是调用方定好的 Profile 标识。 */
 export function resolveScene(profile: ProfileConfig, name: string, id: string): SceneSpec {
   const scene = profile.scenes[name];
   if (!scene) throw new Error(`Profile "${id}" has no scene "${name}"`);
 
-  const preset = profile.presets[scene.preset];
-  if (!preset) throw new Error(`Scene "${name}" of profile "${id}" references unknown preset "${scene.preset}"`);
+  // sid 与 preset 只用于定位，不参与合并；其余字段按层展开。
+  const { sid: rawSid, preset: presetName, ...overrides } = scene;
+  const preset = profile.presets[presetName];
+  if (!preset) throw new Error(`Scene "${name}" of profile "${id}" references unknown preset "${presetName}"`);
 
-  const sid = scene.sid?.trim();
+  const sid = rawSid?.trim();
   if (!sid) throw new Error(`Scene "${name}" of profile "${id}" needs a "sid"`);
 
   return {
     profile: id,
     name,
     sid,
-    description: scene.description || preset.description,
-    model: scene.model || preset.model,
-    context: mergeEngine(preset.context ?? STANDARD, scene.context),
-    wakeup: mergeEngine(preset.wakeup ?? STANDARD, scene.wakeup),
-    toolcall: mergeEngine(preset.toolcall ?? NATIVE_TOOLCALL, scene.toolcall),
-    // 手写的配置未必过 Schema，所以这里再兜一次默认值，让 spec 的 typing 始终完整。
-    typing: { ...DEFAULT_TYPING, ...preset.typing, ...scene.typing },
-    whitelist: scene.whitelist ?? [],
-    blacklist: scene.blacklist ?? [],
+    // 三层：内置缺省 ← preset ← scene。model 由 PresetConfig 保证必填，先落进 base 定住结果类型。
+    ...merge({ ...FALLBACK, model: preset.model, description: preset.description }, preset, overrides),
   };
 }
 

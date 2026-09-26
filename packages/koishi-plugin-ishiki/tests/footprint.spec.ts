@@ -7,7 +7,7 @@ import type { Gateway } from "@yesimagent/gateway";
 import { sleep, type Context, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { renderLine, StandardContextEngine } from "../src/context-engine.js";
+import { renderLine, StandardContextEngine } from "../src/context/index.js";
 import { FootprintIndex, FOOTPRINT_WINDOW_MS, HOT_TRANSFER_WINDOW_MS } from "../src/footprint.js";
 import { ProfileConfig, resolveProfile } from "../src/profile.js";
 import { ProfileRuntime } from "../src/runtime.js";

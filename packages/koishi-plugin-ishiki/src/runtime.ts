@@ -20,10 +20,10 @@ import type { Gateway } from "@yesimagent/gateway";
 import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
-import { renderLine, StandardContextEngine } from "./context-engine.js";
+import { createContextEngine, renderLine } from "./context/index.js";
 import { FootprintIndex, HOT_TRANSFER_LINES } from "./footprint.js";
 import { matchSceneSpec, ProfileConfig, resolveProfile, sceneDirectoryName, type SceneSpec } from "./profile.js";
-import { createJsonToolcallModel } from "./toolcall/engine.js";
+import { createToolcallEngine, type ToolcallEngine } from "./toolcall/index.js";
 import { createDispatchStimulus } from "./tools/dispatch-stimulus.js";
 import { createFinish } from "./tools/finish.js";
 import { createPeekChannelHistory } from "./tools/peek-channel-history.js";
@@ -31,7 +31,7 @@ import { createReportToolIssue } from "./tools/report-tool-issue.js";
 import { createSendMessage } from "./tools/send-message.js";
 import { createThink } from "./tools/think.js";
 import type { IshikiEvent, IshikiInnerStimulus } from "./types.js";
-import { StandardWakeupEngine, type WakeupEngine } from "./wakeup-engine.js";
+import { createWakeupEngine, type WakeupEngine } from "./wakeup/index.js";
 
 /** 实例键，同时是目录名的来源：sid 与 channelId 一并编码，避免不同账号下的同名频道冲突。 */
 function channelKey(sid: string, channelId: string): string {
@@ -304,8 +304,8 @@ export class ProfileRuntime {
   private readonly scenesDir: string;
   /** 本 profile 的装配清单；加载后不变。 */
   readonly specs: SceneSpec[] = [];
-  /** 每个可用 spec 一份：模型与唤醒引擎在 profile 内共享，由实例引用。 */
-  private readonly plans: Record<string, { model: LanguageModel; wakeup: WakeupEngine } | undefined> = {};
+  /** 每个可用 spec 一份：模型、唤醒引擎与工具调用引擎在 profile 内共享，由实例引用。 */
+  private readonly plans: Record<string, { model: LanguageModel; wakeup: WakeupEngine; toolcall: ToolcallEngine } | undefined> = {};
   private readonly scenes: Record<string, SceneRuntime | undefined> = {};
   /** 跨场景用户足迹：纯内存的瞬时工作记忆，见 footprint.ts。 */
   private readonly footprints = new FootprintIndex();
@@ -326,12 +326,13 @@ export class ProfileRuntime {
       try {
         this.plans[spec.name] = {
           model: options.gateway.languageModel(spec.model),
-          wakeup: new StandardWakeupEngine(spec.wakeup[spec.wakeup.engine]),
+          wakeup: createWakeupEngine(spec.wakeup),
+          toolcall: createToolcallEngine(spec.toolcall),
         };
         this.specs.push(spec);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        this.logger.error(`[${this.id}/${spec.name}] model "${spec.model}" unavailable, spec skipped: ${reason}`);
+        this.logger.error(`[${this.id}/${spec.name}] spec unavailable, skipped: ${reason}`);
       }
     }
   }
@@ -458,8 +459,9 @@ export class ProfileRuntime {
     const control = new TurnControl();
     // 引擎构造在 scene 之前，用闭包变量桥接：装配时回调已能拿到最终实例。
     let sceneRef: SceneRuntime;
-    // json 引擎接管工具调用：幕后流由输出契约保证，think 工具退出工具集。
-    const jsonMode = spec.toolcall.engine === "json";
+    // 协议引擎接管工具调用：幕后流由输出契约保证，think 工具退出工具集。
+    // 撤 think 是 thoughts 协议的性质，挂在「是否协议引擎」上是本轮的行为等价改写，策略归属待定。
+    const jsonMode = spec.toolcall.engine !== "native";
     const tools: ToolSet = {
       send_message: createSendMessage({
         ctx: this.ctx,
@@ -476,15 +478,8 @@ export class ProfileRuntime {
     };
     if (!jsonMode) tools.think = createThink({ logger: this.logger });
 
-    // 模型侧：json 引擎把原生 function call 换成协议解析，native 原样。
-    const jsonParams = "json" in spec.toolcall ? spec.toolcall.json : undefined;
-    // `LanguageModel` 是 `字符串 id | v2 | v3 | v4` 的并集；中间件与 json 引擎只认 v4。
-    // 其余形态说明网关没解析出 v4 模型，json 引擎对它不适用，退回原样。
-    const baseModel = typeof plan.model === "object" && plan.model.specificationVersion === "v4" ? plan.model : undefined;
-    const model =
-      jsonParams === undefined || baseModel === undefined
-        ? plan.model
-        : createJsonToolcallModel({ model: baseModel, protocol: jsonParams.protocol, logger: this.logger });
+    // 模型侧：协议引擎把原生 function call 换成文本解析，native 与不适用的模型原样返回。
+    const model = plan.toolcall.wrap(plan.model);
 
     const scene = new SceneRuntime({
       label: `${spec.profile}/${spec.name}/${channelId}`,
@@ -497,20 +492,17 @@ export class ProfileRuntime {
       // 上下文引擎每实例一个：压缩水位与后台压缩任务都是实例状态。
       // pullCrossContext 回调指向本实例，装配时取走易失前情；hint 由 profile 级足迹索引驱动。
       plugins: [
-        new StandardContextEngine(
-          {
-            logger: this.logger,
-            gateway: this.gateway,
-            pullCrossContext: () => sceneRef?.takeCrossContext(),
-            hint: (userId, currentChannelId) => {
-              const hit = this.footprints.lookup(userId);
-              if (hit === undefined || hit.channelId === currentChannelId) return undefined;
-              const minutes = Math.max(1, Math.round((Date.now() - hit.timestamp) / 60_000));
-              return `${minutes}分钟前在频道 ${hit.channelId} 活跃过，需要前情可用 peek_channel_history 查询`;
-            },
+        createContextEngine(spec.context, {
+          logger: this.logger,
+          gateway: this.gateway,
+          pullCrossContext: () => sceneRef?.takeCrossContext(),
+          hint: (userId, currentChannelId) => {
+            const hit = this.footprints.lookup(userId);
+            if (hit === undefined || hit.channelId === currentChannelId) return undefined;
+            const minutes = Math.max(1, Math.round((Date.now() - hit.timestamp) / 60_000));
+            return `${minutes}分钟前在频道 ${hit.channelId} 活跃过，需要前情可用 peek_channel_history 查询`;
           },
-          spec.context["standard"],
-        ),
+        }),
         control,
       ],
       tools,
@@ -526,11 +518,11 @@ export class ProfileRuntime {
   /**
    * 系统提示词：人设文件，加上渲染后的 `resources/templates/system.jinja`。
    * 人设取自 profile 目录的 `persona.md`；think 指南取自 profile 目录的 `think.md`，
-   * 没有就退回包内默认。json 引擎下 think 工具不存在，thinkPrompt 不进 system。
+   * 没有就退回包内默认。协议引擎下 think 工具不存在，thinkPrompt 不进 system。
    * 源码按 profile 缓存，当前频道每次渲染时注入。
    */
   private instructions(spec: SceneSpec, channelId: string): string {
-    const jsonMode = spec.toolcall.engine === "json";
+    const jsonMode = spec.toolcall.engine !== "native";
     if (this.persona === undefined) this.persona = readSnippet(path.join(this.directory, "persona.md")) ?? "";
     if (!jsonMode && this.thinkPrompt === undefined) {
       this.thinkPrompt = readSnippet(path.join(this.directory, "think.md")) ?? readSnippet(resourcePath("templates", "think.md")) ?? "";

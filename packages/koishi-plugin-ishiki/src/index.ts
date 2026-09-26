@@ -8,6 +8,7 @@ import { parse } from "yaml";
 import { createDumpFetch } from "./debugger.js";
 import { loadProfiles, type ProfileRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
+import { loadParser } from "./toolcall/parser.js";
 
 class Ishiki extends Service<Ishiki.Config> {
   static name = "ishiki";
@@ -40,7 +41,7 @@ class Ishiki extends Service<Ishiki.Config> {
       fetch: this.config.dumpRequests ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataRoot, "requests") }) : undefined,
     });
 
-    ctx.on("ready", () => this.load());
+    ctx.on("ready", () => void this.load());
     ctx.on("internal/session", (session) => void this.onSession(session));
     ctx.on("dispose", async () => {
       await Promise.all(this.profiles.map((profile) => profile.stop()));
@@ -48,11 +49,19 @@ class Ishiki extends Service<Ishiki.Config> {
     });
   }
 
-  /** 装载：展开每个 profile 的工厂，建出它们的运行态。实例本身按需诞生。 */
-  private load(): void {
+  /** 装载：先备好工具调用解析库，再展开每个 profile 的工厂。实例本身按需诞生。 */
+  private async load(): Promise<void> {
     const profilesRoot = path.resolve(this.dataRoot, "profiles");
     if (!existsSync(profilesRoot)) {
       this.logger.warn(`Profiles directory not found: ${profilesRoot}`);
+      return;
+    }
+
+    // 协议引擎要它；在装载任何 profile 之前备好，免得装配场景时才发现。装载完成前本服务不接事件。
+    try {
+      await loadParser();
+    } catch (error) {
+      this.logger.error(`toolcall parser unavailable, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
 

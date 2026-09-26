@@ -22,6 +22,11 @@ presets:
         atSelf: true # 被 @ 必醒
         quoteSelf: true # 被引用回复必醒
         keywords: [neko, 喵酱] # 提到这些词也醒
+    toolcall:
+      # 工具调用引擎：native 用模型原生 function call（缺省）；
+      # 其余按输出协议名取，由解析引擎从纯文本输出里提取调用，不需要模型原生支持 function call：
+      # thoughts（ishiki 自有，每步必带幕后流）/ hermes / qwen3coder / morph-xml / yaml-xml
+      engine: native
     # 发消息前等多久，模拟打字
     typing:
       baseDelay: 500
