@@ -19,7 +19,6 @@ export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupE
   abstract decide(event: IshikiEvent): WakeupDecision;
 }
 
-/** 没写唤醒配置时的默认：私聊、@、引用都算被点名，不设关键词。 */
 const DEFAULT_WAKEUP: StandardWakeupConfig = { direct: true, atSelf: true, quoteSelf: true, keywords: [] };
 
 export interface StandardWakeupConfig {

@@ -21,7 +21,9 @@ import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
 import { renderLine, StandardContextEngine } from "./context-engine.js";
+import { FootprintIndex, HOT_TRANSFER_LINES } from "./footprint.js";
 import { matchSceneSpec, ProfileConfig, resolveProfile, sceneDirectoryName, type SceneSpec } from "./profile.js";
+import { createJsonToolcallModel } from "./toolcall/engine.js";
 import { createDispatchStimulus } from "./tools/dispatch-stimulus.js";
 import { createFinish } from "./tools/finish.js";
 import { createPeekChannelHistory } from "./tools/peek-channel-history.js";
@@ -153,6 +155,8 @@ export class SceneRuntime {
   /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
   private readonly toolStartedAt = new Map<string, number>();
   private readonly stepStartedAt = new Map<string, number>();
+  /** 待挂载的跨场景前情；下一次装配时被引擎取走并清空。 */
+  private pendingCross?: { channelId: string; elapsedMs: number; lines: readonly string[] };
 
   constructor(config: SceneRuntimeConfig) {
     this.label = config.label;
@@ -230,6 +234,23 @@ export class SceneRuntime {
     this.agent.send(event, { trigger, ifBusy: "join" });
   }
 
+  /** 只判定不投递：这条事件投下去会不会触发一轮。 */
+  wouldTrigger(event: IshikiEvent): boolean {
+    return this.wakeup.decide(event) === "trigger";
+  }
+
+  /** 挂一次性的跨场景前情；引擎在下一次装配时取走并清空。重复挂载以最后一次为准。 */
+  setCrossContext(context: { channelId: string; elapsedMs: number; lines: readonly string[] }): void {
+    this.pendingCross = context;
+  }
+
+  /** 引擎装配时取走易失前情；取走即清空，保证只挂载一轮。供装配回调调用。 */
+  takeCrossContext(): { channelId: string; elapsedMs: number; lines: readonly string[] } | undefined {
+    const pending = this.pendingCross;
+    this.pendingCross = undefined;
+    return pending;
+  }
+
   /** 等待当前轮次结束。 */
   async idle(): Promise<void> {
     await this.agent.wait();
@@ -278,6 +299,7 @@ export class ProfileRuntime {
 
   private readonly ctx: Context;
   private readonly logger: Logger;
+  private readonly gateway: Gateway;
   private readonly directory: string;
   private readonly scenesDir: string;
   /** 本 profile 的装配清单；加载后不变。 */
@@ -285,6 +307,8 @@ export class ProfileRuntime {
   /** 每个可用 spec 一份：模型与唤醒引擎在 profile 内共享，由实例引用。 */
   private readonly plans: Record<string, { model: LanguageModel; wakeup: WakeupEngine } | undefined> = {};
   private readonly scenes: Record<string, SceneRuntime | undefined> = {};
+  /** 跨场景用户足迹：纯内存的瞬时工作记忆，见 footprint.ts。 */
+  private readonly footprints = new FootprintIndex();
   /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
   private persona?: string;
   private thinkPrompt?: string;
@@ -294,6 +318,7 @@ export class ProfileRuntime {
     this.id = options.id;
     this.ctx = options.ctx;
     this.logger = options.logger;
+    this.gateway = options.gateway;
     this.directory = options.directory;
     this.scenesDir = path.join(options.directory, "scenes");
 
@@ -315,7 +340,32 @@ export class ProfileRuntime {
   route(event: IshikiEvent): SceneRuntime | undefined {
     const { platform, selfId, channelId } = event.data;
     const spec = matchSceneSpec(this.specs, { sid: `${platform}:${selfId}`, channelId });
-    return spec === undefined ? undefined : this.ensure(spec, channelId, { platform, selfId });
+    if (spec === undefined) return undefined;
+    const scene = this.ensure(spec, channelId, { platform, selfId });
+
+    // 足迹与热迁移只看用户消息：别的类型没有"某个人在哪里活跃"的语义。
+    if (event.type === "ishiki.message.created") {
+      const data = event.data;
+      // 先查热迁移再记录：record 会覆盖足迹，之后查到的永远是本条消息自己。
+      // 群聊 → 私聊的热迁移：私聊事件到达时，足迹里若刚有群聊互动，就挂上易失前情。
+      // 反方向（私聊 → 群聊）永不挂载：私聊内容不进公开视窗。
+      const from = data.isDirect ? this.footprints.hotTransfer(data.user.id, data.timestamp) : undefined;
+      const interacted = scene.wouldTrigger(event);
+      this.footprints.record(data.user.id, { sid: `${platform}:${selfId}`, channelId, timestamp: data.timestamp }, interacted);
+      if (from !== undefined && from.channelId !== channelId) void this.prepareCrossContext(scene, from);
+    }
+    return scene;
+  }
+
+  /** 为热迁移拉取源频道最近几行，挂到目标实例上；拉取失败静默降级为无前情。 */
+  private async prepareCrossContext(scene: SceneRuntime, from: { sid: string; channelId: string; timestamp: number }): Promise<void> {
+    try {
+      const lines = await this.peek(from.sid, from.channelId, HOT_TRANSFER_LINES);
+      if (lines === undefined || lines.length === 0) return;
+      scene.setCrossContext({ channelId: from.channelId, elapsedMs: Date.now() - from.timestamp, lines });
+    } catch (error) {
+      this.logger.warn(`cross context peek failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
@@ -406,8 +456,11 @@ export class ProfileRuntime {
 
     const self = { sid: spec.sid, channelId, address };
     const control = new TurnControl();
+    // 引擎构造在 scene 之前，用闭包变量桥接：装配时回调已能拿到最终实例。
+    let sceneRef: SceneRuntime;
+    // json 引擎接管工具调用：幕后流由输出契约保证，think 工具退出工具集。
+    const jsonMode = spec.toolcall.engine === "json";
     const tools: ToolSet = {
-      think: createThink({ logger: this.logger }),
       send_message: createSendMessage({
         ctx: this.ctx,
         logger: this.logger,
@@ -421,6 +474,17 @@ export class ProfileRuntime {
       dispatch_stimulus: createDispatchStimulus({ self, dispatch: (targets, body) => this.dispatch(self, targets, body) }),
       report_tool_issue: createReportToolIssue({ logPath: path.join(this.directory, "tool_issues.log") }),
     };
+    if (!jsonMode) tools.think = createThink({ logger: this.logger });
+
+    // 模型侧：json 引擎把原生 function call 换成协议解析，native 原样。
+    const jsonParams = "json" in spec.toolcall ? spec.toolcall.json : undefined;
+    // `LanguageModel` 是 `字符串 id | v2 | v3 | v4` 的并集；中间件与 json 引擎只认 v4。
+    // 其余形态说明网关没解析出 v4 模型，json 引擎对它不适用，退回原样。
+    const baseModel = typeof plan.model === "object" && plan.model.specificationVersion === "v4" ? plan.model : undefined;
+    const model =
+      jsonParams === undefined || baseModel === undefined
+        ? plan.model
+        : createJsonToolcallModel({ model: baseModel, protocol: jsonParams.protocol, logger: this.logger });
 
     const scene = new SceneRuntime({
       label: `${spec.profile}/${spec.name}/${channelId}`,
@@ -428,15 +492,33 @@ export class ProfileRuntime {
       channelId,
       address,
       directory: path.join(this.scenesDir, sceneDirectoryName(key)),
-      model: plan.model,
+      model,
       instructions: this.instructions(spec, channelId),
       // 上下文引擎每实例一个：压缩水位与后台压缩任务都是实例状态。
-      plugins: [new StandardContextEngine(spec.context["standard"], this.logger), control],
+      // pullCrossContext 回调指向本实例，装配时取走易失前情；hint 由 profile 级足迹索引驱动。
+      plugins: [
+        new StandardContextEngine(
+          {
+            logger: this.logger,
+            gateway: this.gateway,
+            pullCrossContext: () => sceneRef?.takeCrossContext(),
+            hint: (userId, currentChannelId) => {
+              const hit = this.footprints.lookup(userId);
+              if (hit === undefined || hit.channelId === currentChannelId) return undefined;
+              const minutes = Math.max(1, Math.round((Date.now() - hit.timestamp) / 60_000));
+              return `${minutes}分钟前在频道 ${hit.channelId} 活跃过，需要前情可用 peek_channel_history 查询`;
+            },
+          },
+          spec.context["standard"],
+        ),
+        control,
+      ],
       tools,
       wakeup: plan.wakeup,
       logger: this.logger,
     });
     this.scenes[key] = scene;
+    sceneRef = scene;
     this.logger.info(`[${spec.profile}/${spec.name}] scene created: ${key}`);
     return scene;
   }
@@ -444,11 +526,13 @@ export class ProfileRuntime {
   /**
    * 系统提示词：人设文件，加上渲染后的 `resources/templates/system.jinja`。
    * 人设取自 profile 目录的 `persona.md`；think 指南取自 profile 目录的 `think.md`，
-   * 没有就退回包内默认。源码按 profile 缓存，当前频道每次渲染时注入。
+   * 没有就退回包内默认。json 引擎下 think 工具不存在，thinkPrompt 不进 system。
+   * 源码按 profile 缓存，当前频道每次渲染时注入。
    */
   private instructions(spec: SceneSpec, channelId: string): string {
+    const jsonMode = spec.toolcall.engine === "json";
     if (this.persona === undefined) this.persona = readSnippet(path.join(this.directory, "persona.md")) ?? "";
-    if (this.thinkPrompt === undefined) {
+    if (!jsonMode && this.thinkPrompt === undefined) {
       this.thinkPrompt = readSnippet(path.join(this.directory, "think.md")) ?? readSnippet(resourcePath("templates", "think.md")) ?? "";
     }
     if (this.systemTemplate === undefined) this.systemTemplate = readFileSync(resourcePath("templates", "system.jinja"), "utf8");
@@ -461,7 +545,7 @@ export class ProfileRuntime {
     }
     const bodies = [...bySid].map(([sid, channels]) => ({ sid, channels }));
     const rendered = new Template(this.systemTemplate).render({ thinkPrompt: this.thinkPrompt, self: { sid: spec.sid, channelId }, bodies });
-    return [this.persona, rendered.trim()].filter((part) => part.length > 0).join("\n\n");
+    return [rendered.trim(), this.persona].filter((part) => part.length > 0).join("\n\n");
   }
 }
 

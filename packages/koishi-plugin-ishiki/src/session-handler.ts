@@ -7,6 +7,13 @@ export interface SessionHandler {
   handle(session: Session): IshikiEvent | undefined;
 }
 
+function pickUserName(session: Session) {
+  const l = [session.author.nick, session.author.name, session.userId];
+  for (const name of l) {
+    if (String(name) != "") return name;
+  }
+}
+
 export class StandardHandler implements SessionHandler {
   readonly platform = "*";
   readonly priority = 1000;
@@ -14,7 +21,7 @@ export class StandardHandler implements SessionHandler {
   handle(session: Session): IshikiEvent | undefined {
     // message-created
     if (session.type === "message-created") {
-      const authorName = session.author?.nick ?? session.author?.name ?? session.userId;
+      const authorName = pickUserName(session);
       return createCustomMessage("ishiki.message.created", {
         timestamp: session.timestamp,
         platform: session.platform,

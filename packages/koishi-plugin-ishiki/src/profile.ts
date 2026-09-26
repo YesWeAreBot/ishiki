@@ -1,6 +1,7 @@
 import { Schema } from "koishi";
 
 import { ContextEngines } from "./context-engine.js";
+import { ToolcallEngines } from "./toolcall/config.js";
 import { WakeupEngines } from "./wakeup-engine.js";
 
 /**
@@ -27,6 +28,15 @@ export const WakeupConfig: Schema<WakeupConfig> = Schema.intersect([
   Schema.object({
     engine: Schema.string(),
   }).required(),
+  Schema.union([Schema.any()]),
+]);
+
+export type ToolcallConfig = EngineConfig<ToolcallEngines>;
+
+export const ToolcallConfig: Schema<ToolcallConfig> = Schema.intersect([
+  Schema.object({
+    engine: Schema.string().default("native").description("工具调用方式：native 用模型原生 function call，json 由解析引擎从纯文本输出提取"),
+  }),
   Schema.union([Schema.any()]),
 ]);
 
@@ -107,6 +117,7 @@ export interface SceneConfig {
   model?: string;
   context?: ContextConfig;
   wakeup?: WakeupConfig;
+  toolcall?: ToolcallConfig;
   /** 打字节奏的局部覆写；未写的字段沿用 preset（若 preset 也没写，用内置默认）。 */
   typing?: Partial<TypingConfig>;
 }
@@ -120,6 +131,7 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
   model: Schema.string(),
   context: ContextConfig,
   wakeup: WakeupConfig,
+  toolcall: ToolcallConfig,
   typing: TypingOverride,
 });
 
@@ -166,6 +178,7 @@ export interface PresetConfig {
   model: string;
   context: ContextConfig;
   wakeup: WakeupConfig;
+  toolcall?: ToolcallConfig;
   typing: TypingConfig;
 }
 
@@ -174,6 +187,7 @@ export const PresetConfig: Schema<PresetConfig> = Schema.object({
   model: Schema.string().required(),
   context: ContextConfig,
   wakeup: WakeupConfig,
+  toolcall: ToolcallConfig,
   typing: TypingConfig,
 });
 
@@ -235,6 +249,8 @@ export interface SceneSpec {
   model: string;
   context: ContextConfig;
   wakeup: WakeupConfig;
+  /** 工具调用方式，Preset 与 Scene 的覆写已在此合并；缺省 native。 */
+  toolcall: ToolcallConfig;
   /** 打字节奏，Preset 与 Scene 的覆写已在此合并。 */
   typing: TypingConfig;
   whitelist: string[];
@@ -242,6 +258,7 @@ export interface SceneSpec {
 }
 
 const STANDARD = { engine: "standard" } as const;
+const NATIVE_TOOLCALL: ToolcallConfig = { engine: "native" };
 
 /** 目录名安全化：生成由 sid 与 channelId 拼成的单段文件名时使用。 */
 export function sceneDirectoryName(name: string): string {
@@ -287,6 +304,7 @@ export function resolveScene(profile: ProfileConfig, name: string, id: string): 
     model: scene.model || preset.model,
     context: mergeEngine(preset.context ?? STANDARD, scene.context),
     wakeup: mergeEngine(preset.wakeup ?? STANDARD, scene.wakeup),
+    toolcall: mergeEngine(preset.toolcall ?? NATIVE_TOOLCALL, scene.toolcall),
     // 手写的配置未必过 Schema，所以这里再兜一次默认值，让 spec 的 typing 始终完整。
     typing: { ...DEFAULT_TYPING, ...preset.typing, ...scene.typing },
     whitelist: scene.whitelist ?? [],

@@ -1,31 +1,13 @@
 import { createEntry, createUserMessage, generateText, type Agent, type AgentEntry, type AgentMessage, type AgentPlugin } from "@yesimagent/core";
+import { Gateway } from "@yesimagent/gateway";
 import type { Logger } from "koishi";
 
 import type { IshikiInnerStimulus, IshikiMessageCreated, IshikiMessageDeleted } from "./types.js";
-
-declare module "@yesimagent/core" {
-  interface AgentCustomEntry {
-    "ishiki.compact": IshikiCompact;
-  }
-}
-
-/**
- * `lastEntryId` 及其之前的流已压缩为 `summary`。该记录属于流本身而非对话消息，
- * 仅在上下文引擎将其渲染为摘要行时对模型可见。
- */
-export interface IshikiCompact {
-  summary: string;
-  lastEntryId: string;
-}
 
 export interface ContextEngines {
   standard: StandardContextConfig;
 }
 
-/**
- * 上下文引擎是一枚 AgentPlugin：把本轮 entries 与 messages 装配成模型可见的输入。
- * 基类只固定名字与配置；实现哪些 hook、如何装配由策略自行决定。
- */
 export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> implements AgentPlugin {
   public readonly name: K;
   public readonly config: ContextEngines[K];
@@ -36,14 +18,36 @@ export abstract class ContextEngine<K extends keyof ContextEngines = keyof Conte
   }
 }
 
+declare module "@yesimagent/core" {
+  interface AgentCustomEntry {
+    "ishiki.compact": IshikiCompact;
+  }
+}
+
+export interface IshikiCompact {
+  summary: string;
+  lastEntryId: string;
+}
+
 /** 未配置时的字符预算上限；显式写 0 表示只线性增长、不压缩。 */
 const DEFAULT_CONTEXT_CHARS = 24_000;
 
 export interface StandardContextConfig {
+  model?: string;
   /** 单轮模型输入的文本上限（字符数）；超出时最旧的一段退出模型视野，交给后台并入摘要。 */
   maxChars: number;
   /** 装配留下的水位比例。0.8 表示压到 `maxChars * 0.8`，为后续轮次留出余量。 */
   refillRatio?: number;
+}
+
+/**
+ * 一次性的跨场景前情挂载：由 ProfileRuntime 在投递前计算，仅对本轮可见，
+ * 不写入任何事件流。引擎在装配时消费后立即清空。
+ */
+export interface CrossContext {
+  channelId: string;
+  elapsedMs: number;
+  lines: readonly string[];
 }
 
 /** 摘要行的固定首行标记。 */
@@ -56,15 +60,22 @@ function formatClock(timestamp: number): string {
   return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
 }
 
+/**
+ * 足迹线索回调：返回发言人最近在其他频道的活跃描述，附加到消息行尾。
+ * 只在消息行渲染时查询；undefined 表示没有值得提示的足迹。
+ */
+export type FootprintHint = (userId: string, currentChannelId: string) => string | undefined;
+
 /** 将一条 ishiki 消息渲染为上下文中的一行；非本命名空间返回 undefined。 */
-export function renderLine(message: AgentMessage): string | undefined {
+export function renderLine(message: AgentMessage, hint?: FootprintHint): string | undefined {
   if (message.role !== "custom") return undefined;
 
   switch (message.type) {
     case "ishiki.message.created": {
       const data: IshikiMessageCreated = message.data;
       const who = data.user.name === undefined || data.user.name.length === 0 ? data.user.id : `${data.user.name}(${data.user.id})`;
-      return `[${formatClock(data.timestamp)}] ${who} #${data.messageId}: ${data.content}`;
+      const extra = hint?.(data.user.id, data.channelId);
+      return `[${formatClock(data.timestamp)}] ${who} #${data.messageId}: ${data.content}${extra === undefined ? "" : ` <!-- ${extra} -->`}`;
     }
     case "ishiki.message.deleted": {
       const data: IshikiMessageDeleted = message.data;
@@ -100,7 +111,7 @@ function textOf(message: AgentMessage): string {
 }
 
 /** 连续的 ishiki 消息合并为单条 user 消息；其余消息原样透传，并中断行序列。 */
-export function collapse(messages: readonly AgentMessage[]): AgentMessage[] {
+export function collapse(messages: readonly AgentMessage[], hint?: FootprintHint): AgentMessage[] {
   const collapsed: AgentMessage[] = [];
   const lines: string[] = [];
 
@@ -111,7 +122,7 @@ export function collapse(messages: readonly AgentMessage[]): AgentMessage[] {
   };
 
   for (const message of messages) {
-    const line = renderLine(message);
+    const line = renderLine(message, hint);
     if (line === undefined) {
       flush();
       collapsed.push(message);
@@ -133,11 +144,6 @@ function lastCompact(entries: readonly AgentEntry[]): AgentEntry<"ishiki.compact
   return undefined;
 }
 
-/** 本命名空间的消息参与装配，其余条目（状态、水位）只是流的一部分。 */
-function isMessage(entry: AgentEntry): entry is AgentEntry<"message"> {
-  return entry.type === "message";
-}
-
 /**
  * 切点：让「摘要头 + 切点之后的可见行」落进 `target` 以内的最小位置，返回它在 `tail` 里的下标。
  * 切点必须落在 user / custom 行上：截断 tool call / tool result 配对会被提供商拒绝，所以工具轨迹整段留在切点之后。
@@ -146,12 +152,12 @@ function isMessage(entry: AgentEntry): entry is AgentEntry<"message"> {
 function cutOf(tail: readonly AgentEntry[], head: number, target: number): number {
   let suffix = 0;
   for (const entry of tail) {
-    if (isMessage(entry)) suffix += textOf(entry.data).length;
+    if (entry.type === "message") suffix += textOf(entry.data).length;
   }
 
   for (let at = 0; at < tail.length; at += 1) {
     const entry = tail[at];
-    if (!isMessage(entry)) continue;
+    if (!(entry.type === "message")) continue;
     if ((entry.data.role === "user" || entry.data.role === "custom") && head + suffix <= target) return at;
     suffix -= textOf(entry.data).length;
   }
@@ -174,17 +180,25 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
   private readonly logger?: Logger;
   private readonly ceiling: number;
   private readonly target: number;
+  /** 拉取待挂载的跨场景前情；取到即清空来源，保证只挂载一次。 */
+  private readonly pullCrossContext?: () => CrossContext | undefined;
+  /** 足迹线索：渲染消息行时附加发言人的跨频道活跃提示。 */
+  private readonly hint?: FootprintHint;
   /** 上一次装配是否超预算：后台压缩的触发条件。 */
   private over = false;
-  /** 在跑的压缩；非空即单飞，同一实例不并发压第二次。 */
   private compacting?: Promise<void>;
   private abort?: AbortController;
 
-  constructor(config: Partial<StandardContextConfig> = {}, logger?: Logger) {
+  constructor(
+    options: { logger: Logger; gateway?: Gateway; pullCrossContext?: () => CrossContext | undefined; hint?: FootprintHint },
+    config: Partial<StandardContextConfig> = {},
+  ) {
     const maxChars = config.maxChars ?? DEFAULT_CONTEXT_CHARS;
     const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
     super("standard", { maxChars, refillRatio });
-    this.logger = logger;
+    this.logger = options.logger;
+    this.pullCrossContext = options.pullCrossContext;
+    this.hint = options.hint;
     this.ceiling = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : 0;
     this.target = this.ceiling * refillRatio;
     if (this.ceiling === 0) this.logger?.warn("context budget disabled: maxChars is non-positive, compaction off");
@@ -212,25 +226,40 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     const tail = memory === undefined ? entries : entries.slice(anchor + 1);
     const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
 
+    // 易失跨场景前情：挂到可见区末尾，不参与预算裁剪（单次 ≤10 行，量级可控），
+    // 也不写入存储。取到即清空，保证只对本轮可见。
+    const cross = this.pullCrossContext?.();
+    const crossEntries =
+      cross === undefined
+        ? []
+        : [
+            createEntry(
+              "message",
+              createUserMessage(
+                `<cross_scene_context channel="${cross.channelId}" elapsed="${Math.round(cross.elapsedMs / 60_000)}m">\n${cross.lines.join("\n")}\n</cross_scene_context>`,
+              ),
+            ),
+          ];
+
     let size = head.length;
     for (const entry of tail) {
-      if (isMessage(entry)) size += textOf(entry.data).length;
+      if (entry.type === "message") size += textOf(entry.data).length;
     }
     if (size <= this.ceiling) {
       this.over = false;
-      return this.prepend(head, tail);
+      return this.prepend(head, [...tail, ...crossEntries]);
     }
 
     this.over = true;
     const cut = cutOf(tail, head.length, this.target);
     if (cut < 0) {
       this.logger?.warn("context over budget with no valid cut point, entries passed through");
-      return this.prepend(head, tail);
+      return this.prepend(head, [...tail, ...crossEntries]);
     }
-    return this.prepend(head, tail.slice(cut));
+    return this.prepend(head, [...tail.slice(cut), ...crossEntries]);
   };
 
-  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages);
+  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages, this.hint);
 
   /** 后台：一轮结束后，若刚才是超预算装配的，把切掉的那段并进摘要。不阻塞轮次结束。 */
   onTurnFinish = (): void => {
@@ -259,7 +288,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
 
     const cut = cutOf(tail, head.length, this.target);
-    const dropped = cut > 0 ? tail.slice(0, cut).filter(isMessage) : [];
+    const dropped = cut > 0 ? tail.slice(0, cut).filter((e) => e.type === "message") : [];
     if (dropped.length === 0) {
       // 没有可切的点，或切出来没有可见行：等下一次装配重新判定。
       this.over = false;

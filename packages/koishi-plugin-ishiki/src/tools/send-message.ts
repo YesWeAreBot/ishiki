@@ -7,12 +7,9 @@ export namespace SendMessageTool {
   export interface Options {
     ctx: Context;
     logger: Logger;
-    /** 该实例发言所在的账号与频道；工具只发到这里，没有目标参数。 */
     sid: string;
     channelId: string;
-    /** 每条消息发出前等待多久，模拟打字节奏。 */
     typing: TypingConfig;
-    /** `continue` 未置真时请求结束本轮；是否真的结束由容器的步边界决定。 */
     onEndTurn: () => void;
   }
   export interface Input {

@@ -23,12 +23,15 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
+    "@ai-sdk-tool/parser": "5.1.6",
+    "@ai-sdk/provider-utils": "5.0.39",
     "@huggingface/jinja": "^0.5.10",
-    "@yesimagent/core": "link:@yesimagent/core",
-    "@yesimagent/gateway": "link:@yesimagent/gateway",
+    "@yesimagent/core": "0.0.4",
+    "@yesimagent/gateway": "0.0.4",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@ai-sdk/provider": "4.0.13",
     "koishi": "^4.18.11"
   },
   "peerDependencies": {
