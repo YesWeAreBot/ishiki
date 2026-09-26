@@ -1,7 +1,5 @@
-import { h } from "koishi";
-
-import type { IshikiEvent, IshikiMessageCreated } from "../types.js";
-import { WakeupEngine, registerWakeupEngine, type WakeupDecision } from "./engine.js";
+import type { IshikiEvent } from "../types.js";
+import { WakeupEngine, atSelf, registerWakeupEngine, type WakeupDecision } from "./engine.js";
 
 const DEFAULT_WAKEUP: StandardWakeupConfig = { direct: true, atSelf: true, quoteSelf: true, keywords: [] };
 
@@ -27,16 +25,7 @@ export class StandardWakeupEngine extends WakeupEngine<"standard"> {
     if (this.config.direct && message.isDirect) return "trigger";
     if (this.config.quoteSelf && message.quote?.user?.id === message.selfId) return "trigger";
     if (this.config.keywords.some((keyword) => keyword.length > 0 && message.content.includes(keyword))) return "trigger";
-    return this.config.atSelf && this.atSelf(message) ? "trigger" : "wait";
-  }
-
-  private atSelf(message: IshikiMessageCreated): boolean {
-    if (!message.content.includes("<at")) return false;
-    try {
-      return h.parse(message.content).some((element) => element.type === "at" && element.attrs?.id === message.selfId);
-    } catch {
-      return false;
-    }
+    return this.config.atSelf && atSelf(message.content, message.selfId) ? "trigger" : "wait";
   }
 }
 

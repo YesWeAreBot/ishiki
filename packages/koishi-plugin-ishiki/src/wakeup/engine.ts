@@ -1,3 +1,5 @@
+import { h } from "koishi";
+
 import type { IshikiEvent } from "../types.js";
 
 /**
@@ -23,6 +25,22 @@ export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupE
   }
 
   abstract decide(event: IshikiEvent): WakeupDecision;
+
+  /**
+   * 一轮结束的回执。调用点在场景侧（turn.done），引擎据此更新自己的状态
+   * （如扣掉刚刚用掉的意愿）；不实现即无状态。
+   */
+  observe?(channelId: string): void;
+}
+
+/** 内容里是否 @ 了指定身份。`<at>` 不是合法消息内容时按「没有」处理。 */
+export function atSelf(content: string, selfId: string): boolean {
+  if (!content.includes("<at")) return false;
+  try {
+    return h.parse(content).some((element) => element.type === "at" && element.attrs?.id === selfId);
+  } catch {
+    return false;
+  }
 }
 
 /** 运行期注册表：各引擎的配置类型不同，登记时收窄、取用时按名收敛。 */

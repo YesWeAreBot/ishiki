@@ -199,6 +199,10 @@ export class SceneRuntime {
         return;
       }
       case "turn.done":
+        this.stepStartedAt.delete(event.turnId);
+        // 一轮走完才扣意愿；失败与中止不扣，与 v3 的「只有成功的一轮才付成本」一致。
+        this.wakeup.observe?.(this.channelId);
+        break;
       case "turn.failed":
       case "turn.aborted":
         this.stepStartedAt.delete(event.turnId);
@@ -453,6 +457,8 @@ export class ProfileRuntime {
         createContextEngine(spec.context, {
           logger: this.logger,
           gateway: this.gateway,
+          directory: this.directory,
+          resources: resourcePath(),
         }),
         control,
       ],

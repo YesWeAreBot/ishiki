@@ -26,6 +26,10 @@ export abstract class ContextEngine<K extends keyof ContextEngines = keyof Conte
 export interface ContextEngineOptions {
   logger: Logger;
   gateway?: Gateway;
+  /** 本 profile 的数据目录：需要自有文件的引擎（记忆块等）在这里读写。 */
+  directory?: string;
+  /** 包内 `resources/` 的绝对路径：需要模板的引擎在这里找。 */
+  resources?: string;
 }
 
 /** 运行期注册表：各引擎的配置类型不同，登记时收窄、取用时按名收敛。 */

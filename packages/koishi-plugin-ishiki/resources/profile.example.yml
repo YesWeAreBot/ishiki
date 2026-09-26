@@ -9,9 +9,9 @@ presets:
     description: 日常聊天
     model: openai:gpt-5.6-luna # provider:model，或 gateway 里定义的组名
     failover:
-      attempts: 3        # 缺省跑完一轮候选
-      backoffMs: 500     # 逐次翻倍，封顶 8s，取半抖动
-      failoverOn: unavailable   # 或 any
+      attempts: 3 # 缺省跑完一轮候选
+      backoffMs: 500 # 逐次翻倍，封顶 8s，取半抖动
+      failoverOn: unavailable # 或 any
     context:
       # 上下文引擎：standard 线性增长，到上限后把最旧的一段压成摘要
       engine: standard
@@ -29,7 +29,7 @@ presets:
     toolcall:
       # 工具调用引擎：native 用模型原生 function call（缺省）；
       # 其余按输出协议名取，由解析引擎从纯文本输出里提取调用，不需要模型原生支持 function call：
-      # thoughts（ishiki 自有，每步必带幕后流）/ hermes / qwen3coder / morph-xml / yaml-xml
+      # classic（v3 的 JSON OUTPUT，每步必带 thoughts 三段）/ hermes / qwen3coder / morph-xml / yaml-xml
       engine: native
     # 发消息前等多久，模拟打字
     typing:
@@ -37,6 +37,35 @@ presets:
       charPerSecond: 5
       minDelay: 800
       maxDelay: 4000
+
+  # 从 YesImBot v3 迁过来的一套：WorldState 上下文、JSON OUTPUT 工具协议、响应意愿唤醒。
+  # 三者各自独立，也可以和别的引擎混搭。
+  v3:
+    description: v3 迁移三件套
+    model: openai:gpt-5.6-luna
+    context:
+      engine: classic
+      classic:
+        maxMessages: 50 # 单轮窗口内的消息条数上限
+        keepFullTurnCount: 2 # 保留最近几轮的完整思考/行动/观察，更早的只留消息
+        memoryBlocks: true # 把 <profileDir>/memory/*.md 当核心记忆块注入 system
+    wakeup:
+      engine: classic
+      classic:
+        base: 12 # 一条普通消息的基础分
+        atMention: 100 # 被 @ 的加成
+        isQuote: 15 # 引用本账号的加成
+        isDirectMessage: 40 # 私聊的加成
+        keywords: [neko, 喵酱] # 命中任一即改用 keywordMultiplier
+        keywordMultiplier: 1.2
+        defaultMultiplier: 1
+        maxWillingness: 100 # 意愿上限
+        decayHalfLifeSeconds: 600 # 不被打扰时的衰减半衰期
+        probabilityThreshold: 55 # 概率从这个阈值之上起跳
+        probabilityAmplifier: 0.04
+        replyCost: 35 # 一轮结束后扣掉的意愿
+    toolcall:
+      engine: classic
 
 scenes:
   # 一个 Scene 绑定一个账号，认领该账号名下一组频道（工厂）；

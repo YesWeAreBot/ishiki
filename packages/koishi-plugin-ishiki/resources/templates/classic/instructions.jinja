@@ -1,0 +1,27 @@
+{# v3 系统提示词里 ishiki 基础提示词没有覆盖的那两节：
+   核心记忆块的用法，以及怎么读 `<working_memory>`。
+   输出契约与工具目录由 classic 协议注入，不在这里重复。 #}
+{% if blocks|length > 0 %}# Memory system: core memory
+
+Your core memory unit is held in this system prompt and is always available in-context.
+It contains memory blocks, each of which has a label and a description field saying how the block should augment your behavior.
+Treat them as your persona's beliefs, personality traits, knowledge, style, and operational principles.
+Multiple labeled blocks may exist; use them actively when reasoning and replying.
+
+<core_memory>
+{% for block in blocks %}<{{ block.label }}>
+  <title>{{ block.title }}</title>
+  <description>{{ block.description }}</description>
+  <content>
+{{ block.content }}
+  </content>
+</{{ block.label }}>
+{% endfor %}</core_memory>
+
+{% endif %}# Context: world view
+
+Your context consists of `<working_memory>`:
+- `<processed_events>` — past handled events, including your own thoughts, actions and observations.
+- `<new_events>` — the trigger stimuli THIS turn: either the observations from your previous step, or new user/stimulus messages.
+
+Always prioritize any `<observation>` in `<new_events>`.

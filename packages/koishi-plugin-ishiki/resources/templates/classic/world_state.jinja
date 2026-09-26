@@ -1,0 +1,29 @@
+{# v3 的 world_state：频道、在场成员、L1 工作记忆（已处理 / 新到）。
+   条目行由引擎渲染好传进来——`<action>` / `<observation>` 的形状归 classic 协议所有，
+   在这里再写一份会与协议钩子各走各的。 #}
+<world_state>
+  <channel id="{{ channel.id }}" type="{{ channel.type }}" platform="{{ channel.platform }}">
+  </channel>
+
+  <users>
+{% for user in users %}    <user id="{{ user.id }}"><name>{{ user.name }}</name></user>
+{% endfor %}{% if users|length == 0 %}    <system_note>No user profiles available in the current context.</system_note>
+{% endif %}  </users>
+
+  <working_memory>
+    <summary>This section is your most recent and active conversation memory. It is split into processed_events (past history you have already handled) and new_events (the stimuli that triggered this turn).</summary>
+
+    <processed_events>
+{% for line in processed_events %}      {{ line }}
+{% endfor %}{% if processed_events|length == 0 %}      <system_note>There are no processed events in the current context.</system_note>
+{% endif %}    </processed_events>
+
+    <new_events>
+      <!-- New events you have NOT seen before: observation results from your last action, and new user/stimulus messages.
+           ALWAYS check for observations FIRST: treat them as the single-use result of your last action, and if they are
+           an error or empty, adjust your plan immediately instead of waiting. -->
+{% for line in new_events %}      {{ line }}
+{% endfor %}{% if new_events|length == 0 %}      <system_note>There are no new events since the last time you responded.</system_note>
+{% endif %}    </new_events>
+  </working_memory>
+</world_state>

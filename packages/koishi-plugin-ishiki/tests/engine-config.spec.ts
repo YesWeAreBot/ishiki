@@ -40,11 +40,11 @@ describe("engine config precedence", () => {
     const spec = specOf({
       context: { engine: "standard", standard: { maxChars: 1234 } },
       wakeup: { engine: "standard", standard: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } },
-      toolcall: { engine: "thoughts" },
+      toolcall: { engine: "classic" },
     });
     expect(spec.context.standard).toEqual({ maxChars: 1234, refillRatio: undefined });
     expect(spec.wakeup.standard!.direct).toBe(false);
-    expect(spec.toolcall.engine).toBe("thoughts");
+    expect(spec.toolcall.engine).toBe("classic");
   });
 
   it("scene 写同名引擎时合并参数，换引擎时整体替换", () => {
@@ -54,12 +54,12 @@ describe("engine config precedence", () => {
     );
     expect(same.context.standard).toEqual({ maxChars: 4321, refillRatio: 0.5 });
 
-    const replaced = specOf({ toolcall: { engine: "thoughts" } }, { toolcall: { engine: "hermes" } });
+    const replaced = specOf({ toolcall: { engine: "classic" } }, { toolcall: { engine: "hermes" } });
     expect(replaced.toolcall.engine).toBe("hermes");
   });
 
   it("scene 显式写回默认引擎时不退回 preset", () => {
-    const spec = specOf({ toolcall: { engine: "thoughts" } }, { toolcall: { engine: "native" } });
+    const spec = specOf({ toolcall: { engine: "classic" } }, { toolcall: { engine: "native" } });
     expect(spec.toolcall.engine).toBe("native");
   });
 
