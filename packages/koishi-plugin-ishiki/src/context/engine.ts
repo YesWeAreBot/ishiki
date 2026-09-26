@@ -26,27 +26,7 @@ export abstract class ContextEngine<K extends keyof ContextEngines = keyof Conte
 export interface ContextEngineOptions {
   logger: Logger;
   gateway?: Gateway;
-  /** 拉取待挂载的跨场景前情；取到即清空来源，保证只挂载一次。 */
-  pullCrossContext?: () => CrossContext | undefined;
-  /** 足迹线索：渲染消息行时附加发言人的跨频道活跃提示。 */
-  hint?: FootprintHint;
 }
-
-/**
- * 一次性的跨场景前情挂载：由 ProfileRuntime 在投递前计算，仅对本轮可见，
- * 不写入任何事件流。引擎在装配时消费后立即清空。
- */
-export interface CrossContext {
-  channelId: string;
-  elapsedMs: number;
-  lines: readonly string[];
-}
-
-/**
- * 足迹线索回调：返回发言人最近在其他频道的活跃描述，附加到消息行尾。
- * 只在消息行渲染时查询；undefined 表示没有值得提示的足迹。
- */
-export type FootprintHint = (userId: string, currentChannelId: string) => string | undefined;
 
 /** 运行期注册表：各引擎的配置类型不同，登记时收窄、取用时按名收敛。 */
 const contextEngines: Record<string, (config: never, options: ContextEngineOptions) => ContextEngine> = {};

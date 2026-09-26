@@ -21,15 +21,14 @@ import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
 import { createContextEngine, renderLine } from "./context/index.js";
-import { FootprintIndex, HOT_TRANSFER_LINES } from "./footprint.js";
+import { FailoverModel } from "./failover.js";
 import { matchSceneSpec, ProfileConfig, resolveProfile, sceneDirectoryName, type SceneSpec } from "./profile.js";
 import { createToolcallEngine, type ToolcallEngine } from "./toolcall/index.js";
 import { createDispatchStimulus } from "./tools/dispatch-stimulus.js";
 import { createFinish } from "./tools/finish.js";
+import { withInnerThoughts } from "./tools/inner-thoughts.js";
 import { createPeekChannelHistory } from "./tools/peek-channel-history.js";
-import { createReportToolIssue } from "./tools/report-tool-issue.js";
 import { createSendMessage } from "./tools/send-message.js";
-import { createThink } from "./tools/think.js";
 import type { IshikiEvent, IshikiInnerStimulus } from "./types.js";
 import { createWakeupEngine, type WakeupEngine } from "./wakeup/index.js";
 
@@ -155,8 +154,6 @@ export class SceneRuntime {
   /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
   private readonly toolStartedAt = new Map<string, number>();
   private readonly stepStartedAt = new Map<string, number>();
-  /** 待挂载的跨场景前情；下一次装配时被引擎取走并清空。 */
-  private pendingCross?: { channelId: string; elapsedMs: number; lines: readonly string[] };
 
   constructor(config: SceneRuntimeConfig) {
     this.label = config.label;
@@ -216,6 +213,12 @@ export class SceneRuntime {
       case "tool.failed":
         this.toolStartedAt.delete(toolCallKey(event));
         break;
+      case "message.appended":
+        if (event.message.role === "assistant" && Array.isArray(event.message.content)) {
+          const text = event.message.content.map((part) => (part.type === "text" ? part.text : `[${part.type}]`)).join("");
+          this.logger.debug(`${tag} message.appended ${event.message.role} "${text}"`);
+        }
+        break;
       default:
         // 其余事件没有要算的量，落到下面统一记一行类型。
         break;
@@ -232,23 +235,6 @@ export class SceneRuntime {
   deliver(event: IshikiEvent, force = false): void {
     const trigger = force || this.wakeup.decide(event) === "trigger";
     this.agent.send(event, { trigger, ifBusy: "join" });
-  }
-
-  /** 只判定不投递：这条事件投下去会不会触发一轮。 */
-  wouldTrigger(event: IshikiEvent): boolean {
-    return this.wakeup.decide(event) === "trigger";
-  }
-
-  /** 挂一次性的跨场景前情；引擎在下一次装配时取走并清空。重复挂载以最后一次为准。 */
-  setCrossContext(context: { channelId: string; elapsedMs: number; lines: readonly string[] }): void {
-    this.pendingCross = context;
-  }
-
-  /** 引擎装配时取走易失前情；取走即清空，保证只挂载一轮。供装配回调调用。 */
-  takeCrossContext(): { channelId: string; elapsedMs: number; lines: readonly string[] } | undefined {
-    const pending = this.pendingCross;
-    this.pendingCross = undefined;
-    return pending;
   }
 
   /** 等待当前轮次结束。 */
@@ -307,8 +293,6 @@ export class ProfileRuntime {
   /** 每个可用 spec 一份：模型、唤醒引擎与工具调用引擎在 profile 内共享，由实例引用。 */
   private readonly plans: Record<string, { model: LanguageModel; wakeup: WakeupEngine; toolcall: ToolcallEngine } | undefined> = {};
   private readonly scenes: Record<string, SceneRuntime | undefined> = {};
-  /** 跨场景用户足迹：纯内存的瞬时工作记忆，见 footprint.ts。 */
-  private readonly footprints = new FootprintIndex();
   /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
   private persona?: string;
   private thinkPrompt?: string;
@@ -324,8 +308,11 @@ export class ProfileRuntime {
 
     for (const spec of options.specs) {
       try {
+        // 组名，或显式配了重试次数的引用，才包一层降级重试；其余原样交给网关，不付额外开销。
+        const failover = options.gateway.groups().includes(spec.model) || (spec.failover.attempts ?? 1) > 1;
+        const model = failover ? new FailoverModel(options.gateway, spec.model, spec.failover, this.logger) : options.gateway.languageModel(spec.model);
         this.plans[spec.name] = {
-          model: options.gateway.languageModel(spec.model),
+          model,
           wakeup: createWakeupEngine(spec.wakeup),
           toolcall: createToolcallEngine(spec.toolcall),
         };
@@ -343,30 +330,7 @@ export class ProfileRuntime {
     const spec = matchSceneSpec(this.specs, { sid: `${platform}:${selfId}`, channelId });
     if (spec === undefined) return undefined;
     const scene = this.ensure(spec, channelId, { platform, selfId });
-
-    // 足迹与热迁移只看用户消息：别的类型没有"某个人在哪里活跃"的语义。
-    if (event.type === "ishiki.message.created") {
-      const data = event.data;
-      // 先查热迁移再记录：record 会覆盖足迹，之后查到的永远是本条消息自己。
-      // 群聊 → 私聊的热迁移：私聊事件到达时，足迹里若刚有群聊互动，就挂上易失前情。
-      // 反方向（私聊 → 群聊）永不挂载：私聊内容不进公开视窗。
-      const from = data.isDirect ? this.footprints.hotTransfer(data.user.id, data.timestamp) : undefined;
-      const interacted = scene.wouldTrigger(event);
-      this.footprints.record(data.user.id, { sid: `${platform}:${selfId}`, channelId, timestamp: data.timestamp }, interacted);
-      if (from !== undefined && from.channelId !== channelId) void this.prepareCrossContext(scene, from);
-    }
     return scene;
-  }
-
-  /** 为热迁移拉取源频道最近几行，挂到目标实例上；拉取失败静默降级为无前情。 */
-  private async prepareCrossContext(scene: SceneRuntime, from: { sid: string; channelId: string; timestamp: number }): Promise<void> {
-    try {
-      const lines = await this.peek(from.sid, from.channelId, HOT_TRANSFER_LINES);
-      if (lines === undefined || lines.length === 0) return;
-      scene.setCrossContext({ channelId: from.channelId, elapsedMs: Date.now() - from.timestamp, lines });
-    } catch (error) {
-      this.logger.warn(`cross context peek failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
 
   /**
@@ -457,12 +421,7 @@ export class ProfileRuntime {
 
     const self = { sid: spec.sid, channelId, address };
     const control = new TurnControl();
-    // 引擎构造在 scene 之前，用闭包变量桥接：装配时回调已能拿到最终实例。
-    let sceneRef: SceneRuntime;
-    // 协议引擎接管工具调用：幕后流由输出契约保证，think 工具退出工具集。
-    // 撤 think 是 thoughts 协议的性质，挂在「是否协议引擎」上是本轮的行为等价改写，策略归属待定。
-    const jsonMode = spec.toolcall.engine !== "native";
-    const tools: ToolSet = {
+    const baseTools: ToolSet = {
       send_message: createSendMessage({
         ctx: this.ctx,
         logger: this.logger,
@@ -474,11 +433,10 @@ export class ProfileRuntime {
       finish: createFinish({ onStop: () => control.requestStop() }),
       peek_channel_history: createPeekChannelHistory({ self, peek: (target) => this.peek(target.sid, target.channelId, target.limit) }),
       dispatch_stimulus: createDispatchStimulus({ self, dispatch: (targets, body) => this.dispatch(self, targets, body) }),
-      report_tool_issue: createReportToolIssue({ logPath: path.join(this.directory, "tool_issues.log") }),
     };
-    if (!jsonMode) tools.think = createThink({ logger: this.logger });
 
-    // 模型侧：协议引擎把原生 function call 换成文本解析，native 与不适用的模型原样返回。
+    const tools = spec.innerThoughts ? withInnerThoughts(baseTools, this.logger) : baseTools;
+
     const model = plan.toolcall.wrap(plan.model);
 
     const scene = new SceneRuntime({
@@ -495,13 +453,6 @@ export class ProfileRuntime {
         createContextEngine(spec.context, {
           logger: this.logger,
           gateway: this.gateway,
-          pullCrossContext: () => sceneRef?.takeCrossContext(),
-          hint: (userId, currentChannelId) => {
-            const hit = this.footprints.lookup(userId);
-            if (hit === undefined || hit.channelId === currentChannelId) return undefined;
-            const minutes = Math.max(1, Math.round((Date.now() - hit.timestamp) / 60_000));
-            return `${minutes}分钟前在频道 ${hit.channelId} 活跃过，需要前情可用 peek_channel_history 查询`;
-          },
         }),
         control,
       ],
@@ -510,23 +461,12 @@ export class ProfileRuntime {
       logger: this.logger,
     });
     this.scenes[key] = scene;
-    sceneRef = scene;
     this.logger.info(`[${spec.profile}/${spec.name}] scene created: ${key}`);
     return scene;
   }
 
-  /**
-   * 系统提示词：人设文件，加上渲染后的 `resources/templates/system.jinja`。
-   * 人设取自 profile 目录的 `persona.md`；think 指南取自 profile 目录的 `think.md`，
-   * 没有就退回包内默认。协议引擎下 think 工具不存在，thinkPrompt 不进 system。
-   * 源码按 profile 缓存，当前频道每次渲染时注入。
-   */
   private instructions(spec: SceneSpec, channelId: string): string {
-    const jsonMode = spec.toolcall.engine !== "native";
     if (this.persona === undefined) this.persona = readSnippet(path.join(this.directory, "persona.md")) ?? "";
-    if (!jsonMode && this.thinkPrompt === undefined) {
-      this.thinkPrompt = readSnippet(path.join(this.directory, "think.md")) ?? readSnippet(resourcePath("templates", "think.md")) ?? "";
-    }
     if (this.systemTemplate === undefined) this.systemTemplate = readFileSync(resourcePath("templates", "system.jinja"), "utf8");
 
     // 地址簿按账号合并：没有认领频道的 spec 既不会被唤醒，也投递不进去，不列。
@@ -536,7 +476,12 @@ export class ProfileRuntime {
       bySid.set(other.sid, [...(bySid.get(other.sid) ?? []), ...other.whitelist]);
     }
     const bodies = [...bySid].map(([sid, channels]) => ({ sid, channels }));
-    const rendered = new Template(this.systemTemplate).render({ thinkPrompt: this.thinkPrompt, self: { sid: spec.sid, channelId }, bodies });
+    const rendered = new Template(this.systemTemplate).render({
+      thinkPrompt: this.thinkPrompt,
+      innerThoughts: spec.innerThoughts,
+      self: { sid: spec.sid, channelId },
+      bodies,
+    });
     return [rendered.trim(), this.persona].filter((part) => part.length > 0).join("\n\n");
   }
 }

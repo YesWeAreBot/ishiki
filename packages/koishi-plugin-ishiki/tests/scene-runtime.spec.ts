@@ -2,13 +2,13 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import os from "node:os";
 import path from "node:path";
 
-import { MockLanguageModelV4, createCustomMessage } from "@yesimagent/core";
-import type { Gateway } from "@yesimagent/gateway";
+import { APICallError, MockLanguageModelV4, createCustomMessage, type LanguageModelV4StreamPart, type ProviderV4 } from "@yesimagent/core";
+import { createGateway, type Gateway } from "@yesimagent/gateway";
 import { sleep, type Context, type Logger, type Session } from "koishi";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ProfileConfig, resolveProfile } from "../src/profile.js";
-import { ProfileRuntime, loadProfiles } from "../src/runtime.js";
+import { ProfileRuntime, loadProfiles, type SceneRuntime } from "../src/runtime.js";
 import { StandardHandler } from "../src/session-handler.js";
 
 const logs: string[] = [];
@@ -26,7 +26,7 @@ const model = new MockLanguageModelV4({
     throw new Error("这个用例不跑真流");
   },
 });
-const gateway = { languageModel: () => model } as unknown as Gateway;
+const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
 const ctx = { bots: { "onebot:1": { platform: "onebot", selfId: "1" } } } as unknown as Context;
 
 const config = ProfileConfig({
@@ -311,5 +311,190 @@ describe("typing config", () => {
       maxDelay: 900,
     });
     expect(resolveTyping(undefined, { minDelay: 50 })).toEqual({ baseDelay: 500, charPerSecond: 5, minDelay: 50, maxDelay: 4000 });
+  });
+});
+
+/** 按给定配置展开出 spec 的 failover，用来验算预设与覆写的优先级。 */
+function resolveFailover(failover?: Record<string, unknown>, sceneFailover?: Record<string, unknown>) {
+  return resolveProfile(
+    ProfileConfig({
+      presets: { base: { model: "m", ...(failover === undefined ? {} : { failover }) } },
+      scenes: { s: { preset: "base", sid: "onebot:1", ...(sceneFailover === undefined ? {} : { failover: sceneFailover }) } },
+    } as never),
+    "p",
+  )[0].failover;
+}
+
+describe("failover config", () => {
+  it("都没写时：跑完一轮候选，500ms 起退避，只在端点不可用时换人", () => {
+    expect(resolveFailover()).toEqual({ backoffMs: 500, failoverOn: "unavailable" });
+  });
+
+  it("scene 只写一个字段，不动 preset 的其余字段", () => {
+    expect(resolveFailover({ attempts: 3 }, { backoffMs: 100 })).toEqual({ attempts: 3, backoffMs: 100, failoverOn: "unavailable" });
+    expect(resolveFailover(undefined, { failoverOn: "any" })).toEqual({ backoffMs: 500, failoverOn: "any" });
+  });
+});
+
+/** 合法的 v4 用量：字段齐全，值都是 0。 */
+const USAGE = {
+  inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+  outputTokens: { total: 0, text: 0, reasoning: 0 },
+};
+
+/** 一段最小作答：正文加收尾。 */
+function textStream(text: string): ReadableStream<LanguageModelV4StreamPart> {
+  const parts: LanguageModelV4StreamPart[] = [
+    { type: "text-start", id: "t" },
+    { type: "text-delta", id: "t", delta: text },
+    { type: "text-end", id: "t" },
+    { type: "finish", usage: USAGE, finishReason: { unified: "stop", raw: "stop" } },
+  ];
+  return new ReadableStream({
+    start(controller) {
+      for (const part of parts) controller.enqueue(part);
+      controller.close();
+    },
+  });
+}
+
+/** 存储里 assistant 说过的正文。 */
+async function said(scene: SceneRuntime): Promise<string> {
+  const entries = await scene.storage.read();
+  return entries
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.data)
+    .filter((message) => message.role === "assistant")
+    .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+/** 一台桩端点：`fail` 的整次调用就失败。 */
+const endpoint = (fail: boolean) =>
+  new MockLanguageModelV4({
+    provider: "stub",
+    modelId: "m",
+    doStream: async () => {
+      if (fail) throw new Error("这台端点挂了");
+      return { stream: textStream("在") };
+    },
+  });
+
+/** 真网关加桩端点：候选顺序与熔断走 gateway 自己的代码。 */
+function gatewayOf(first: MockLanguageModelV4, second: MockLanguageModelV4): Gateway {
+  return createGateway({
+    config: {
+      providers: {
+        a: { api: "stub", apiKey: "unused", models: [{ id: "m" }] },
+        b: { api: "stub", apiKey: "unused", models: [{ id: "m" }] },
+      },
+      groups: { fast: { strategy: "failover", models: ["a:m", "b:m"], circuitBreaker: { failureThreshold: 9, cooldownSeconds: 60 } } },
+    },
+    apis: {
+      stub: (setup) => {
+        // 桩端点只伺候 languageModel；另两个接口用不到，直接抛，不假装能返回。
+        const provider: ProviderV4 = {
+          specificationVersion: "v4",
+          languageModel: () => (setup.id === "a" ? first : second),
+          embeddingModel: () => {
+            throw new Error("这台桩端点不管 embedding");
+          },
+          imageModel: () => {
+            throw new Error("这台桩端点不管 image");
+          },
+        };
+        return provider;
+      },
+    },
+  });
+}
+
+/** 一份最小 profile：私聊能唤醒，模型与降级配置由参数给。 */
+function runtimeOf(directory: string, model: string, gateway: Gateway, failover?: Record<string, unknown>): ProfileRuntime {
+  const specs = resolveProfile(
+    ProfileConfig({
+      id: "failover",
+      presets: {
+        base: {
+          model,
+          ...(failover === undefined ? {} : { failover }),
+          context: { engine: "standard", standard: { maxChars: 10_000 } },
+          wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+        },
+      },
+      scenes: { dms: { preset: "base", sid: "onebot:1", whitelist: ["private:*"] } },
+    }),
+    "failover",
+  );
+  return new ProfileRuntime({ id: "failover", directory, specs, ctx, gateway, logger });
+}
+
+describe("failover wiring", () => {
+  it("model 是组名时第一个候选失败由第二个顶上；普通引用没有这一层", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "ishiki-failover-"));
+    const gateway = gatewayOf(endpoint(true), endpoint(false));
+    const mark = logs.length;
+
+    const group = runtimeOf(root, "fast", gateway);
+    const served = group.route(message("direct", "private:11", "f1"))!;
+    served.deliver(message("direct", "private:11", "f1"));
+    await served.idle();
+
+    expect(await said(served)).toBe("在");
+    expect(logs.slice(mark).some((line) => line.includes("turn failed"))).toBe(false);
+
+    // 普通引用不进组：同一个端点坏了，这一轮就是坏的
+    const plain = runtimeOf(root, "a:m", gateway);
+    const alone = plain.route(message("direct", "private:12", "f2"))!;
+    alone.deliver(message("direct", "private:12", "f2"));
+    await alone.idle();
+
+    expect(await said(alone)).toBe("");
+    expect(logs.slice(mark).some((line) => line.includes("turn failed"))).toBe(true);
+
+    await group.stop();
+    await plain.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** 一台会抖的端点：前 `failTimes` 次调用连不上，之后照常作答。 */
+  const flakyEndpoint = (failTimes: number) => {
+    let calls = 0;
+    return new MockLanguageModelV4({
+      provider: "stub",
+      modelId: "m",
+      doStream: async () => {
+        calls += 1;
+        if (calls <= failTimes) {
+          // 线上那一次的形状：连不上端点，没有 statusCode，`isRetryable` 为 true。
+          throw new APICallError({
+            message: "Cannot connect to API: ",
+            url: "https://stub.invalid/v1/models/m:streamGenerateContent?alt=sse",
+            requestBodyValues: {},
+            isRetryable: true,
+            cause: new Error("connect ETIMEDOUT"),
+          });
+        }
+        return { stream: textStream("在") };
+      },
+    });
+  };
+
+  it("单候选配了 attempts：线上那种连不上端点，重试一次就救回来了", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "ishiki-failover-"));
+    // 模型是普通引用、组里只有它一个成员：没有第二个人可换，靠的是同一个端点重试。
+    const gateway = gatewayOf(flakyEndpoint(1), endpoint(false));
+    const runtime = runtimeOf(root, "a:m", gateway, { attempts: 2, backoffMs: 1 });
+
+    const scene = runtime.route(message("direct", "private:21", "f3"))!;
+    scene.deliver(message("direct", "private:21", "f3"));
+    await scene.idle();
+
+    expect(await said(scene)).toBe("在");
+
+    await runtime.stop();
+    rmSync(root, { recursive: true, force: true });
   });
 });

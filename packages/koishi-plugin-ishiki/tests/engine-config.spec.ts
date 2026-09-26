@@ -62,4 +62,10 @@ describe("engine config precedence", () => {
     const spec = specOf({ toolcall: { engine: "thoughts" } }, { toolcall: { engine: "native" } });
     expect(spec.toolcall.engine).toBe("native");
   });
+
+  it("innerThoughts 缺省关闭，preset 与 scene 逐层覆写", () => {
+    expect(specOf({}).innerThoughts).toBe(false);
+    expect(specOf({ innerThoughts: true }).innerThoughts).toBe(true);
+    expect(specOf({ innerThoughts: true }, { innerThoughts: false }).innerThoughts).toBe(false);
+  });
 });

@@ -1,4 +1,4 @@
-import { AgentPlugin, Awaitable, ToolSet } from "@yesimagent/core";
+import { AgentPlugin } from "@yesimagent/core";
 
 export interface MemoryEngines {}
 

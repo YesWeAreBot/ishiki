@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -273,7 +273,7 @@ describe("tools through a real agent", () => {
         return { stream: simulateReadableStream({ chunks: steps.shift() ?? textStep("（脚本用完了）") }) };
       },
     });
-    const gateway = { languageModel: () => model } as unknown as Gateway;
+    const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
     const ctx = {
       bots: {
         "onebot:1": {
@@ -351,52 +351,5 @@ describe("tools through a real agent", () => {
     expect(prompts[1]).toContain("刚才那边说了什么");
     // 文本回复不会自己到达平台：只有 send_message 能让话被听见
     expect(platform.sent).toEqual([]);
-  });
-
-  it("renders the think guide and the address book into the system prompt", async () => {
-    prompts.length = 0;
-    steps = [toolStep("finish", { reason: "不用回" })];
-
-    const scene = runtime.route(direct("e"))!;
-    scene.deliver(direct("e"));
-    await scene.idle();
-
-    const system = prompts[0];
-    expect(system).toContain("think_guide"); // think.md 已经注入
-    expect(system).toContain("内心独白"); // 内置指南的正文
-    expect(system).toContain("你现在是 onebot:1"); // 当前账号与频道
-    expect(system).toContain("group:*"); // 地址簿：本 profile 名下的频道模式
-  });
-
-  it("takes persona.md and think.md overrides from the profile directory", async () => {
-    const directory = mkdtempSync(path.join(os.tmpdir(), "ishiki-prompt-"));
-    writeFileSync(path.join(directory, "persona.md"), "PERSONA-MARKER");
-    writeFileSync(path.join(directory, "think.md"), "THINK-MARKER");
-
-    const written: string[] = [];
-    const model = new MockLanguageModelV4({
-      doStream: async (request) => {
-        written.push(JSON.stringify(request.prompt));
-        return { stream: simulateReadableStream({ chunks: toolStep("finish", { reason: "不用回" }) }) };
-      },
-    });
-    const local = new ProfileRuntime({
-      id: "neko",
-      directory,
-      specs: resolveProfile(config, "neko"),
-      ctx: { bots: {} } as unknown as Context,
-      gateway: { languageModel: () => model } as unknown as Gateway,
-      logger,
-    });
-
-    const scene = local.route(direct("p"))!;
-    scene.deliver(direct("p"));
-    await scene.idle();
-    await local.stop();
-    rmSync(directory, { recursive: true, force: true });
-
-    expect(written[0]).toContain("PERSONA-MARKER");
-    expect(written[0]).toContain("THINK-MARKER");
-    expect(written[0]).not.toContain("内心独白"); // profile 里的 think.md 覆盖了内置指南
   });
 });

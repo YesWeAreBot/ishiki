@@ -67,6 +67,27 @@ export const TypingConfig: Schema<Partial<TypingConfig>> = Schema.object({
 });
 
 /**
+ * 一次模型调用的降级与重试。谁在组里、按什么顺序试、熔断阈值多少，都在 models.yaml 的 group 里；
+ * 这里只管这一次调用最多试几次、隔多久。
+ *
+ * 不给默认值——理由同 {@link TypingConfig}，缺省在 {@link FALLBACK}。
+ */
+export interface FailoverConfig {
+  /** 一次模型调用的最大尝试次数。缺省跑完一轮候选，即组内每个成员各试一次。 */
+  attempts?: number;
+  /** 首次重试前的等待（毫秒），逐次翻倍，封顶 8s，取半抖动。 */
+  backoffMs: number;
+  /** 换不换人：`unavailable` 只在端点不可用时换；`any` 连请求本身的问题也换，用在不认某个参数的 relay 上。 */
+  failoverOn: "unavailable" | "any";
+}
+
+export const FailoverConfig: Schema<Partial<FailoverConfig>> = Schema.object({
+  attempts: Schema.number().description("一次模型调用的最大尝试次数；缺省跑完一轮候选"),
+  backoffMs: Schema.number().description("首次重试前的等待（毫秒），逐次翻倍，封顶 8s"),
+  failoverOn: Schema.union([Schema.const("unavailable"), Schema.const("any")]).description("unavailable：只在端点不可用时换人；any：请求本身的问题也换"),
+});
+
+/**
  * ### Scene
  *
  * Scene 是一份装配清单（工厂）：绑定一个 Bot 账号，并认领该账号名下的若干频道。
@@ -87,6 +108,8 @@ export const TypingConfig: Schema<Partial<TypingConfig>> = Schema.object({
  *
  * # 对 preset 的局部覆写
  * model: <model-or-group-name>
+ * failover:
+ *   attempts: 3
  * typing:
  *   baseDelay: 500
  *   charPerSecond: 5
@@ -108,9 +131,13 @@ export interface SceneConfig {
   /** 排除的频道模式，写法同 whitelist。 */
   blacklist?: string[];
   model?: string;
+  /** 降级与重试的局部覆写；未写的字段沿用 preset（若 preset 也没写，用内置默认）。 */
+  failover?: Partial<FailoverConfig>;
   context?: ContextConfig;
   wakeup?: WakeupConfig;
   toolcall?: ToolcallConfig;
+  /** 是否启用幕后通道：每个工具的参数表前置 inner_thoughts，think 工具退场。默认关闭。 */
+  innerThoughts?: boolean;
   /** 打字节奏的局部覆写；未写的字段沿用 preset（若 preset 也没写，用内置默认）。 */
   typing?: Partial<TypingConfig>;
 }
@@ -122,9 +149,11 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
   whitelist: Schema.array(Schema.string()),
   blacklist: Schema.array(Schema.string()),
   model: Schema.string(),
+  failover: FailoverConfig,
   context: ContextConfig,
   wakeup: WakeupConfig,
   toolcall: ToolcallConfig,
+  innerThoughts: Schema.boolean().description("将幕后念头挂到每个工具的参数表上（inner_thoughts），并移除 think 工具"),
   typing: TypingConfig,
 });
 
@@ -138,6 +167,12 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
  * description: <preset-description> # for display only
  *
  * model: <model-or-group-name>
+ *
+ * # 一次模型调用最多试几次、隔多久；model 是组名或配了 attempts 时生效
+ * failover:
+ *   attempts: 3
+ *   backoffMs: 500
+ *   failoverOn: unavailable
  *
  * # 发消息前等多久，模拟打字
  * typing:
@@ -169,18 +204,23 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
 export interface PresetConfig {
   description?: string;
   model: string;
+  failover?: Partial<FailoverConfig>;
   context: ContextConfig;
   wakeup: WakeupConfig;
   toolcall?: ToolcallConfig;
+  /** 是否启用幕后通道：每个工具的参数表前置 inner_thoughts，think 工具退场。默认关闭。 */
+  innerThoughts?: boolean;
   typing?: Partial<TypingConfig>;
 }
 
 export const PresetConfig: Schema<PresetConfig> = Schema.object({
   description: Schema.string(),
   model: Schema.string().required(),
+  failover: FailoverConfig,
   context: ContextConfig,
   wakeup: WakeupConfig,
   toolcall: ToolcallConfig,
+  innerThoughts: Schema.boolean().description("将幕后念头挂到每个工具的参数表上（inner_thoughts），并移除 think 工具"),
   typing: TypingConfig,
 });
 
@@ -240,10 +280,14 @@ export interface SceneSpec {
   sid: string;
   description?: string;
   model: string;
+  /** 降级与重试，Preset 与 Scene 的覆写已在此合并。 */
+  failover: FailoverConfig;
   context: ContextConfig;
   wakeup: WakeupConfig;
   /** 工具调用方式，Preset 与 Scene 的覆写已在此合并；缺省 native。 */
   toolcall: ToolcallConfig;
+  /** 幕后通道是否启用，Preset 与 Scene 的覆写已在此合并；缺省关闭。 */
+  innerThoughts: boolean;
   /** 打字节奏，Preset 与 Scene 的覆写已在此合并。 */
   typing: TypingConfig;
   whitelist: string[];
@@ -294,10 +338,12 @@ function merge<T>(base: T, ...layers: readonly unknown[]): T {
  * Spec 的缺省层：三层合并的最底层，也是配置面唯一的默认值来源。
  * Schema 里一律不留 default——被它补上的值与用户写的值在合并层形状相同，覆写语义会因此失效。
  */
-const FALLBACK: Pick<SceneSpec, "context" | "wakeup" | "toolcall" | "typing" | "whitelist" | "blacklist"> = {
+const FALLBACK: Pick<SceneSpec, "failover" | "context" | "wakeup" | "toolcall" | "innerThoughts" | "typing" | "whitelist" | "blacklist"> = {
+  failover: { backoffMs: 500, failoverOn: "unavailable" },
   context: { engine: "standard" },
   wakeup: { engine: "standard" },
   toolcall: { engine: "native" },
+  innerThoughts: false,
   typing: { baseDelay: 500, charPerSecond: 5, minDelay: 800, maxDelay: 4000 },
   whitelist: [],
   blacklist: [],

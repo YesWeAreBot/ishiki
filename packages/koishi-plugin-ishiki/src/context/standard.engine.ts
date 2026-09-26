@@ -2,7 +2,7 @@ import { createEntry, createUserMessage, generateText, type Agent, type AgentEnt
 import type { Logger } from "koishi";
 
 import type { IshikiInnerStimulus, IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, registerContextEngine, type ContextEngineOptions, type CrossContext, type FootprintHint } from "./engine.js";
+import { ContextEngine, registerContextEngine, type ContextEngineOptions } from "./engine.js";
 
 declare module "@yesimagent/core" {
   interface AgentCustomEntry {
@@ -37,15 +37,14 @@ function formatClock(timestamp: number): string {
 }
 
 /** 将一条 ishiki 消息渲染为上下文中的一行；非本命名空间返回 undefined。 */
-export function renderLine(message: AgentMessage, hint?: FootprintHint): string | undefined {
+export function renderLine(message: AgentMessage): string | undefined {
   if (message.role !== "custom") return undefined;
 
   switch (message.type) {
     case "ishiki.message.created": {
       const data: IshikiMessageCreated = message.data;
       const who = data.user.name === undefined || data.user.name.length === 0 ? data.user.id : `${data.user.name}(${data.user.id})`;
-      const extra = hint?.(data.user.id, data.channelId);
-      return `[${formatClock(data.timestamp)}] ${who} #${data.messageId}: ${data.content}${extra === undefined ? "" : ` <!-- ${extra} -->`}`;
+      return `[${formatClock(data.timestamp)}] ${who} #${data.messageId}: ${data.content}`;
     }
     case "ishiki.message.deleted": {
       const data: IshikiMessageDeleted = message.data;
@@ -81,7 +80,7 @@ function textOf(message: AgentMessage): string {
 }
 
 /** 连续的 ishiki 消息合并为单条 user 消息；其余消息原样透传，并中断行序列。 */
-export function collapse(messages: readonly AgentMessage[], hint?: FootprintHint): AgentMessage[] {
+export function collapse(messages: readonly AgentMessage[]): AgentMessage[] {
   const collapsed: AgentMessage[] = [];
   const lines: string[] = [];
 
@@ -92,7 +91,7 @@ export function collapse(messages: readonly AgentMessage[], hint?: FootprintHint
   };
 
   for (const message of messages) {
-    const line = renderLine(message, hint);
+    const line = renderLine(message);
     if (line === undefined) {
       flush();
       collapsed.push(message);
@@ -150,10 +149,6 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
   private readonly logger?: Logger;
   private readonly ceiling: number;
   private readonly target: number;
-  /** 拉取待挂载的跨场景前情；取到即清空来源，保证只挂载一次。 */
-  private readonly pullCrossContext?: () => CrossContext | undefined;
-  /** 足迹线索：渲染消息行时附加发言人的跨频道活跃提示。 */
-  private readonly hint?: FootprintHint;
   /** 上一次装配是否超预算：后台压缩的触发条件。 */
   private over = false;
   private compacting?: Promise<void>;
@@ -164,8 +159,6 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
     super("standard", { maxChars, refillRatio });
     this.logger = options.logger;
-    this.pullCrossContext = options.pullCrossContext;
-    this.hint = options.hint;
     this.ceiling = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : 0;
     this.target = this.ceiling * refillRatio;
     if (this.ceiling === 0) this.logger?.warn("context budget disabled: maxChars is non-positive, compaction off");
@@ -193,40 +186,25 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     const tail = memory === undefined ? entries : entries.slice(anchor + 1);
     const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
 
-    // 易失跨场景前情：挂到可见区末尾，不参与预算裁剪（单次 ≤10 行，量级可控），
-    // 也不写入存储。取到即清空，保证只对本轮可见。
-    const cross = this.pullCrossContext?.();
-    const crossEntries =
-      cross === undefined
-        ? []
-        : [
-            createEntry(
-              "message",
-              createUserMessage(
-                `<cross_scene_context channel="${cross.channelId}" elapsed="${Math.round(cross.elapsedMs / 60_000)}m">\n${cross.lines.join("\n")}\n</cross_scene_context>`,
-              ),
-            ),
-          ];
-
     let size = head.length;
     for (const entry of tail) {
       if (entry.type === "message") size += textOf(entry.data).length;
     }
     if (size <= this.ceiling) {
       this.over = false;
-      return this.prepend(head, [...tail, ...crossEntries]);
+      return this.prepend(head, [...tail]);
     }
 
     this.over = true;
     const cut = cutOf(tail, head.length, this.target);
     if (cut < 0) {
       this.logger?.warn("context over budget with no valid cut point, entries passed through");
-      return this.prepend(head, [...tail, ...crossEntries]);
+      return this.prepend(head, [...tail]);
     }
-    return this.prepend(head, [...tail.slice(cut), ...crossEntries]);
+    return this.prepend(head, tail.slice(cut));
   };
 
-  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages, this.hint);
+  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages);
 
   /** 后台：一轮结束后，若刚才是超预算装配的，把切掉的那段并进摘要。不阻塞轮次结束。 */
   onTurnFinish = (): void => {
