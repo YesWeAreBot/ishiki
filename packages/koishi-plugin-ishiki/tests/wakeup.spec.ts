@@ -226,7 +226,7 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
 
       // 被 @ 一条即触发，意愿顶到上限。
       const event = message({ content: '<at id="bot"/>在吗' });
-      scene.deliver(event);
+      await scene.deliver(event);
       await scene.idle();
 
       expect(logs).toEqual([]);

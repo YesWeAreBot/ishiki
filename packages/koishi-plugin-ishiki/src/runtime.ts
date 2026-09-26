@@ -175,6 +175,8 @@ export class SceneRuntime {
       tools: config.tools,
     });
 
+    // 引擎自己订阅事实流、读存储；运行时不替它转述发生了什么。
+    config.wakeup.attach?.(this.agent, this.channelId);
     this.agent.channel.subscribe("agent", (event) => this.logEvent(event));
   }
 
@@ -200,8 +202,6 @@ export class SceneRuntime {
       }
       case "turn.done":
         this.stepStartedAt.delete(event.turnId);
-        // 一轮走完才扣意愿；失败与中止不扣，与 v3 的「只有成功的一轮才付成本」一致。
-        this.wakeup.observe?.(this.channelId);
         break;
       case "turn.failed":
       case "turn.aborted":
@@ -236,8 +236,8 @@ export class SceneRuntime {
   }
 
   /** 向该频道投递一条事件：仅写入事件流，或按唤醒结果触发一轮。 */
-  deliver(event: IshikiEvent, force = false): void {
-    const trigger = force || this.wakeup.decide(event) === "trigger";
+  async deliver(event: IshikiEvent, force = false): Promise<void> {
+    const trigger = force || (await this.wakeup.decide(event)) === "trigger";
     this.agent.send(event, { trigger, ifBusy: "join" });
   }
 
@@ -247,6 +247,7 @@ export class SceneRuntime {
   }
 
   async stop(): Promise<void> {
+    this.wakeup.detach?.(this.channelId);
     await this.agent.stop();
   }
 }
@@ -317,7 +318,7 @@ export class ProfileRuntime {
         const model = failover ? new FailoverModel(options.gateway, spec.model, spec.failover, this.logger) : options.gateway.languageModel(spec.model);
         this.plans[spec.name] = {
           model,
-          wakeup: createWakeupEngine(spec.wakeup),
+          wakeup: createWakeupEngine(spec.wakeup, { logger: this.logger }),
           toolcall: createToolcallEngine(spec.toolcall),
         };
         this.specs.push(spec);
@@ -358,12 +359,14 @@ export class ProfileRuntime {
    * 向本 profile 内其他频道投递 stimulus；目标实例不存在时按需创建。
    * `from` 只需给出投递方的地址与账号：来源身份按值取，不必持有实例。
    * 只有 `urgency` 为 `urgent` 才叫醒目标，其余情况只写入事件流。
+   * 唤醒判定可能是一次往返（`jev` 那类要问模型的引擎），所以投递要等：返回的 `delivered`
+   * 因此表示「已写入」而不是「已递交」。
    */
-  dispatch(
+  async dispatch(
     from: Pick<SceneRuntime, "sid" | "channelId" | "address">,
     targets: readonly StimulusTarget[],
     body: { reason: string; content: string; urgency?: StimulusUrgency },
-  ): StimulusReport {
+  ): Promise<StimulusReport> {
     const refused: StimulusRefusal[] = [];
     let delivered = 0;
 
@@ -403,7 +406,7 @@ export class ProfileRuntime {
         reason: body.reason,
         content: body.content,
       };
-      scene.deliver(createCustomMessage("ishiki.inner_stimulus", payload), body.urgency === "urgent");
+      await scene.deliver(createCustomMessage("ishiki.inner_stimulus", payload), body.urgency === "urgent");
       delivered += 1;
     }
 

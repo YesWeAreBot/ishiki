@@ -67,6 +67,33 @@ presets:
     toolcall:
       engine: classic
 
+  # 唤醒交给 Jev（TypeSafe）判定：规则只兜私聊与 @，其余消息都问一次模型。
+  # 需要 apiKey，或环境变量 TYPESAFE_API_KEY；缺了这份 profile 会在装载时被跳过。
+  jev:
+    description: 规则兜底 + Jev 判定的唤醒
+    model: openai:gpt-5.6-luna
+    context:
+      engine: standard # 上下文与唤醒各自独立，这里只把唤醒换掉
+    wakeup:
+      engine: jev
+      jev:
+        # 补充判据：身份、语气、什么时候该闭嘴都写在这里。内置判据已按场景分档（私聊默认该回、
+        # 群聊默认别插话），这段是在它之上加约束——写得好是加分，写漏了也不塌下限。
+        instruction: |
+          neko，猫娘，话不多但会接梗。
+          只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
+          几个人互相寒暄时保持安静。
+        threshold: 0.5 # 概率阈值，调高更沉默
+        cooldownMs: 30000 # 上次开口后的静默期（毫秒）；硬命中的规则不受它约束
+        historyMessages: 8 # 喂给模型的最近消息条数
+        timeoutMs: 1500 # 单次判定等待上限（毫秒），超时按不唤醒处理
+        # 兜底规则：命中即唤醒、不问模型。默认只开私聊与 @，其余交给模型
+        rules:
+          direct: true
+          atSelf: true
+          quoteSelf: false
+          keywords: []
+
 scenes:
   # 一个 Scene 绑定一个账号，认领该账号名下一组频道（工厂）；
   # 每个匹配到的频道各起一个独立的意识实例，历史互不相通。

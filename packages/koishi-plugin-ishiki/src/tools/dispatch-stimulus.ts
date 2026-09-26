@@ -6,8 +6,8 @@ export namespace DispatchStimulusTool {
   export interface Options {
     /** 投递方实例：`sid` 省略时以它为默认目标账号，也是自我投递的判据。 */
     self: { sid: string; channelId: string };
-    /** 交给容器：目标校验、实例创建与投递都在那里。 */
-    dispatch: (targets: readonly StimulusTarget[], body: { reason: string; content: string; urgency: StimulusUrgency }) => StimulusReport;
+    /** 交给容器：目标校验、实例创建与投递都在那里。唤醒判定可能是异步的，所以要等。 */
+    dispatch: (targets: readonly StimulusTarget[], body: { reason: string; content: string; urgency: StimulusUrgency }) => Promise<StimulusReport>;
   }
   export interface Input {
     targets: StimulusTarget[];
@@ -83,7 +83,7 @@ export function createDispatchStimulus(options: DispatchStimulusTool.Options): T
         };
       }
 
-      const report = options.dispatch(targets, { reason: input.reason, content: input.content, urgency });
+      const report = await options.dispatch(targets, { reason: input.reason, content: input.content, urgency });
       if (report.delivered === 0) {
         return { ok: false as const, error: { name: "NotDelivered", message: "没有任何目标收到这条投递" }, refused: report.refused };
       }

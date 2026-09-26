@@ -182,7 +182,7 @@ describe("dispatch_stimulus", () => {
     const calls: Array<{ targets: unknown; body: unknown }> = [];
     const tool = createDispatchStimulus({
       self,
-      dispatch: (targets, body) => {
+      dispatch: async (targets, body) => {
         calls.push({ targets, body });
         return { delivered: 1, refused: [] };
       },
@@ -200,7 +200,7 @@ describe("dispatch_stimulus", () => {
   });
 
   it("refuses a target that is this very channel, and malformed input", async () => {
-    const tool = createDispatchStimulus({ self, dispatch: () => ({ delivered: 1, refused: [] }) });
+    const tool = createDispatchStimulus({ self, dispatch: async () => ({ delivered: 1, refused: [] }) });
 
     expect(await run(tool, { targets: [{ channelId: "group:2" }], reason: "r", content: "c" })).toMatchObject({ ok: false, error: { name: "SelfTarget" } });
     expect(await run(tool, { targets: [], reason: "r", content: "c" })).toMatchObject({ ok: false, error: { name: "InvalidInput" } });
@@ -214,7 +214,7 @@ describe("dispatch_stimulus", () => {
   it("surfaces a delivery that reached nobody", async () => {
     const tool = createDispatchStimulus({
       self,
-      dispatch: () => ({ delivered: 0, refused: [{ target: "onebot:1/group:9", error: "channel is not configured in this profile" }] }),
+      dispatch: async () => ({ delivered: 0, refused: [{ target: "onebot:1/group:9", error: "channel is not configured in this profile" }] }),
     });
     const result = await run(tool, { targets: [{ channelId: "group:9" }], reason: "r", content: "c" });
 
@@ -301,7 +301,7 @@ describe("tools through a real agent", () => {
     steps = [toolStep("send_message", { messages: ["在的"] }), textStep("这一步不该被走到")];
 
     const scene = runtime.route(direct("a"))!;
-    scene.deliver(direct("a"));
+    await scene.deliver(direct("a"));
     await scene.idle();
 
     expect(platform.sent).toEqual([{ channelId: "private:9", content: "在的" }]);
@@ -315,7 +315,7 @@ describe("tools through a real agent", () => {
     steps = [toolStep("finish", { reason: "不用回" }), textStep("这一步不该被走到")];
 
     const scene = runtime.route(direct("b"))!;
-    scene.deliver(direct("b"));
+    await scene.deliver(direct("b"));
     await scene.idle();
 
     expect(platform.sent).toEqual([]);
@@ -327,7 +327,7 @@ describe("tools through a real agent", () => {
     steps = [toolStep("dispatch_stimulus", { targets: [{ channelId: "group:2" }], reason: "想问一句", content: "刚才那边说了什么" })];
 
     const scene = runtime.route(direct("c"))!;
-    scene.deliver(direct("c"));
+    await scene.deliver(direct("c"));
     await scene.idle();
 
     // 默认 idle：念头落进对方的流，但对方不被叫醒，落盘也不跟这一轮同步
@@ -344,7 +344,7 @@ describe("tools through a real agent", () => {
     steps = [toolStep("peek_channel_history", { channelId: "group:2", limit: 3 }), textStep("想起来了")];
 
     const scene = runtime.route(direct("d"))!;
-    scene.deliver(direct("d"));
+    await scene.deliver(direct("d"));
     await scene.idle();
 
     expect(prompts).toHaveLength(2);

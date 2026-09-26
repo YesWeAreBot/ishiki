@@ -88,7 +88,7 @@ class Ishiki extends Service<Ishiki.Config> {
       try {
         const scene = profile.route(event);
         if (scene === undefined) continue;
-        scene.deliver(event);
+        await scene.deliver(event);
       } catch (error) {
         this.logger.warn(`routing failed: ${error instanceof Error ? error.message : String(error)}`);
         continue;

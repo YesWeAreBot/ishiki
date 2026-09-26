@@ -81,7 +81,7 @@ describe("profile runtime", () => {
 
   it("wakes on a direct message and keeps the channel's own stream", async () => {
     const dm = runtime.route(message("direct", "private:9", "a"))!;
-    dm.deliver(message("direct", "private:9", "a"));
+    await dm.deliver(message("direct", "private:9", "a"));
     await dm.idle();
 
     expect(calls.streams).toBe(1);
@@ -91,7 +91,7 @@ describe("profile runtime", () => {
 
   it("records a message the wakeup rule ignores without waking", async () => {
     const room = runtime.route(message("group", "group:2", "c"))!;
-    room.deliver(message("group", "group:2", "c"));
+    await room.deliver(message("group", "group:2", "c"));
     await sleep(20);
 
     expect(calls.streams).toBe(1);
@@ -117,7 +117,7 @@ describe("profile runtime", () => {
 
   it("writes an idle stimulus into the target's stream without spending a turn on it", async () => {
     const dm = runtime.route(message("direct", "private:9", "a"))!;
-    const report = runtime.dispatch(dm, [{ channelId: "group:2" }], { reason: "想问一句", content: "刚才那边说了什么" });
+    const report = await runtime.dispatch(dm, [{ channelId: "group:2" }], { reason: "想问一句", content: "刚才那边说了什么" });
     expect(report).toEqual({ delivered: 1, refused: [] });
 
     const room = runtime.route(message("group", "group:2", "c"))!;
@@ -129,7 +129,7 @@ describe("profile runtime", () => {
 
   it("wakes the target only when the stimulus is urgent", async () => {
     const dm = runtime.route(message("direct", "private:9", "a"))!;
-    const report = runtime.dispatch(dm, [{ channelId: "group:2" }], { reason: "想问一句", content: "刚才那边说了什么", urgency: "urgent" });
+    const report = await runtime.dispatch(dm, [{ channelId: "group:2" }], { reason: "想问一句", content: "刚才那边说了什么", urgency: "urgent" });
     expect(report).toEqual({ delivered: 1, refused: [] });
 
     const room = runtime.route(message("group", "group:2", "c"))!;
@@ -139,7 +139,7 @@ describe("profile runtime", () => {
 
   it("mounts an unseen target from its spec: one claim per channel, so no ambiguity is possible", async () => {
     const dm = runtime.route(message("direct", "private:9", "a"))!;
-    const report = runtime.dispatch(dm, [{ channelId: "group:77" }], { reason: "r", content: "c" });
+    const report = await runtime.dispatch(dm, [{ channelId: "group:77" }], { reason: "r", content: "c" });
 
     expect(report).toEqual({ delivered: 1, refused: [] });
     const target = runtime.route(message("group", "group:77", "f"))!;
@@ -150,15 +150,15 @@ describe("profile runtime", () => {
     });
   });
 
-  it("refuses a stimulus it cannot address: source channel, disconnected account, unclaimed channel", () => {
+  it("refuses a stimulus it cannot address: source channel, disconnected account, unclaimed channel", async () => {
     const dm = runtime.route(message("direct", "private:9", "a"))!;
 
     // 目标频道即来源频道
-    expect(runtime.dispatch(dm, [{ channelId: "private:9" }], { reason: "r", content: "c" }).refused[0].error).toContain("source channel");
+    expect((await runtime.dispatch(dm, [{ channelId: "private:9" }], { reason: "r", content: "c" })).refused[0].error).toContain("source channel");
     // 目标账号不在线
-    expect(runtime.dispatch(dm, [{ sid: "other:1", channelId: "x" }], { reason: "r", content: "c" }).delivered).toBe(0);
+    expect((await runtime.dispatch(dm, [{ sid: "other:1", channelId: "x" }], { reason: "r", content: "c" })).delivered).toBe(0);
     // 没有任何 spec 认领的频道
-    expect(runtime.dispatch(dm, [{ channelId: "guild:7" }], { reason: "r", content: "c" }).refused[0].error).toContain("not configured");
+    expect((await runtime.dispatch(dm, [{ channelId: "guild:7" }], { reason: "r", content: "c" })).refused[0].error).toContain("not configured");
   });
 
   it("takes a platform session all the way to its scene", () => {
@@ -439,7 +439,7 @@ describe("failover wiring", () => {
 
     const group = runtimeOf(root, "fast", gateway);
     const served = group.route(message("direct", "private:11", "f1"))!;
-    served.deliver(message("direct", "private:11", "f1"));
+    await served.deliver(message("direct", "private:11", "f1"));
     await served.idle();
 
     expect(await said(served)).toBe("在");
@@ -448,7 +448,7 @@ describe("failover wiring", () => {
     // 普通引用不进组：同一个端点坏了，这一轮就是坏的
     const plain = runtimeOf(root, "a:m", gateway);
     const alone = plain.route(message("direct", "private:12", "f2"))!;
-    alone.deliver(message("direct", "private:12", "f2"));
+    await alone.deliver(message("direct", "private:12", "f2"));
     await alone.idle();
 
     expect(await said(alone)).toBe("");
@@ -489,7 +489,7 @@ describe("failover wiring", () => {
     const runtime = runtimeOf(root, "a:m", gateway, { attempts: 2, backoffMs: 1 });
 
     const scene = runtime.route(message("direct", "private:21", "f3"))!;
-    scene.deliver(message("direct", "private:21", "f3"));
+    await scene.deliver(message("direct", "private:21", "f3"));
     await scene.idle();
 
     expect(await said(scene)).toBe("在");

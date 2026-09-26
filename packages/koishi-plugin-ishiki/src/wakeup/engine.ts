@@ -1,4 +1,5 @@
-import { h } from "koishi";
+import type { Agent } from "@yesimagent/core";
+import { h, type Logger } from "koishi";
 
 import type { IshikiEvent } from "../types.js";
 
@@ -15,6 +16,14 @@ export interface WakeupEngines {}
 /** 一条事件要不要唤起一轮；`wait` 表示继续等。 */
 export type WakeupDecision = "trigger" | "wait";
 
+/**
+ * 建引擎时宿主递进来的东西：引擎拿不到 `Context`，只拿这一小包。
+ * 需要发请求的引擎（如 `jev`）要一个日志出口，否则失败只能无声降级。
+ */
+export interface WakeupEngineDeps {
+  logger?: Logger;
+}
+
 export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupEngines> {
   public readonly name: K;
   public readonly config: WakeupEngines[K];
@@ -24,13 +33,23 @@ export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupE
     this.config = config;
   }
 
-  abstract decide(event: IshikiEvent): WakeupDecision;
+  /**
+   * 判定要同步给结果还是要等一次往返，由引擎自己定：`await` 对同步实现只是一个微任务。
+   * 调用点必须 `await` —— `Promise` 恒不等于 `"trigger"`。
+   */
+  abstract decide(event: IshikiEvent): WakeupDecision | Promise<WakeupDecision>;
 
   /**
-   * 一轮结束的回执。调用点在场景侧（turn.done），引擎据此更新自己的状态
-   * （如扣掉刚刚用掉的意愿）；不实现即无状态。
+   * 场景的 agent 建好后挂上来。引擎要「这个场景发生了什么、我自己说过什么」，只能从这里拿：
+   * 订阅 `agent.channel` 看事实流，读 `agent.storage` 补上进程启动之前的历史。
+   *
+   * 一个引擎实例按 spec 共享，可能被多个频道的 agent 先后挂上来，`agent.channel` 的事件里又
+   * 不带频道，所以频道由调用方在挂载时给出，引擎按它各自记账。
    */
-  observe?(channelId: string): void;
+  attach?(agent: Agent, channelId: string): void;
+
+  /** 场景停止时解开这一轮的挂载：取消订阅、丢掉这个频道的记账。不实现即没有要拆的东西。 */
+  detach?(channelId: string): void;
 }
 
 /** 内容里是否 @ 了指定身份。`<at>` 不是合法消息内容时按「没有」处理。 */
@@ -44,19 +63,22 @@ export function atSelf(content: string, selfId: string): boolean {
 }
 
 /** 运行期注册表：各引擎的配置类型不同，登记时收窄、取用时按名收敛。 */
-const wakeupEngines: Record<string, (config: never) => WakeupEngine> = {};
+const wakeupEngines: Record<string, (config: never, deps: WakeupEngineDeps) => WakeupEngine> = {};
 
 /** 登记一个引擎；重名抛错，配置错误在装载时立刻暴露。 */
-export function registerWakeupEngine<K extends keyof WakeupEngines>(name: K, create: (config: WakeupEngines[K]) => WakeupEngine<K>): void {
+export function registerWakeupEngine<K extends keyof WakeupEngines>(
+  name: K,
+  create: (config: WakeupEngines[K], deps: WakeupEngineDeps) => WakeupEngine<K>,
+): void {
   if (name in wakeupEngines) throw new Error(`wakeup engine "${String(name)}" already registered`);
   wakeupEngines[name] = create;
 }
 
 /** 按配置建出引擎：参数取与引擎名同名的那个键，未写则空。未登记的名字抛错，不静默退化。 */
-export function createWakeupEngine(config: { engine: string; [k: string]: unknown }): WakeupEngine {
+export function createWakeupEngine(config: { engine: string; [k: string]: unknown }, deps: WakeupEngineDeps = {}): WakeupEngine {
   const create = wakeupEngines[config.engine];
   if (create === undefined) {
     throw new Error(`unknown wakeup engine "${config.engine}", available: ${Object.keys(wakeupEngines).join(", ")}`);
   }
-  return create((config[config.engine] ?? {}) as never);
+  return create((config[config.engine] ?? {}) as never, deps);
 }

@@ -1,3 +1,5 @@
+import type { Agent } from "@yesimagent/core";
+
 import type { IshikiEvent, IshikiMessageCreated } from "../types.js";
 import { WakeupEngine, atSelf, registerWakeupEngine, type WakeupDecision } from "./engine.js";
 
@@ -111,9 +113,25 @@ interface ChannelWillingness {
 
 export class ClassicWakeupEngine extends WakeupEngine<"classic"> {
   private readonly channels = new Map<string, ChannelWillingness>();
+  private readonly detachers = new Map<string, () => void>();
 
   constructor(config: Partial<ClassicWakeupConfig> = {}) {
     super("classic", normalize({ ...DEFAULT_CLASSIC_WAKEUP, ...config }));
+  }
+
+  /** 订阅本频道的轮末事件，自己接回执。 */
+  attach(agent: Agent, channelId: string): void {
+    this.detachers.set(
+      channelId,
+      agent.channel.subscribe("agent", (event) => {
+        if (event.type === "turn.done") this.observe(channelId);
+      }),
+    );
+  }
+
+  detach(channelId: string): void {
+    this.detachers.get(channelId)?.();
+    this.detachers.delete(channelId);
   }
 
   decide(event: IshikiEvent): WakeupDecision {
@@ -124,7 +142,7 @@ export class ClassicWakeupEngine extends WakeupEngine<"classic"> {
     return Math.random() < this.probability(score) ? "trigger" : "wait";
   }
 
-  /** 一轮结束：补掉这期间的自然衰减，再扣掉回复成本。 */
+  /** 一轮走完（turn.done）：补掉这期间的自然衰减，再扣掉回复成本；失败与中止不扣，与 v3 一致。 */
   observe(channelId: string): void {
     const state = this.channels.get(channelId);
     if (state === undefined) return;
