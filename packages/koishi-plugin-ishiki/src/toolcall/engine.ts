@@ -1,91 +1,63 @@
 /**
- * JSON OUTPUT 工具调用引擎：把模型的纯文本输出转换成标准 tool-call 流。
+ * 工具调用引擎：把模型的纯文本输出转换成标准 tool-call 流。
  *
- * 解析与协议由 `@ai-sdk-tool/parser` 承担：hermes / qwen3coder / morph-xml / yaml-xml
- * 等协议各有渲染好的系统提示词、响应解析与历史回写，`createToolMiddleware` 负责
- * 请求改写（撤原生 tools、注入协议提示词、tool-call / tool-result 回写为文本）与
- * 流包装（解析出标准 tool-call 片段）。本模块只做两件事：
- * - 协议注册表：`toolcall.json.protocol` 按名取中间件工厂；
- * - thoughts 协议：ishiki 自有的「每步固定幕后流」格式，注册成库的 `TCMProtocol`。
+ * 一个引擎 = 一个输出协议 + 它的参数。协议的三件事由引擎持有：
+ * - 怎么写：`toolSystemPromptTemplate` 渲染输出契约，`protocol.formatTools` 附上工具目录；
+ * - 怎么读回：`protocol.parseGeneratedText` / `protocol.createStreamParser`；
+ * - 历史回写：`protocol.formatToolCall` + `toolResponsePromptTemplate`。
+ *
+ * 这些由 `@ai-sdk-tool/parser` 的 `createToolMiddleware` 组装成中间件，引擎只决定
+ * 「用哪个协议」与「把中间件接到哪个模型上」。契约与工具目录由中间件在每步请求改写时
+ * 注入 system（`placement` 取库默认的 `last`），引擎不向调用方交出文本，避免两处注入。
+ *
+ * 引擎不进 `AgentPlugin` 体系：它作用于装配期的模型值，不参与 turn 内的钩子，
+ * 与 `WakeupEngine` 同类，由调用点在装配时取用一次。
  */
-import {
-  createToolMiddleware,
-  hermesProtocol,
-  hermesSystemPromptTemplate,
-  formatToolResponseAsHermes,
-  morphXmlProtocol,
-  morphXmlSystemPromptTemplate,
-  morphFormatToolResponseAsXml,
-  qwen3CoderProtocol,
-  qwen3coderSystemPromptTemplate,
-  formatToolResponseAsQwen3CoderXml,
-  yamlXmlProtocol,
-  yamlXmlSystemPromptTemplate,
-  formatToolResponseAsYaml,
-  type TCMProtocol,
-} from "@ai-sdk-tool/parser";
-import type { LanguageModelV4, LanguageModelV4Middleware } from "@yesimagent/core";
+import type { LanguageModel, LanguageModelV4, LanguageModelV4Middleware } from "@yesimagent/core";
 import { wrapLanguageModel } from "@yesimagent/core";
-import type { Logger } from "koishi";
 
-import { thoughtsProtocol, thoughtsSystemPromptTemplate, thoughtsToolResponse } from "./thoughts.js";
+/** 协议参数表：键即 `toolcall.<engine>` 的参数键。各引擎文件用 `declare module` 增强它。 */
+export interface ToolcallEngines {}
 
-/** 一个输出协议的装配描述：协议实现 + 提示词模板 + 工具结果模板。 */
-export interface ToolcallProtocol {
-  readonly name: string;
-  /** 中间件工厂；协议内部状态按次调用独立，每轮装配取新实例。 */
-  create(): LanguageModelV4Middleware;
+/** 模型是否带 v4 规格；网关没解析出 v4 provider 时模型是别的形态，中间件对它不适用。 */
+function isV4(model: LanguageModel): model is LanguageModelV4 {
+  return typeof model === "object" && model.specificationVersion === "v4";
 }
 
-/** 协议注册表：键即 `toolcall.json.protocol` 的取值。 */
-export const toolcallProtocols: Record<string, ToolcallProtocol> = {};
+export abstract class ToolcallEngine<K extends keyof ToolcallEngines = keyof ToolcallEngines> {
+  public readonly name: K;
+  public readonly config: ToolcallEngines[K];
 
-/** 登记一个协议；重名抛错，配置错误在装载时立刻暴露。 */
-export function registerToolcallProtocol(protocol: ToolcallProtocol): void {
-  if (protocol.name in toolcallProtocols) throw new Error(`toolcall protocol "${protocol.name}" already registered`);
-  toolcallProtocols[protocol.name] = protocol;
-}
-
-/** 库协议的通用包装：`createToolMiddleware` 接管请求改写与流解析的全部骨架。 */
-function libraryProtocol(
-  name: string,
-  options: {
-    protocol: TCMProtocol | (() => TCMProtocol);
-    prompt: (tools: Parameters<Parameters<typeof createToolMiddleware>[0]["toolSystemPromptTemplate"]>[0]) => string;
-    response?: Parameters<typeof createToolMiddleware>[0]["toolResponsePromptTemplate"];
-  },
-): ToolcallProtocol {
-  return {
-    name,
-    create: () =>
-      createToolMiddleware({
-        protocol: options.protocol,
-        toolSystemPromptTemplate: options.prompt,
-        toolResponsePromptTemplate: options.response,
-      }),
-  };
-}
-
-registerToolcallProtocol(libraryProtocol("hermes", { protocol: hermesProtocol(), prompt: hermesSystemPromptTemplate, response: formatToolResponseAsHermes }));
-registerToolcallProtocol(
-  libraryProtocol("qwen3coder", { protocol: qwen3CoderProtocol(), prompt: qwen3coderSystemPromptTemplate, response: formatToolResponseAsQwen3CoderXml }),
-);
-registerToolcallProtocol(
-  libraryProtocol("morph-xml", { protocol: morphXmlProtocol(), prompt: morphXmlSystemPromptTemplate, response: morphFormatToolResponseAsXml }),
-);
-registerToolcallProtocol(libraryProtocol("yaml-xml", { protocol: yamlXmlProtocol(), prompt: yamlXmlSystemPromptTemplate, response: formatToolResponseAsYaml }));
-registerToolcallProtocol(libraryProtocol("thoughts", { protocol: thoughtsProtocol(), prompt: thoughtsSystemPromptTemplate, response: thoughtsToolResponse }));
-
-/**
- * JSON 引擎装配：按协议名取中间件，包住底层模型。
- * `tools` 是该实例被引擎接管后的工具集，仅在装配期用于日志；实际工具目录
- * 由库的 `transformParams` 从请求参数里取并经 `providerOptions` 传给响应侧。
- */
-export function createJsonToolcallModel(options: { model: LanguageModelV4; protocol: string; logger: Logger }): LanguageModelV4 {
-  const protocol = toolcallProtocols[options.protocol];
-  if (protocol === undefined) {
-    throw new Error(`unknown toolcall protocol "${options.protocol}", available: ${Object.keys(toolcallProtocols).join(", ")}`);
+  constructor(name: K, config: ToolcallEngines[K]) {
+    this.name = name;
+    this.config = config;
   }
-  options.logger.debug(`toolcall: json engine enabled, protocol=${protocol.name}`);
-  return wrapLanguageModel({ model: options.model, middleware: protocol.create() });
+
+  /** 本引擎的中间件；`undefined` 表示不接管模型（native）。 */
+  protected abstract middleware(): LanguageModelV4Middleware | undefined;
+
+  /** 包装模型：接上请求改写、提示词注入与流解析。不接管的模型原样返回。 */
+  wrap(model: LanguageModel): LanguageModel {
+    const middleware = this.middleware();
+    if (middleware === undefined || !isV4(model)) return model;
+    return wrapLanguageModel({ model, middleware });
+  }
+}
+
+/** 运行期注册表：各引擎的配置类型不同，登记时收窄、取用时按名收敛。 */
+const toolcallEngines: Record<string, (config: never) => ToolcallEngine> = {};
+
+/** 登记一个引擎；重名抛错，配置错误在装载时立刻暴露。 */
+export function registerToolcallEngine<K extends keyof ToolcallEngines>(name: K, create: (config: ToolcallEngines[K]) => ToolcallEngine<K>): void {
+  if (name in toolcallEngines) throw new Error(`toolcall engine "${String(name)}" already registered`);
+  toolcallEngines[name] = create;
+}
+
+/** 按配置建出引擎：参数取与引擎名同名的那个键，未写则空。未登记的名字抛错，不静默退化。 */
+export function createToolcallEngine(config: { engine: string; [k: string]: unknown }): ToolcallEngine {
+  const create = toolcallEngines[config.engine];
+  if (create === undefined) {
+    throw new Error(`unknown toolcall engine "${config.engine}", available: ${Object.keys(toolcallEngines).join(", ")}`);
+  }
+  return create((config[config.engine] ?? {}) as never);
 }

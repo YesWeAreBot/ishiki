@@ -1,16 +1,19 @@
-import type { TCMProtocol, ToolResponsePromptTemplateResult } from "@ai-sdk-tool/parser";
+import type { ToolResultPart } from "@ai-sdk/provider-utils";
+import type { LanguageModelV4Content, LanguageModelV4FunctionTool, LanguageModelV4StreamPart, LanguageModelV4ToolCall } from "@yesimagent/core";
+
+import { ToolcallEngine, registerToolcallEngine } from "./engine.js";
+import { parser, type TCMProtocol, type ToolResponsePromptTemplateResult } from "./parser.js";
+
 /**
- * thoughts 协议：ishiki 自有的 JSON OUTPUT 格式。
+ * thoughts 协议与它的引擎：ishiki 自有的 JSON OUTPUT 格式。
  *
  * 模型每步输出一个 JSON 对象：`thoughts` 是固定的幕后流（按 think_guide 书写），
  * `calls` 是本步要执行的工具调用。设计参考 YesImBot v3：幕后流不再依赖模型自觉
  * 调用 think 工具，而是由输出契约保证每步必有。
  *
  * 实现为库的 `TCMProtocol`，与 hermes 等协议共用 `createToolMiddleware` 的请求
- * 改写与流包装骨架；本文件只补格式相关的部分。
+ * 改写与流包装骨架；本文件补格式相关的部分，并在末尾把它登记成一个引擎。
  */
-import type { ToolResultPart } from "@ai-sdk/provider-utils";
-import type { LanguageModelV4Content, LanguageModelV4FunctionTool, LanguageModelV4StreamPart, LanguageModelV4ToolCall } from "@yesimagent/core";
 
 /** 输出契约：thoughts 恒在，calls 可空。 */
 const THOUGHTS_CONTRACT = `# 输出格式
@@ -198,3 +201,27 @@ export function thoughtsSystemPromptTemplate(tools: LanguageModelV4FunctionTool[
   const catalog = tools.map((tool) => `- ${tool.name}: ${tool.description ?? ""} 参数(JSON Schema): ${JSON.stringify(tool.inputSchema)}`).join("\n");
   return `${THOUGHTS_CONTRACT}\n\n# 可用工具\n\n${catalog}`;
 }
+
+declare module "./engine.js" {
+  interface ToolcallEngines {
+    thoughts: Record<never, never>;
+  }
+}
+
+/** thoughts 引擎：契约与工具目录由它注入，幕后流由输出契约保证。 */
+class ThoughtsToolcallEngine extends ToolcallEngine<"thoughts"> {
+  constructor(config: Record<never, never>) {
+    super("thoughts", config);
+  }
+
+  protected middleware = () => {
+    const { createToolMiddleware } = parser();
+    return createToolMiddleware({
+      protocol: thoughtsProtocol(),
+      toolSystemPromptTemplate: thoughtsSystemPromptTemplate,
+      toolResponsePromptTemplate: thoughtsToolResponse,
+    });
+  };
+}
+
+registerToolcallEngine("thoughts", (config) => new ThoughtsToolcallEngine(config));
