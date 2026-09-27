@@ -56,7 +56,7 @@ function turn(turnId: string): AgentEntry[] {
 }
 
 /** 跑到模型能看到的那条 user 消息为止。 */
-function worldOf(engine: ClassicContextEngine, entries: readonly AgentEntry[]): string {
+function renderWorld(engine: ClassicContextEngine, entries: readonly AgentEntry[]): string {
   const windowed = engine.transformEntries(entries);
   const messages = windowed.filter((entry) => entry.type === "message").map((entry) => entry.data);
   const rendered = engine.transformMessages([...messages]);
@@ -81,7 +81,7 @@ describe("classic context: 工作记忆切分", () => {
   it("最后一条 assistant 之后算新到：工具结果与新消息都落在 new_events", () => {
     const entries = [createEntry("message", incoming("m1", "在吗")), ...turn("t1"), createEntry("message", incoming("m2", "还在吗"))];
 
-    const world = worldOf(engineWith(), entries);
+    const world = renderWorld(engineWith(), entries);
 
     expect(section(world, "processed_events")).toContain("Neko(u1)] 在吗");
     expect(section(world, "processed_events")).toContain("<observe>t1</observe>");
@@ -94,21 +94,21 @@ describe("classic context: 工作记忆切分", () => {
   });
 
   it("冷启动没有 assistant 时，全部算新到", () => {
-    const world = worldOf(engineWith(), [createEntry("message", incoming("m1", "在吗"))]);
+    const world = renderWorld(engineWith(), [createEntry("message", incoming("m1", "在吗"))]);
 
     expect(section(world, "processed_events")).toContain("There are no processed events");
     expect(section(world, "new_events")).toContain("在吗");
   });
 
   it("频道与成员只来自事件流", () => {
-    const world = worldOf(engineWith(), [createEntry("message", incoming("m1", "在吗"))]);
+    const world = renderWorld(engineWith(), [createEntry("message", incoming("m1", "在吗"))]);
 
     expect(world).toContain('<channel id="room" type="guild" platform="onebot">');
     expect(world).toContain('<user id="u1"><name>Neko</name></user>');
   });
 
   it("空窗口给出空节提示而不是空标签", () => {
-    const world = worldOf(engineWith(), []);
+    const world = renderWorld(engineWith(), []);
 
     expect(world).toContain("No user profiles available in the current context.");
     expect(world).toContain("There are no processed events in the current context.");
@@ -120,7 +120,7 @@ describe("classic context: 窗口与优雅降级", () => {
   it("只留窗口内的最后几条消息", () => {
     const entries = ["m1", "m2", "m3", "m4"].map((id) => createEntry("message", incoming(id, `内容 ${id}`)));
 
-    const world = worldOf(engineWith({ maxMessages: 2 }), entries);
+    const world = renderWorld(engineWith({ maxMessages: 2 }), entries);
 
     expect(world).not.toContain("内容 m1");
     expect(world).not.toContain("内容 m2");
@@ -131,7 +131,7 @@ describe("classic context: 窗口与优雅降级", () => {
   it("更早轮次的 agent 轨迹整段剔除，消息一律保留", () => {
     const entries = [createEntry("message", incoming("m1", "第一条")), ...turn("t1"), createEntry("message", incoming("m2", "第二条")), ...turn("t2")];
 
-    const world = worldOf(engineWith({ keepFullTurnCount: 1 }), entries);
+    const world = renderWorld(engineWith({ keepFullTurnCount: 1 }), entries);
 
     expect(world).toContain("第一条");
     expect(world).toContain("第二条");
@@ -142,7 +142,7 @@ describe("classic context: 窗口与优雅降级", () => {
   it("keepFullTurnCount 为 0 表示不降级", () => {
     const entries = [createEntry("message", incoming("m1", "第一条")), ...turn("t1"), ...turn("t2")];
 
-    const world = worldOf(engineWith({ keepFullTurnCount: 0 }), entries);
+    const world = renderWorld(engineWith({ keepFullTurnCount: 0 }), entries);
 
     expect(world).toContain("t1");
     expect(world).toContain("t2");

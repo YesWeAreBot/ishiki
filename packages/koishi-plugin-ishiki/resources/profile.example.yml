@@ -4,7 +4,8 @@ id: neko # 可选，缺省为所在目录名
 description: 示例人设 # 仅用于显示
 
 presets:
-  # Preset 是可复用的运行模式；Scene 引用它，铺平后就是那个 Scene 的运行参数。
+  # Preset 是心智基线；scenes 挂在它名下，每个 scene 是一个生效单位，
+  # 可就地扩展基线（生效范围 = 自己的 matchlist）。
   chat:
     description: 日常聊天
     model: openai:gpt-5.6-luna # provider:model，或 gateway 里定义的组名
@@ -14,6 +15,8 @@ presets:
       failoverOn: unavailable # 或 any
     context:
       # 上下文引擎：standard 线性增长，到上限后把最旧的一段压成摘要
+      # 引擎只写在 preset 上：上面这个 preset 认领的全部频道共用同一套引擎实例，
+      # 压缩水位与唤醒的冷却账本不会按频道分家。
       engine: standard
       standard:
         maxChars: 32000 # 单轮模型输入的字符上限
@@ -37,6 +40,61 @@ presets:
       charPerSecond: 5
       minDelay: 800
       maxDelay: 4000
+    # 扩展包准入：选中 <包名> 后，该包注册的引擎变体（名字写成 "包名/名字"）才对本 preset 可用；
+    # 未列出的不生效。包内的细分（阈值多少等）去包自己的配置里写。
+    # extends: [neko-tools]
+
+    scenes:
+      # 一个 scene 绑定一个账号，认领该账号名下一组频道；
+      # 每个匹配到的频道各起一个独立的意识实例，历史互不相通。
+      groups:
+        description: 群聊
+        sid: onebot:10000 # 必填：该 scene 绑定的账号
+        whitelist:
+          - "group:*" # `*` 全部，尾随 `*` 按前缀，其余精确匹配
+          - "123456789"
+        blacklist:
+          - "987654321" # 排除的频道，写法同 whitelist
+        # 也可在 scene 上就地扩展 preset（只作用于本 scene 认领的频道）
+        typing:
+          charPerSecond: 8
+      dms:
+        description: 私聊
+        sid: onebot:10000
+        whitelist:
+          - "private:*"
+
+  # 多频道合成一块视窗：写 cross 的 preset 自己就是生效单位，claims 里的频道共享同一份事实流、
+  # 同一套引擎实例。合流之后没有「当前频道」，所以出站要显式写坐标（send_message 的 target），
+  # 每条事实行前也会多一个 `[#sid/频道号 | 发送者]` 的寻址头。
+  # 代价在 token：认领的频道全部消息进同一块窗口，认领范围别铺太开。
+  # claims 的键是 sid，写多节就把多个账号合流；同一个账号的同一批频道只能归一个生效单位。
+  fused:
+    description: 群聊与私聊共享一个心智
+    model: openai:gpt-5.6-luna
+    context:
+      engine: standard
+      standard:
+        maxChars: 32000
+    wakeup:
+      engine: standard
+      standard:
+        direct: true
+        atSelf: true
+        quoteSelf: true
+        keywords: [neko, 喵酱]
+    toolcall:
+      engine: native
+    typing:
+      baseDelay: 500
+      charPerSecond: 5
+    cross: true # 与 scenes 互斥：cross preset 不接受 scene，也不接受就地扩展
+    claims:
+      "onebot:10000":
+        whitelist:
+          - "group:*" # 群聊
+          - "private:*" # 与这个账号的私聊
+        # blacklist: ["987654321"] # 不想合进来的频道照 scene 的写法排除
 
   # 从 YesImBot v3 迁过来的一套：WorldState 上下文、JSON OUTPUT 工具协议、响应意愿唤醒。
   # 三者各自独立，也可以和别的引擎混搭。
@@ -67,6 +125,15 @@ presets:
     toolcall:
       engine: classic
 
+    scenes:
+      # v3 的唤醒按频道攒意愿值，群聊与私聊各一个生效单位。
+      groups:
+        sid: onebot:10000
+        whitelist: ["group:*"]
+      dms:
+        sid: onebot:10000
+        whitelist: ["private:*"]
+
   # 唤醒交给 Jev（TypeSafe）判定：规则只兜私聊与 @，其余消息都问一次模型。
   # 需要 apiKey，或环境变量 TYPESAFE_API_KEY；缺了这份 profile 会在装载时被跳过。
   jev:
@@ -94,24 +161,11 @@ presets:
           quoteSelf: false
           keywords: []
 
-scenes:
-  # 一个 Scene 绑定一个账号，认领该账号名下一组频道（工厂）；
-  # 每个匹配到的频道各起一个独立的意识实例，历史互不相通。
-  groups:
-    description: 群聊
-    preset: chat
-    sid: onebot:10000 # 必填：该 Scene 绑定的账号
-    whitelist:
-      - "group:*" # `*` 全部，尾随 `*` 按前缀，其余精确匹配
-      - "123456789"
-    blacklist:
-      - "987654321" # 排除的频道，写法同 whitelist
-    # 也可在 Scene 上局部覆写 preset
-    typing:
-      charPerSecond: 8
-  dms:
-    description: 私聊
-    preset: chat
-    sid: onebot:10000
-    whitelist:
-      - "private:*"
+    scenes:
+      # Jev 的兜底规则按场景分档，群聊与私聊各一个生效单位。
+      groups:
+        sid: onebot:10000
+        whitelist: ["group:*"]
+      dms:
+        sid: onebot:10000
+        whitelist: ["private:*"]

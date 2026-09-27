@@ -48,9 +48,12 @@ export abstract class ToolcallEngine<K extends keyof ToolcallEngines = keyof Too
 const toolcallEngines: Record<string, (config: never) => ToolcallEngine> = {};
 
 /** 登记一个引擎；重名抛错，配置错误在装载时立刻暴露。 */
-export function registerToolcallEngine<K extends keyof ToolcallEngines>(name: K, create: (config: ToolcallEngines[K]) => ToolcallEngine<K>): void {
+export function registerToolcallEngine<K extends keyof ToolcallEngines>(name: K, create: (config: ToolcallEngines[K]) => ToolcallEngine<K>): () => void {
   if (name in toolcallEngines) throw new Error(`toolcall engine "${String(name)}" already registered`);
   toolcallEngines[name] = create;
+  return () => {
+    delete toolcallEngines[name];
+  };
 }
 
 /** 按配置建出引擎：参数取与引擎名同名的那个键，未写则空。未登记的名字抛错，不静默退化。 */

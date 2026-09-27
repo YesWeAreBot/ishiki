@@ -18,9 +18,9 @@ import type { Context, Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { StandardContextEngine } from "../src/context/standard.engine.js";
-import { SceneRuntime } from "../src/runtime.js";
+import { AgentRuntime } from "../src/runtime.js";
 import { createSendMessage } from "../src/tools/send-message.js";
-import type { IshikiMessageCreated } from "../src/types.js";
+import type { IshikiMessageCreated, IshikiMessageDeleted } from "../src/types.js";
 import { createWakeupEngine } from "../src/wakeup/index.js";
 import { JevWakeupEngine, type JevWakeupConfig } from "../src/wakeup/jev.engine.js";
 
@@ -68,10 +68,20 @@ function said(texts: string[], at = Date.now()) {
   });
 }
 
+/** 一条撤回事件：不是普通消息，因此不走唤醒判定也不进判定窗口。 */
+function deleted(messageId: string, at = Date.now()) {
+  return createCustomMessage(
+    "ishiki.message.deleted",
+    { timestamp: at, platform: "onebot", selfId: "bot", channelId: "room", messageId } satisfies IshikiMessageDeleted,
+    { timestamp: at },
+  );
+}
+
 /** 只实现引擎用到的那部分的 agent：可订阅事实流、可读存储。 */
 function stubAgent(stored: readonly AgentEntry[] = []) {
   let listener: ((event: AgentEvent) => unknown) | undefined;
   const agent = {
+    id: "stub",
     channel: {
       subscribe: (_channel: string, callback: (event: AgentEvent) => unknown) => {
         listener = callback;
@@ -97,8 +107,8 @@ function stubAgent(stored: readonly AgentEntry[] = []) {
 function attached(config: JevParams = {}, stored: readonly AgentEntry[] = []) {
   const stub = stubAgent(stored);
   const engine = new JevWakeupEngine({ apiKey: "k", ...config }, { logger });
-  engine.attach(stub.agent, "room");
-  return { engine, ...stub };
+  const dispose = engine.attach(stub.agent);
+  return { engine, dispose, ...stub };
 }
 
 /** 端点的一次成功作答。 */
@@ -189,9 +199,9 @@ describe("jev wakeup: 窗口", () => {
     await appended(message({ content: "是啊", user: { id: "u2", name: "小红" } }));
     await appended(said(["要喝点什么吗"]));
     await appended(createAssistantMessage("（内心话，没发出去）"));
-    await appended(createCustomMessage("ishiki.inner_stimulus", { reason: "r", content: "纸条" } as never));
+    await appended(deleted("m-1"));
 
-    expect(engine.historyOf("room").map((line) => `${line.author}:${line.text}`)).toEqual(["小明:今天好热", "小红:是啊", "self:要喝点什么吗"]);
+    expect(engine.history("room").map((line) => `${line.author}:${line.text}`)).toEqual(["小明:今天好热", "小红:是啊", "self:要喝点什么吗"]);
   });
 
   it("窗口只留最近几条", async () => {
@@ -199,7 +209,7 @@ describe("jev wakeup: 窗口", () => {
 
     for (const text of ["一", "二", "三"]) await appended(message({ content: text }));
 
-    expect(engine.historyOf("room").map((line) => line.text)).toEqual(["二", "三"]);
+    expect(engine.history("room").map((line) => line.text)).toEqual(["二", "三"]);
   });
 
   it("挂载时把存储里的历史读进来，与新鲜事件按时间合起来", async () => {
@@ -216,34 +226,25 @@ describe("jev wakeup: 窗口", () => {
     // `decide` 会等历史装载落地，所以这里顺带断定它已经装好。
     expect(await engine.decide(message({ content: "三点见" }))).toBe("wait");
     expect(bodies).toHaveLength(0); // 装载进来的最后一句是自己的，冷却因此仍然有效
-    expect(engine.historyOf("room").map((line) => line.text)).toEqual(["下午的会定了吗", "定了，三号会议室", "那我去准备"]);
+    expect(engine.history("room").map((line) => line.text)).toEqual(["下午的会定了吗", "定了，三号会议室", "那我去准备"]);
   });
 
-  it("detach 之后不再记账", async () => {
-    const { engine, appended, isDetached } = attached();
+  it("拆卸之后不再记账", async () => {
+    const { engine, appended, isDetached, dispose } = attached();
 
-    engine.detach("room");
+    dispose();
     expect(isDetached()).toBe(true);
     await appended(message({ content: "还在吗" }));
-    expect(engine.historyOf("room")).toEqual([]);
+    expect(engine.history("room")).toEqual([]);
   });
 
   it("非消息事件不判定也不进窗口", async () => {
     const bodies = stubEndpoint([0.9]);
     const { engine } = attached();
 
-    const stimulus = createCustomMessage("ishiki.inner_stimulus", {
-      timestamp: Date.now(),
-      platform: "onebot",
-      selfId: "bot",
-      channelId: "room",
-      reason: "r",
-      content: "c",
-    });
-
-    expect(await engine.decide(stimulus)).toBe("wait");
+    expect(await engine.decide(deleted("m-1"))).toBe("wait");
     expect(bodies).toHaveLength(0);
-    expect(engine.historyOf("room")).toEqual([]);
+    expect(engine.history("room")).toEqual([]);
   });
 
   it("存储读不动也照常判：窗口空着，但不从此不醒", async () => {
@@ -255,9 +256,10 @@ describe("jev wakeup: 窗口", () => {
           throw new Error("events.jsonl is not readable");
         },
       },
+      id: "broken",
     } as unknown as Agent;
     const engine = new JevWakeupEngine({ apiKey: "k" }, { logger });
-    engine.attach(broken, "room");
+    engine.attach(broken);
 
     expect(await engine.decide(message())).toBe("trigger");
     expect(bodies).toHaveLength(1);
@@ -282,7 +284,7 @@ describe("jev wakeup: 模型判定", () => {
     expect(await engine.decide(message({ content: "你不觉得吗", user: { id: "u1", name: "小明" } }))).toBe("trigger");
     expect(bodies).toHaveLength(1);
     // 判定不改窗口：本条要等投递之后才由 agent 追加进来。
-    expect(engine.historyOf("room").map((line) => line.text)).toEqual(["今天好热", "热就开空调"]);
+    expect(engine.history("room").map((line) => line.text)).toEqual(["今天好热", "热就开空调"]);
 
     const body = bodies[0];
     expect(body.model).toBe("jev-latest");
@@ -349,6 +351,8 @@ describe("jev wakeup: 模型判定", () => {
     const bodies = stubEndpoint([0.9]);
     const { engine, appended } = attached({ cooldownMs: 60_000 });
 
+    // agent 落盘的顺序：触发它的那条先落，模型的话随后；引擎据此知道这两句算进哪本账。
+    await appended(message({ content: "第一条" }));
     expect(await engine.decide(message({ content: "第一条" }))).toBe("trigger");
     await appended(said(["回过了"]));
 
@@ -394,13 +398,15 @@ describe("jev wakeup: 决策日志", () => {
     expect(await engine.decide(message({ content: "嗯" }))).toBe("trigger");
     expect(logs.at(-1)).toMatch(/^debug wakeup jev \[room\] trigger model chance=0\.90 threshold=0\.5 window=0 elapsed=\d+ms$/);
 
+    // 决定开口之后这一轮才发生：触发它的那条与模型的话按顺序落进事实流。
+    await appended(message({ content: "嗯" }));
     await appended(said(["回过了"]));
     expect(await engine.decide(message({ content: "第二条" }))).toBe("wait");
     expect(logs.at(-1)).toMatch(/^debug wakeup jev \[room\] wait cooldown since=0s elapsed=\d+ms$/);
 
     vi.setSystemTime(new Date("2026-01-01T00:02:00Z"));
     expect(await engine.decide(message({ content: "第三条" }))).toBe("wait");
-    expect(logs.at(-1)).toMatch(/^debug wakeup jev \[room\] wait model chance=0\.10 threshold=0\.5 window=1 elapsed=\d+ms$/);
+    expect(logs.at(-1)).toMatch(/^debug wakeup jev \[room\] wait model chance=0\.10 threshold=0\.5 window=2 elapsed=\d+ms$/);
 
     vi.stubGlobal("fetch", async () => {
       throw new Error("boom");
@@ -418,15 +424,15 @@ describe("jev wakeup: 决策日志", () => {
     const stub = stubAgent(stored);
     const engine = new JevWakeupEngine({ apiKey: "k" }, { logger });
 
-    engine.attach(stub.agent, "room");
-    expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[room\] attached$/));
+    const dispose = engine.attach(stub.agent);
+    expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[stub\] attached$/));
 
     await engine.decide(message());
     expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[room\] history 1 line\(s\) folded in$/));
-    expect(engine.historyOf("room").map((line) => line.text)).toEqual(["下午的会定了吗"]);
+    expect(engine.history("room").map((line) => line.text)).toEqual(["下午的会定了吗"]);
 
-    engine.detach("room");
-    expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[room\] detached$/));
+    dispose();
+    expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[stub\] detached$/));
   });
 });
 
@@ -479,19 +485,19 @@ describe("jev wakeup: 接进场景", () => {
     });
 
     const wakeup = new JevWakeupEngine({ apiKey: "k" }, { logger });
+    // 自定义消息要有人投影成模型消息，否则一轮的 prompt 是空的。
+    const context = new StandardContextEngine({ logger }, { maxChars: 10_000 });
     const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-jev-"));
 
     try {
-      const scene = new SceneRuntime({
+      const scene = new AgentRuntime({
         label: "test/scene/room",
-        sid: "onebot:1",
         channelId: "room",
-        address: { platform: "onebot", selfId: "1" },
         directory,
         model,
         instructions: "",
-        // 自定义消息要有人投影成模型消息，否则一轮的 prompt 是空的。
-        plugins: [new StandardContextEngine({ logger }, { maxChars: 10_000 })],
+        context,
+        control: undefined,
         tools: {
           send_message: createSendMessage({
             ctx,
@@ -516,7 +522,7 @@ describe("jev wakeup: 接进场景", () => {
       expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[room\] trigger model chance=[\d.]+ threshold=0\.5 window=0 elapsed=\d+ms$/));
 
       // 引擎从 agent 的事实流里认出了这句话是自己的，冷却随之生效。
-      expect(wakeup.historyOf("room").map((line) => `${line.author}:${line.text}`)).toEqual(["Neko:在吗", "self:在的"]);
+      expect(wakeup.history("room").map((line) => `${line.author}:${line.text}`)).toEqual(["Neko:在吗", "self:在的"]);
       const before = bodies.length;
       expect(await wakeup.decide(message({ content: "再说一句" }))).toBe("wait");
       expect(bodies).toHaveLength(before);

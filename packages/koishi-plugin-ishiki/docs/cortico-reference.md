@@ -6,7 +6,9 @@
 
 ---
 
-## 1. 合批投递（P0 — 接受）
+## 1. 合批投递（P0 — 接受；**未落地**）
+
+现状：事件仍逐条投递，聚合只有 core 的 `join` 兜底（心智恰好在忙时才能并上）。落地时要动 `ProfileRuntime` 的事件入口。
 
 **ishiki 现状**：每条 `internal/session` 到达后独立调用 `agent.send(message, { trigger, ifBusy: 'join' })`。高频场景（群聊刷屏、多人同时发言）下，心智要么被逐条唤醒，要么靠 `join` 隐式聚合——但 `join` 的效果取决于心智是否恰好在忙，不可控。
 
@@ -29,7 +31,9 @@
 
 ---
 
-## 2. 事件投递用 tool frame 而非 user message（延迟）
+## 2. 事件投递用 tool frame 而非 user message（延迟；未落地）
+
+现状：外部事件仍是 user message（`standard` 把相邻行合并成一条 user 消息，`classic` 渲染成一条 `<world_state>` user 消息）。
 
 > 延迟理由：实际效果未知，不引入复杂度。
 
@@ -55,9 +59,11 @@
 
 ---
 
-## 3. 环境提示词的动态段（延迟）
+## 3. 环境提示词的动态段（延迟；未落地，与现有取向冲突）
 
-> 延迟理由：目前由 state delta 和 `<state>` 标签负责动态信息，要求前缀稳定以复用缓存，提供有限的动态片段。
+现状：system 提示词按 profile 缓存一次、内容静态，只靠 persona 与记忆块变化；为前缀缓存稳定而有意不做每请求重建。
+
+> 延迟理由：动态信息由 persona 与记忆块承担，前缀稳定优先于实时性。
 
 **Cortico 的做法**：system prefix 在每次模型请求前重建。其中 World 的环境段由 `envPromptVars()` 提供动态占位符值——QQ 的 `{{qq.conversations}}`（当前监听的群列表）、`{{qq.identity}}`（连接状态）、Minecraft 的 `{{minecraft.world}}`（当前世界状态）都是实时值。前缀变化由 `prefixFingerprint` 检测。
 
@@ -77,7 +83,9 @@
 
 ---
 
-## 4. DeliveryGate / 投递闸门（记录，延迟）
+## 4. DeliveryGate / 投递闸门（记录，延迟；未落地）
+
+现状：没有 per-channel 静音；要做的话位置是 `AgentRuntime.deliver` 的入口（事件照常落盘、不唤醒）。
 
 > 延迟。具体实现上可以提供一个工具和管理员命令，暂时将某个频道设置为"免打扰"。
 
@@ -101,7 +109,9 @@
 
 ---
 
-## 5. 事件的 `reaches` 逻辑外化为可配置规则（延迟）
+## 5. 事件的 `reaches` 逻辑外化为可配置规则（延迟；未落地）
+
+现状：可唤醒条件是唤醒引擎的内置规则（`standard` 的四个开关、`classic` 的意愿分、`jev` 的规则与模型判定），写在引擎里而不是 profile 里；profile 只能选引擎与参数。
 
 > 延迟，可以留到后面做。
 
@@ -117,7 +127,9 @@
 
 ---
 
-## 6. 运行诊断与可观测性（记录，延迟）
+## 6. 运行诊断与可观测性（记录，延迟；**部分落地**）
+
+现状：`tool.done` / `turn.step` 已记耗时与用量（`AgentRuntime.logEvent`），`dumpRequests` 可把原始请求与响应落盘到 `data/ishiki/requests/`；查询工具与面板未做。
 
 > 延迟。
 

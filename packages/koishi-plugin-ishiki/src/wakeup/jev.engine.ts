@@ -1,7 +1,7 @@
-import type { Agent, AgentEntry, AgentEvent, AgentMessage } from "@yesimagent/core";
+import type { Agent, AgentEntry, AgentMessage } from "@yesimagent/core";
 import type { Logger } from "koishi";
 
-import type { IshikiEvent, IshikiMessageCreated } from "../types.js";
+import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../types.js";
 import { WakeupEngine, atSelf, registerWakeupEngine, type WakeupDecision, type WakeupEngineDeps } from "./engine.js";
 import { StandardWakeupEngine, type StandardWakeupConfig } from "./standard.engine.js";
 
@@ -17,6 +17,10 @@ import { StandardWakeupEngine, type StandardWakeupConfig } from "./standard.engi
  * - 进程启动前的历史来自 `agent.storage`，挂载时补一次，重启后不至于空窗；
  * - 自己说过的话 = assistant 消息里 `send_message` 的工具调用参数。助手正文里那部分是内心话，
  *   没发出去，不算；发送失败时场景自己的记忆里也留着这句话，所以这里照样记。冷却的起点由它推出。
+ *
+ * 窗口按频道分键，键从每条消息自带的 channelId 读，不用外部给记账命名空间：单频道形态下
+ * 这就是那一个频道，跨频道聚合形态下视窗内各频道各记各的。自己的话没有频道号，归到本流
+ * 最近一次落址的频道——它总是跟在触发它的那条频道消息后面。
  *
  * 判定下限由内置判据承载（{@link CRITERIA}）：私聊默认该回、群聊默认别插话，问句与 criteria 按场景分档给出，
  * 不依赖模型自己从 state 里读出场景重量。用户的 `instruction` 是**补充**：身份、语气、什么时候该闭嘴都能写，
@@ -160,7 +164,7 @@ interface ChannelState {
  * 一条消息在窗口里算哪几行：别人的话是一行，自己的话藏在 `send_message` 的工具调用里。
  * 其余角色（system / user / tool）与其余事件类型都不进窗口。
  */
-function linesOf(message: AgentMessage): WindowLine[] {
+function windowLines(message: AgentMessage): WindowLine[] {
   if (message.role === "custom") {
     if (message.type !== "ishiki.message.created") return [];
     const data = message.data;
@@ -189,10 +193,10 @@ function clip(text: string): string {
 export class JevWakeupEngine extends WakeupEngine<"jev"> {
   private readonly logger?: Logger;
   private readonly rules: StandardWakeupEngine;
+  /** 一个频道一块窗口：键是事实流里每条消息自带的 channelId，聚合与单频道走同一份代码。 */
   private readonly channels = new Map<string, ChannelState>();
-  private readonly detachers = new Map<string, () => void>();
   /** 装载历史的进行中：`decide` 等它落地，免得重启后第一条判定看不见前情。 */
-  private readonly seeded = new Map<string, Promise<void>>();
+  private readonly seeding = new Set<Promise<void>>();
 
   constructor(config: Partial<JevWakeupConfig> = {}, deps: WakeupEngineDeps = {}) {
     super("jev", normalize(config));
@@ -200,22 +204,34 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
     this.rules = new StandardWakeupEngine(this.config.rules);
   }
 
-  /** 订阅本频道的事实流，并把这之前的存储读进窗口。 */
-  attach(agent: Agent, channelId: string): void {
-    this.detachers.set(
-      channelId,
-      agent.channel.subscribe("agent", (event) => this.absorb(channelId, event)),
-    );
-    this.seeded.set(channelId, this.seed(agent, channelId));
-    this.debug(channelId, "attached");
-  }
+  /**
+   * 订阅本视窗的事实流，并把这之前的存储读进窗口；返回拆卸函数，取消订阅并丢掉这次挂载的账。
+   *
+   * 窗口键从消息里读：频道消息自带 channelId，自己的话没有，归到本流最近一次落址的频道。
+   * 拆卸按「这次挂载见过哪些频道」清理，一个频道一块视窗因此彼此不干。
+   */
+  attach(agent: Agent): () => void {
+    const mine = new Set<string>();
+    let latest: string | undefined;
 
-  detach(channelId: string): void {
-    this.detachers.get(channelId)?.();
-    this.detachers.delete(channelId);
-    this.seeded.delete(channelId);
-    this.channels.delete(channelId);
-    this.debug(channelId, "detached");
+    const unsubscribe = agent.channel.subscribe("agent", (event) => {
+      if (event.type !== "message.appended") return;
+      latest = readChannelId(event.message) ?? latest;
+      if (latest === undefined) return;
+      mine.add(latest);
+      this.absorb(latest, event.message);
+    });
+
+    const seed = this.seed(agent);
+    this.seeding.add(seed);
+    this.debug(agent.id, "attached");
+
+    return () => {
+      unsubscribe();
+      this.seeding.delete(seed);
+      for (const channelId of mine) this.channels.delete(channelId);
+      this.debug(agent.id, "detached");
+    };
   }
 
   async decide(event: IshikiEvent): Promise<WakeupDecision> {
@@ -227,8 +243,8 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
     const startedAt = performance.now();
     const elapsed = () => Math.round(performance.now() - startedAt);
 
-    await this.seeded.get(channelId);
-    const channel = this.channelOf(channelId);
+    await Promise.all(this.seeding);
+    const channel = this.ensureState(channelId);
 
     // 兜底规则不问模型，也不改窗口：本条照常在投递后被追加。
     if (this.rules.decide(event) === "trigger") return this.report(channelId, "trigger", "rule", elapsed());
@@ -249,12 +265,12 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
   }
 
   /** 这个频道的窗口，供调用方观察（测试与排查用）。 */
-  historyOf(channelId: string): ReadonlyArray<{ author: string; text: string }> {
+  history(channelId: string): ReadonlyArray<{ author: string; text: string }> {
     return this.channels.get(channelId)?.lines ?? [];
   }
 
   /** 取（必要时建）频道状态。 */
-  private channelOf(channelId: string): ChannelState {
+  private ensureState(channelId: string): ChannelState {
     const existing = this.channels.get(channelId);
     if (existing !== undefined) return existing;
 
@@ -273,16 +289,14 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
     return decision;
   }
 
-  private debug(channelId: string, line: string): void {
-    this.logger?.debug(`wakeup jev [${channelId}] ${line}`);
+  private debug(where: string, line: string): void {
+    this.logger?.debug(`wakeup jev [${where}] ${line}`);
   }
 
   /** 事实流进来一条：接住消息、攒窗口；自己发出去的话再记下时刻，供冷却用。 */
-  private absorb(channelId: string, event: AgentEvent): void {
-    if (event.type !== "message.appended") return;
-
-    const channel = this.channelOf(channelId);
-    for (const line of linesOf(event.message)) {
+  private absorb(channelId: string, message: AgentMessage): void {
+    const channel = this.ensureState(channelId);
+    for (const line of windowLines(message)) {
       channel.lines.push(line);
       if (line.self) channel.lastSpokeAt = Math.max(channel.lastSpokeAt ?? 0, line.at);
     }
@@ -290,7 +304,7 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
   }
 
   /** 进程启动前的事实：把存储里的窗口补进来，与已经到手的活事件按时间合起来。 */
-  private async seed(agent: Agent, channelId: string): Promise<void> {
+  private async seed(agent: Agent): Promise<void> {
     let entries: readonly AgentEntry[];
     try {
       entries = await agent.storage.read();
@@ -300,19 +314,30 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
       return;
     }
 
-    const stored: WindowLine[] = [];
+    // 存下来的频道消息自带落址，按频道各归各的窗口；自己的话没有频道，归到这份历史里
+    // 最后一次落址的频道——它总是跟在某条频道消息后面。
+    const stored = new Map<string, WindowLine[]>();
+    let latest: string | undefined;
     for (const entry of entries) {
-      if (entry.type === "message") stored.push(...linesOf(entry.data));
+      if (entry.type !== "message") continue;
+      latest = readChannelId(entry.data) ?? latest;
+      if (latest === undefined) continue;
+      const lines = windowLines(entry.data);
+      if (lines.length === 0) continue;
+      const bucket = stored.get(latest) ?? [];
+      bucket.push(...lines);
+      stored.set(latest, bucket);
     }
-    if (stored.length === 0) return;
 
-    const channel = this.channelOf(channelId);
-    channel.lines = [...stored, ...channel.lines].sort((left, right) => left.at - right.at);
-    for (const line of channel.lines) {
-      if (line.self) channel.lastSpokeAt = Math.max(channel.lastSpokeAt ?? 0, line.at);
+    for (const [channelId, lines] of stored) {
+      const channel = this.ensureState(channelId);
+      channel.lines = [...lines, ...channel.lines].sort((left, right) => left.at - right.at);
+      for (const line of channel.lines) {
+        if (line.self) channel.lastSpokeAt = Math.max(channel.lastSpokeAt ?? 0, line.at);
+      }
+      this.trim(channel);
+      this.debug(channelId, `history ${lines.length} line(s) folded in`);
     }
-    this.trim(channel);
-    this.debug(channelId, `history ${stored.length} line(s) folded in`);
   }
 
   /** 窗口只留最近 `historyMessages` 行。 */

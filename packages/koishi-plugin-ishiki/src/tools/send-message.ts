@@ -11,22 +11,61 @@ export namespace SendMessageTool {
     channelId: string;
     typing: TypingConfig;
     onEndTurn: () => void;
+    /**
+     * 聚合形态的可达频道集合与坐标解析：跨频道视窗没有单值「当前位置」，
+     * 目标由模型显式给。缺省即单频道形态——坐标唯一，模型看不到也不必给 target。
+     */
+    routing?: TargetRouting;
   }
   export interface Input {
     messages: string[];
     mode?: "element" | "raw";
     continue?: boolean;
+    /** 聚合形态的投递坐标；单频道形态下不存在这个字段。 */
+    target?: string;
   }
   export type Output = { ok: true; count: number } | { ok: false; error: { name: string; message: string }; sent: string[]; failedAt: number };
 }
 
+/** 聚合形态的出站寻址：可达频道清单与坐标解析。 */
+export interface TargetRouting {
+  /**
+   * 本生效单位 claims 认领的频道，写成 `sid/白名单模式` 逐行列出（模式可能带通配，展开不了）。
+   * 报错信息与系统提示里的地址簿都取它：模型据此知道能往哪儿发，内核据此说它没往哪儿发。
+   */
+  reachable: readonly string[];
+  /**
+   * 把模型给的坐标解析成一个频道：带 sid 的复合坐标直接取，无 sid 的裸 channelId 只在
+   * 恰好被一个 sid 认领时才算数。解析不出返回 undefined，调用方报 `InvalidTarget`。
+   */
+  resolve: (target: string) => { sid: string; channelId: string } | undefined;
+}
+
+/** 聚合形态下的工具说明：目标由模型给，错误表达在结果里，模型据此重试。 */
+const CROSS_DESCRIPTION = [
+  "发言。这是消息到达平台的唯一途径——只有本工具发出的内容会被别人看到。",
+  "本视窗合并了多个频道，因此 target 必填：写清这句话该发到哪里，坐标取自上下文的寻址头。",
+  '裸 "channelId" 仅在该频道只属于一个账号时可用；多个账号同名时写 "sid/channelId"。',
+  '目标不在可达清单内时返回 {ok: false, error: {name: "InvalidTarget"}}，不会发出任何消息：换一个坐标重试。',
+].join("\n");
+
+const TARGET_PROPERTY = {
+  type: "string",
+  minLength: 1,
+  description: '投递坐标：频道号（channelId），或跨账号时写 "sid/channelId"。必须取自上下文的寻址头，且落在本视窗可达的频道集合内。',
+} as const;
+
 export function createSendMessage(options: SendMessageTool.Options): Tool<SendMessageTool.Input, SendMessageTool.Output> {
+  const routing = options.routing;
   return tool({
-    description: [
-      "在当前场景里发言。这是消息到达平台的唯一途径——只有本工具发出的内容会被别人看到。",
-      "说给别的场景听要用 dispatch_stimulus：本工具只发到当前频道，没有目标参数。",
-      "一轮里可以多次调用。返回 {ok: true, count} 或 {ok: false, error, sent, failedAt}：sent 是已经成功发出的消息 ID，failedAt 是出错的 messages 下标；发送遇错会立即停止，failedAt 及其之后的消息都没有发出。必须检查 ok，不要假设发送成功。",
-    ].join("\n"),
+    description:
+      routing === undefined
+        ? [
+            "在当前场景里发言。这是消息到达平台的唯一途径——只有本工具发出的内容会被别人看到。",
+            "本工具只发到当前频道，没有目标参数：别处的频道不在本视窗的可见域内。",
+            "一轮里可以多次调用。返回 {ok: true, count} 或 {ok: false, error, sent, failedAt}：sent 是已经成功发出的消息 ID，failedAt 是出错的 messages 下标；发送遇错会立即停止，failedAt 及其之后的消息都没有发出。必须检查 ok，不要假设发送成功。",
+          ].join("\n")
+        : CROSS_DESCRIPTION,
     inputSchema: jsonSchema<SendMessageTool.Input>({
       type: "object",
       properties: {
@@ -48,8 +87,10 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
           description:
             "默认 false。设为 true 时，发送后继续生成下一步，可以再调用工具或再次发送消息。需要「先回应再去做事」或「分几次发送并在中间查资料」时用它。",
         },
+        // 坐标只进聚合形态的参数表：单频道形态的坐标唯一，模型看不见它反倒少一个能写错的地方。
+        ...(routing === undefined ? {} : { target: TARGET_PROPERTY }),
       },
-      required: ["messages"],
+      required: routing === undefined ? ["messages"] : ["messages", "target"],
     }),
     execute: async (input) => {
       const messages = input.messages;
@@ -57,7 +98,29 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
         return { ok: false as const, error: { name: "InvalidInput", message: "messages 必须是非空字符串数组" }, sent: [], failedAt: 0 };
       }
 
-      const { sid, channelId } = options;
+      // 聚合形态先验坐标：投递到本视窗覆盖范围之外的话，一条都不该发出去。
+      let { sid, channelId } = options;
+      if (routing !== undefined) {
+        if (typeof input.target !== "string" || input.target.trim().length === 0) {
+          return {
+            ok: false as const,
+            error: { name: "InvalidTarget", message: `target 必填。本视窗可达的频道：${routing.reachable.join("、")}` },
+            sent: [],
+            failedAt: 0,
+          };
+        }
+        const address = routing.resolve(input.target.trim());
+        if (address === undefined) {
+          return {
+            ok: false as const,
+            error: { name: "InvalidTarget", message: `"${input.target}" 不在本视窗可达的频道内：${routing.reachable.join("、")}` },
+            sent: [],
+            failedAt: 0,
+          };
+        }
+        ({ sid, channelId } = address);
+      }
+
       const bot = options.ctx.bots[sid];
       if (bot === undefined) {
         return { ok: false as const, error: { name: "BotNotFound", message: `account "${sid}" is not connected` }, sent: [], failedAt: 0 };

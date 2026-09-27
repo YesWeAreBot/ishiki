@@ -10,5 +10,6 @@
     "skipLibCheck": true,
     "strict": true,
     "types": ["node"]
-  }
+  },
+  "exclude": ["**/lib/**", "**/dist/**", "**/node_modules/**"]
 }

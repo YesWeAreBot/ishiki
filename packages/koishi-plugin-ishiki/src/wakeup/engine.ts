@@ -43,13 +43,13 @@ export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupE
    * 场景的 agent 建好后挂上来。引擎要「这个场景发生了什么、我自己说过什么」，只能从这里拿：
    * 订阅 `agent.channel` 看事实流，读 `agent.storage` 补上进程启动之前的历史。
    *
-   * 一个引擎实例按 spec 共享，可能被多个频道的 agent 先后挂上来，`agent.channel` 的事件里又
-   * 不带频道，所以频道由调用方在挂载时给出，引擎按它各自记账。
+   * 不收记账键：账归谁由事实流自己说明——每条消息都带自己的频道号，一次挂载就是一个视窗，
+   * 视窗内见过哪些频道，引擎从事件里读，跨频道聚合与单频道因此走同一份代码。
+   *
+   * 返回拆卸函数：调用点在场景停止时调它，取消订阅并丢掉这次挂载攒下的账。
+   * 一个引擎实例按 spec 共享，可能被多个 agent 先后挂上来；每次挂载各自独立，拆卸只拆自己那次。
    */
-  attach?(agent: Agent, channelId: string): void;
-
-  /** 场景停止时解开这一轮的挂载：取消订阅、丢掉这个频道的记账。不实现即没有要拆的东西。 */
-  detach?(channelId: string): void;
+  attach?(agent: Agent): () => void;
 }
 
 /** 内容里是否 @ 了指定身份。`<at>` 不是合法消息内容时按「没有」处理。 */
@@ -69,9 +69,12 @@ const wakeupEngines: Record<string, (config: never, deps: WakeupEngineDeps) => W
 export function registerWakeupEngine<K extends keyof WakeupEngines>(
   name: K,
   create: (config: WakeupEngines[K], deps: WakeupEngineDeps) => WakeupEngine<K>,
-): void {
+): () => void {
   if (name in wakeupEngines) throw new Error(`wakeup engine "${String(name)}" already registered`);
   wakeupEngines[name] = create;
+  return () => {
+    delete wakeupEngines[name];
+  };
 }
 
 /** 按配置建出引擎：参数取与引擎名同名的那个键，未写则空。未登记的名字抛错，不静默退化。 */

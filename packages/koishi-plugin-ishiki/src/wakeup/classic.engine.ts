@@ -1,6 +1,6 @@
 import type { Agent } from "@yesimagent/core";
 
-import type { IshikiEvent, IshikiMessageCreated } from "../types.js";
+import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../types.js";
 import { WakeupEngine, atSelf, registerWakeupEngine, type WakeupDecision } from "./engine.js";
 
 /**
@@ -113,25 +113,35 @@ interface ChannelWillingness {
 
 export class ClassicWakeupEngine extends WakeupEngine<"classic"> {
   private readonly channels = new Map<string, ChannelWillingness>();
-  private readonly detachers = new Map<string, () => void>();
 
   constructor(config: Partial<ClassicWakeupConfig> = {}) {
     super("classic", normalize({ ...DEFAULT_CLASSIC_WAKEUP, ...config }));
   }
 
-  /** 订阅本频道的轮末事件，自己接回执。 */
-  attach(agent: Agent, channelId: string): void {
-    this.detachers.set(
-      channelId,
-      agent.channel.subscribe("agent", (event) => {
-        if (event.type === "turn.done") this.observe(channelId);
-      }),
-    );
-  }
+  /**
+   * 订阅本视窗的轮末事件，自己接回执；返回拆卸函数，取消订阅并丢掉这次挂载见过的频道。
+   *
+   * `turn.done` 不带频道号，回执扣给谁只能靠「这块视窗里出现过哪些频道」——由事实流里
+   * 每条消息自带的 channelId 攒出来。单频道形态下这就是那一个频道；聚合形态下是视窗内的全部频道，
+   * 一次开口让整块视窗都冷静下来。两种形态走同一份代码：它不看挂了几次，只看自己见过什么。
+   */
+  attach(agent: Agent): () => void {
+    const seen = new Set<string>();
+    const unsubscribe = agent.channel.subscribe("agent", (event) => {
+      if (event.type === "message.appended") {
+        const channelId = readChannelId(event.message);
+        if (channelId !== undefined) seen.add(channelId);
+        return;
+      }
+      if (event.type === "turn.done") {
+        for (const channelId of seen) this.observe(channelId);
+      }
+    });
 
-  detach(channelId: string): void {
-    this.detachers.get(channelId)?.();
-    this.detachers.delete(channelId);
+    return () => {
+      unsubscribe();
+      for (const channelId of seen) this.channels.delete(channelId);
+    };
   }
 
   decide(event: IshikiEvent): WakeupDecision {
@@ -144,16 +154,15 @@ export class ClassicWakeupEngine extends WakeupEngine<"classic"> {
 
   /** 一轮走完（turn.done）：补掉这期间的自然衰减，再扣掉回复成本；失败与中止不扣，与 v3 一致。 */
   observe(channelId: string): void {
+    const now = Date.now();
     const state = this.channels.get(channelId);
     if (state === undefined) return;
-
-    const now = Date.now();
     const score = Math.max(0, decay(state.score, now - state.updatedAt, this.config) - this.config.replyCost);
     this.channels.set(channelId, { score, updatedAt: now });
   }
 
   /** 当前意愿值，供调用方观察（测试与排查用）。 */
-  scoreOf(channelId: string): number {
+  score(channelId: string): number {
     const state = this.channels.get(channelId);
     return state === undefined ? 0 : decay(state.score, Date.now() - state.updatedAt, this.config);
   }

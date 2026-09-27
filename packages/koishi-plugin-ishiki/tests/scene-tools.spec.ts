@@ -9,9 +9,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ProfileConfig, resolveProfile } from "../src/profile.js";
 import { ProfileRuntime } from "../src/runtime.js";
-import { createDispatchStimulus } from "../src/tools/dispatch-stimulus.js";
 import { createFinish } from "../src/tools/finish.js";
-import { createPeekChannelHistory } from "../src/tools/peek-channel-history.js";
 import { createSendMessage } from "../src/tools/send-message.js";
 
 const USAGE = {
@@ -40,6 +38,19 @@ function textStep(text: string): LanguageModelV4StreamPart[] {
     { type: "text-delta", id: "text-1", delta: text },
     { type: "text-end", id: "text-1" },
     { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: USAGE },
+  ];
+}
+
+/** 一批里的多个工具调用：收尾在批边界判定，同一批有没有别的工具决定这一轮停不停。 */
+function toolBatch(...calls: Array<[string, unknown]>): LanguageModelV4StreamPart[] {
+  return [
+    ...calls.map(([toolName, input], index) => ({
+      type: "tool-call" as const,
+      toolCallId: `call-${index + 1}`,
+      toolName,
+      input: JSON.stringify(input),
+    })),
+    { type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage: USAGE },
   ];
 }
 
@@ -99,6 +110,7 @@ describe("send_message", () => {
 
   it("stops at the failing message and reports what already left", async () => {
     sent.length = 0;
+    let ended = 0;
     bots["onebot:2"] = {
       platform: "onebot",
       selfId: "2",
@@ -106,17 +118,21 @@ describe("send_message", () => {
         throw Object.assign(new Error("blocked"), { name: "BotOffline" });
       },
     };
-    const tool = createSendMessage({ ctx, logger, sid: "onebot:2", channelId: "group:2", typing: instant, onEndTurn: () => undefined });
+    const tool = createSendMessage({ ctx, logger, sid: "onebot:2", channelId: "group:2", typing: instant, onEndTurn: () => (ended += 1) });
     const result = await run(tool, { messages: ["第一句"] });
 
     expect(result).toEqual({ ok: false, sent: [], failedAt: 0, error: { name: "BotOffline", message: "blocked" } });
+    // 没发出去就不算「说完了」：轮次留着，模型可以换个说法再来
+    expect(ended).toBe(0);
   });
 
   it("reports an unconnected account and rejects empty input", async () => {
-    const tool = createSendMessage({ ctx, logger, sid: "onebot:9", channelId: "group:2", typing: instant, onEndTurn: () => undefined });
+    let ended = 0;
+    const tool = createSendMessage({ ctx, logger, sid: "onebot:9", channelId: "group:2", typing: instant, onEndTurn: () => (ended += 1) });
 
     expect(await run(tool, { messages: ["在吗"] })).toMatchObject({ ok: false, error: { name: "BotNotFound" } });
     expect(await run(tool, { messages: [] })).toMatchObject({ ok: false, error: { name: "InvalidInput" } });
+    expect(ended).toBe(0);
   });
 
   it("waits out the typing rhythm before each bubble", async () => {
@@ -151,78 +167,6 @@ describe("finish", () => {
   });
 });
 
-describe("peek_channel_history", () => {
-  const self = { sid: "onebot:1", channelId: "group:2" };
-
-  it("formats the target's own lines under one header", async () => {
-    const tool = createPeekChannelHistory({ self, peek: async () => ["[10:00] Miaow(42) #m1: 早", "[10:01] Neko(1) #m2: 早"] });
-    const result = await run(tool, { channelId: "group:9", limit: 1 });
-
-    expect(result.ok).toBe(true);
-    expect(result.ok && result.text).toContain('<peek sid="onebot:1" channel="group:9" count=1>');
-    expect(result.ok && result.text).toContain("#m2");
-    expect(result.ok && result.text).not.toContain("#m1");
-  });
-
-  it("refuses a channel outside the profile", async () => {
-    const tool = createPeekChannelHistory({ self, peek: async () => undefined });
-    expect(await run(tool, { channelId: "group:3" })).toMatchObject({ ok: false, error: { name: "TargetNotAllowed" } });
-  });
-
-  it("refuses a limit beyond the ceiling without breaking the turn", async () => {
-    const tool = createPeekChannelHistory({ self, peek: async () => [] });
-    expect(await run(tool, { channelId: "group:9", limit: 51 })).toMatchObject({ ok: false, error: { name: "InvalidLimit" } });
-  });
-});
-
-describe("dispatch_stimulus", () => {
-  const self = { sid: "onebot:1", channelId: "group:2" };
-
-  it("hands the targets to the container with the resolved urgency", async () => {
-    const calls: Array<{ targets: unknown; body: unknown }> = [];
-    const tool = createDispatchStimulus({
-      self,
-      dispatch: async (targets, body) => {
-        calls.push({ targets, body });
-        return { delivered: 1, refused: [] };
-      },
-    });
-
-    const result = await run(tool, { targets: [{ channelId: "group:9" }], reason: "想起来一件事", content: "刚才他说过" });
-    await run(tool, { targets: [{ channelId: "group:9" }], reason: "想起来一件事", content: "刚才他说过", urgency: "urgent" });
-
-    expect(result).toEqual({ ok: true, delivered: 1, refused: [] });
-    // 不写 urgency 就是不叫醒：投递默认只送达，目标按自己的节奏醒来时读到
-    expect(calls).toEqual([
-      { targets: [{ channelId: "group:9" }], body: { reason: "想起来一件事", content: "刚才他说过", urgency: "idle" } },
-      { targets: [{ channelId: "group:9" }], body: { reason: "想起来一件事", content: "刚才他说过", urgency: "urgent" } },
-    ]);
-  });
-
-  it("refuses a target that is this very channel, and malformed input", async () => {
-    const tool = createDispatchStimulus({ self, dispatch: async () => ({ delivered: 1, refused: [] }) });
-
-    expect(await run(tool, { targets: [{ channelId: "group:2" }], reason: "r", content: "c" })).toMatchObject({ ok: false, error: { name: "SelfTarget" } });
-    expect(await run(tool, { targets: [], reason: "r", content: "c" })).toMatchObject({ ok: false, error: { name: "InvalidInput" } });
-    expect(await run(tool, { targets: [{ channelId: "" }], reason: "r", content: "c" })).toMatchObject({ ok: false, error: { name: "InvalidInput" } });
-    expect(await run(tool, { targets: [{ channelId: "group:9" }], reason: "r", content: "c", urgency: "loud" } as never)).toMatchObject({
-      ok: false,
-      error: { name: "InvalidInput" },
-    });
-  });
-
-  it("surfaces a delivery that reached nobody", async () => {
-    const tool = createDispatchStimulus({
-      self,
-      dispatch: async () => ({ delivered: 0, refused: [{ target: "onebot:1/group:9", error: "channel is not configured in this profile" }] }),
-    });
-    const result = await run(tool, { targets: [{ channelId: "group:9" }], reason: "r", content: "c" });
-
-    expect(result).toMatchObject({ ok: false, error: { name: "NotDelivered" } });
-    expect(result.ok === false && result.refused).toHaveLength(1);
-  });
-});
-
 /** 一条唤醒私聊场景的消息：只有私聊能唤醒它。 */
 function direct(id: string) {
   return createCustomMessage("ishiki.message.created", {
@@ -252,13 +196,13 @@ describe("tools through a real agent", () => {
         context: { engine: "standard", standard: { maxChars: 10_000 } },
         // 用例不测节奏：打字延迟归零。
         typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
-        // 私聊才唤醒，群里的事只有纸条和 peek 能把消息带进去。
+        // 私聊才唤醒：群里的消息只落盘，不起轮次。
         wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+        scenes: {
+          rooms: { sid: "onebot:1", whitelist: ["group:*"] },
+          dms: { sid: "onebot:1", whitelist: ["private:*"] },
+        },
       },
-    },
-    scenes: {
-      rooms: { preset: "base", sid: "onebot:1", whitelist: ["group:*"] },
-      dms: { preset: "base", sid: "onebot:1", whitelist: ["private:*"] },
     },
   });
 
@@ -287,7 +231,7 @@ describe("tools through a real agent", () => {
       },
     } as unknown as Context;
 
-    runtime = new ProfileRuntime({ id: "neko", directory: root, specs: resolveProfile(config, "neko"), ctx, gateway, logger });
+    runtime = new ProfileRuntime({ id: "neko", directory: root, resolved: resolveProfile(config, "neko"), ctx, gateway, logger });
   });
 
   afterAll(async () => {
@@ -322,34 +266,21 @@ describe("tools through a real agent", () => {
     expect(platform.streams).toBe(1);
   });
 
-  it("delivers a stimulus into a sibling channel", async () => {
-    platform.streams = 0;
-    steps = [toolStep("dispatch_stimulus", { targets: [{ channelId: "group:2" }], reason: "想问一句", content: "刚才那边说了什么" })];
-
-    const scene = runtime.route(direct("c"))!;
-    await scene.deliver(direct("c"));
-    await scene.idle();
-
-    // 默认 idle：念头落进对方的流，但对方不被叫醒，落盘也不跟这一轮同步
-    await vi.waitFor(async () => {
-      const lines = await runtime.peek("onebot:1", "group:2", 10);
-      expect(lines?.some((line) => line.includes("<stimulus") && line.includes("刚才那边说了什么"))).toBe(true);
-    });
-  });
-
-  it("feeds a peeked channel's lines back to the model", async () => {
-    platform.streams = 0;
+  it("keeps the turn alive when the batch carries tools besides speaking", async () => {
     platform.sent.length = 0;
-    prompts.length = 0;
-    steps = [toolStep("peek_channel_history", { channelId: "group:2", limit: 3 }), textStep("想起来了")];
+    platform.streams = 0;
+    // 同一批里既说了话又要查资料：这一批不停，等下一批（没有别的工具了）才收尾
+    steps = [
+      toolBatch(["send_message", { messages: ["我看看"] }], ["peek_channel_history", { channelId: "group:2", limit: 3 }]),
+      toolStep("send_message", { messages: ["看完了"] }),
+      textStep("这一步不该被走到"),
+    ];
 
     const scene = runtime.route(direct("d"))!;
     await scene.deliver(direct("d"));
     await scene.idle();
 
-    expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain("刚才那边说了什么");
-    // 文本回复不会自己到达平台：只有 send_message 能让话被听见
-    expect(platform.sent).toEqual([]);
+    expect(platform.sent.map((entry) => entry.content)).toEqual(["我看看", "看完了"]);
+    expect(platform.streams).toBe(2);
   });
 });

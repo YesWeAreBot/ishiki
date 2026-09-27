@@ -5,14 +5,15 @@ import type { Logger } from "koishi";
 /**
  * 上下文引擎：在装配与轮次边界介入事件流。
  *
- * 一个引擎 = 一个上下文策略 + 它的参数。引擎本身实现 `AgentPlugin`，把 hook 挂在实例上交给
- * core；运行态依赖（日志、足迹、跨场景前情）随 scene 传入，不写进配置。
+ * 一个引擎 = 一个上下文策略 + 它的参数。引擎不实现 `AgentPlugin`——它只声明自己干预上下文
+ * 管线上的哪几段，由装配器（`src/assemble.ts`）收拢成 core 侧的唯一插件；运行态依赖（日志、
+ * 足迹、跨场景前情）随装配传入，不写进配置。
  */
 
 /** 上下文引擎参数表：键即 `context.<engine>` 的参数键。各引擎文件用 `declare module` 增强它。 */
 export interface ContextEngines {}
 
-export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> implements AgentPlugin {
+export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> {
   public readonly name: K;
   public readonly config: ContextEngines[K];
 
@@ -20,6 +21,19 @@ export abstract class ContextEngine<K extends keyof ContextEngines = keyof Conte
     this.name = name;
     this.config = config;
   }
+
+  /**
+   * 上下文管线上的钩子，按需实现；未实现的段表示这一步不改。签名直接取自 core 的插件契约，
+   * 装配器按同一份契约转发。与决策点有关的钩子（`onStepFinish` / `prepareStep` /
+   * `beforeToolCall` / `toModelMessages`）不在这里——它们是内核独占的。
+   */
+  declare init?: AgentPlugin["init"];
+  declare stop?: AgentPlugin["stop"];
+  declare onAppend?: AgentPlugin["onAppend"];
+  declare transformEntries?: AgentPlugin["transformEntries"];
+  declare transformMessages?: AgentPlugin["transformMessages"];
+  declare extendInstructions?: AgentPlugin["extendInstructions"];
+  declare onTurnFinish?: AgentPlugin["onTurnFinish"];
 }
 
 /** 装配一个上下文引擎所需的运行态依赖：随 scene 而变，不来自配置。 */
@@ -30,7 +44,15 @@ export interface ContextEngineOptions {
   directory?: string;
   /** 包内 `resources/` 的绝对路径：需要模板的引擎在这里找。 */
   resources?: string;
+  /**
+   * 输入侧寻址头：跨频道聚合的实例一块视窗吃下多个频道，事实行不带坐标就分不清谁说的，
+   * 由装配侧按形态给出。缺省即无寻址头——普通 scene 一块视窗就是一个频道，行自带出处。
+   */
+  addressing?: AddressingOptions;
 }
+
+/** 寻址头的形状：`cross` 为真即每行带一个 `[#sid/channelId | 发送者]` 的坐标头，缺省即无头。 */
+export type AddressingOptions = { cross: boolean };
 
 /** 运行期注册表：各引擎的配置类型不同，登记时收窄、取用时按名收敛。 */
 const contextEngines: Record<string, (config: never, options: ContextEngineOptions) => ContextEngine> = {};
@@ -39,9 +61,12 @@ const contextEngines: Record<string, (config: never, options: ContextEngineOptio
 export function registerContextEngine<K extends keyof ContextEngines>(
   name: K,
   create: (config: ContextEngines[K], options: ContextEngineOptions) => ContextEngine<K>,
-): void {
+): () => void {
   if (name in contextEngines) throw new Error(`context engine "${String(name)}" already registered`);
   contextEngines[name] = create;
+  return () => {
+    delete contextEngines[name];
+  };
 }
 
 /** 按配置建出引擎：参数取与引擎名同名的那个键，未写则空。未登记的名字抛错，不静默退化。 */

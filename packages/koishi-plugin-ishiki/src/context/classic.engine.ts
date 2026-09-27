@@ -7,7 +7,7 @@ import type { Logger } from "koishi";
 import { parse } from "yaml";
 
 import { actionBlock, observationBlock } from "../toolcall/classic.engine.js";
-import type { IshikiInnerStimulus, IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
+import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
 import { ContextEngine, registerContextEngine, type ContextEngineOptions } from "./engine.js";
 
 /**
@@ -135,10 +135,6 @@ function renderLine(message: AgentMessage): string | undefined {
           const data: IshikiMessageDeleted = message.data;
           return systemLine(data.timestamp, `#${data.messageId} 已被删除`);
         }
-        case "ishiki.inner_stimulus": {
-          const data: IshikiInnerStimulus = message.data;
-          return systemLine(data.timestamp, `${data.reason}：${data.content}`);
-        }
         default:
           return undefined;
       }
@@ -256,7 +252,7 @@ export class ClassicContextEngine extends ContextEngine<"classic"> {
       (index < cut ? processed : fresh).push(line);
     });
 
-    return [createUserMessage(this.world().render(this.viewOf(messages, processed, fresh)))];
+    return [createUserMessage(this.world().render(this.buildView(messages, processed, fresh)))];
   };
 
   /** 最近 `keepFullTurnCount` 轮的轮次号；0 表示不降级，返回 undefined。 */
@@ -284,7 +280,7 @@ export class ClassicContextEngine extends ContextEngine<"classic"> {
   }
 
   /** 事件流里能读到的频道与成员信息：取最后一条带地址的事件。 */
-  private viewOf(messages: readonly AgentMessage[], processed: string[], fresh: string[]): WorldStateView {
+  private buildView(messages: readonly AgentMessage[], processed: string[], fresh: string[]): WorldStateView {
     const channel: ChannelView = { id: "", type: "", platform: "" };
     const users: Array<{ id: string; name: string }> = [];
     const known = new Set<string>();
@@ -301,11 +297,6 @@ export class ClassicContextEngine extends ContextEngine<"classic"> {
           users.push({ id: data.user.id, name: data.user.name ?? "" });
         }
         continue;
-      }
-      if (message.type === "ishiki.inner_stimulus") {
-        const data: IshikiInnerStimulus = message.data;
-        channel.id = data.channelId;
-        channel.platform = data.platform;
       }
     }
 

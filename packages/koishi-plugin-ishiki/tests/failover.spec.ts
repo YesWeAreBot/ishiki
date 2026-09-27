@@ -30,7 +30,7 @@ type Step = Error | ReadonlyArray<LanguageModelV4StreamPart | Error>;
  * 把 part 序列铺成流；Error 的位置就是流断的地方，之前的部分已经交出去了。
  * 逐块按需投递：一次性 enqueue 再 error 会让已排队的块被丢掉，那样就测不到「交出去之后才断」。
  */
-function streamOf(parts: ReadonlyArray<LanguageModelV4StreamPart | Error>): ReadableStream<LanguageModelV4StreamPart> {
+function makeStream(parts: ReadonlyArray<LanguageModelV4StreamPart | Error>): ReadableStream<LanguageModelV4StreamPart> {
   let index = 0;
   return new ReadableStream({
     pull(controller) {
@@ -56,7 +56,7 @@ function answer(text: string): ReadonlyArray<LanguageModelV4StreamPart | Error> 
 }
 
 /** 非流式也照同一份脚本：第一步整次失败的端点，doGenerate 一样失败；其余用正文作答。 */
-function generateOf(script: readonly Step[]): { text: string } | { error: Error } {
+function makeGenerate(script: readonly Step[]): { text: string } | { error: Error } {
   const first = script[0]!;
   if (first instanceof Error) return { error: first };
   return { text: first.map((part) => (part instanceof Error ? "" : part.type === "text-delta" ? part.delta : "")).join("") };
@@ -72,10 +72,10 @@ function endpoint(steps: readonly Step[]): MockLanguageModelV4 {
       const step = steps[Math.min(index, steps.length - 1)]!;
       index += 1;
       if (step instanceof Error) throw step;
-      return { stream: streamOf(step) };
+      return { stream: makeStream(step) };
     },
     doGenerate: async () => {
-      const generated = generateOf(steps);
+      const generated = makeGenerate(steps);
       if ("error" in generated) throw generated.error;
       return { content: [{ type: "text", text: generated.text }], finishReason: { unified: "stop", raw: "stop" }, usage: USAGE, warnings: [] };
     },

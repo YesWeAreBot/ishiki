@@ -264,7 +264,7 @@ export const classicProtocol = (): TCMProtocol => {
 };
 
 /** 一个属性定义的可渲染面；布尔形态没有类型与描述，归一成空对象。 */
-function propertyOf(definition: unknown): { type?: string | string[]; description?: string } {
+function readProperty(definition: unknown): { type?: string | string[]; description?: string } {
   return typeof definition === "object" && definition !== null ? (definition as { type?: string | string[]; description?: string }) : {};
 }
 
@@ -273,7 +273,7 @@ function renderCatalog(tools: readonly LanguageModelV4FunctionTool[]): string {
   const blocks = tools.map((tool) => {
     const { properties = {}, required = [] } = tool.inputSchema;
     const lines = Object.entries(properties).map(([key, definition]) => {
-      const property = propertyOf(definition);
+      const property = readProperty(definition);
       const type = Array.isArray(property.type) ? property.type.join("|") : (property.type ?? "any");
       const mark = required.includes(key) ? "**(required)** " : "";
       return `    ${key}: (${type}) ${mark}${property.description ?? ""}`;

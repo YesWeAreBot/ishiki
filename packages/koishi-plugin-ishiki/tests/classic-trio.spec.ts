@@ -16,6 +16,7 @@ import type { Logger } from "koishi";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { ClassicContextEngine } from "../src/context/classic.engine.js";
+import { createAgentPlugin } from "../src/runtime.js";
 import { createToolcallEngine } from "../src/toolcall/index.js";
 import { loadParser } from "../src/toolcall/parser.js";
 import type { IshikiMessageCreated } from "../src/types.js";
@@ -39,7 +40,7 @@ function answer(actions: string): string {
 }
 
 /** 每一步的提示词都记下来，断言模型实际收到了什么。 */
-function promptOf(prompt: unknown, role: string): string {
+function readPrompt(prompt: unknown, role: string): string {
   const messages = prompt as Array<{ role: string; content: unknown }>;
   return messages
     .filter((message) => message.role === role)
@@ -96,7 +97,7 @@ describe("classic 三件套跑一轮真实轮次", () => {
       model: createToolcallEngine({ engine: "classic" }).wrap(model),
       instructions: "You are Ishiki.",
       storage: createMemoryStorage(),
-      plugins: [context],
+      plugins: [createAgentPlugin({ context })],
       tools,
     });
 
@@ -107,19 +108,19 @@ describe("classic 三件套跑一轮真实轮次", () => {
 
     // 第一步：契约、v3 形状的工具目录、classic 的世界观说明都在 system 里
     const first = prompts[0]!;
-    expect(promptOf(first, "system")).toContain("You are Ishiki.");
-    expect(promptOf(first, "system")).toContain("# Reasoning: think–act cycle");
-    expect(promptOf(first, "system")).toContain("limit: (number)");
-    expect(promptOf(first, "system")).toContain("# Context: world view");
+    expect(readPrompt(first, "system")).toContain("You are Ishiki.");
+    expect(readPrompt(first, "system")).toContain("# Reasoning: think–act cycle");
+    expect(readPrompt(first, "system")).toContain("limit: (number)");
+    expect(readPrompt(first, "system")).toContain("# Context: world view");
 
     // 第一步的 user 侧是一整份 world_state，消息落在 new_events
-    expect(promptOf(first, "user")).toContain("<world_state>");
-    expect(promptOf(first, "user")).toContain('<channel id="room" type="guild" platform="onebot">');
-    expect(promptOf(first, "user").split("<new_events>")[1]).toContain("在吗");
+    expect(readPrompt(first, "user")).toContain("<world_state>");
+    expect(readPrompt(first, "user")).toContain('<channel id="room" type="guild" platform="onebot">');
+    expect(readPrompt(first, "user").split("<new_events>")[1]).toContain("在吗");
 
     // 第二步：上一步的思考与动作退到 processed_events，工具结果成为唯一的新到事件
     const second = prompts[1]!;
-    const world = promptOf(second, "user");
+    const world = readPrompt(second, "user");
     const processed = world.split("<processed_events>")[1]!.split("</processed_events>")[0]!;
     const fresh = world.split("<new_events>")[1]!;
     expect(processed).toContain("在吗");

@@ -16,6 +16,7 @@ import type { Logger } from "koishi";
 import { describe, expect, it } from "vitest";
 
 import { StandardContextEngine, collapse } from "../src/context/index.js";
+import { createAgentPlugin } from "../src/runtime.js";
 
 const logger = { warn: () => undefined } as unknown as Logger;
 const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
@@ -306,7 +307,7 @@ describe("standard context engine", () => {
         return { content: [{ type: "text", text: "记住：她在准备搬家" }], finishReason: { unified: "stop", raw: undefined }, usage: USAGE, warnings: [] };
       },
     });
-    const agent = createAgent({ id: "fold", model, storage, plugins: [engine] });
+    const agent = createAgent({ id: "fold", model, storage, plugins: [createAgentPlugin({ context: engine })] });
     storage.append(...["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id))));
     await agent.init();
 

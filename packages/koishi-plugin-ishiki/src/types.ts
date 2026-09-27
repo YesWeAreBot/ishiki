@@ -1,14 +1,27 @@
-import type { AgentCustomMessage, CustomMessages } from "@yesimagent/core";
+import type { AgentCustomMessage, AgentMessage, CustomMessages } from "@yesimagent/core";
 
 declare module "@yesimagent/core" {
   interface AgentCustomMessage {
     "ishiki.message.created": IshikiMessageCreated;
     "ishiki.message.deleted": IshikiMessageDeleted;
-    "ishiki.inner_stimulus": IshikiInnerStimulus;
   }
 }
 
 export type IshikiEvent = CustomMessages<Extract<keyof AgentCustomMessage, `ishiki.${string}`>>;
+
+/**
+ * 这条消息落在哪个频道；模型自己发的话没有频道可言（它不是事件，只是 agent 的记忆）。
+ */
+export function readChannelId(message: AgentMessage): string | undefined {
+  if (message.role !== "custom") return undefined;
+  switch (message.type) {
+    case "ishiki.message.created":
+    case "ishiki.message.deleted":
+      return message.data.channelId;
+    default:
+      return undefined;
+  }
+}
 
 /**
  * 事件的落址：一个 bot 账号下的一个频道。`(platform:selfId, channelId)` 是唯一标识，
@@ -40,17 +53,4 @@ export interface IshikiMessageCreated extends IshikiEventBase {
 export interface IshikiMessageDeleted extends IshikiEventBase {
   messageId: string;
   operatorId?: string;
-}
-
-/**
- * 由一个频道实例投递给另一个频道实例的刺激。它写入目标自身的事件流，
- * 目标在下一次唤醒时将其作为本地事件读取，并自行决定是否发起轮次。
- */
-export interface IshikiInnerStimulus extends IshikiEventBase {
-  /** 来源频道实例当时的地址；由宿主插件直接投递时缺席。 */
-  source?: { platform: string; selfId: string; channelId: string };
-  /** 投递原因，供目标实例理解上下文。 */
-  reason: string;
-  /** 投递内容。 */
-  content: string;
 }

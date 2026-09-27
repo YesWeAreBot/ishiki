@@ -3,6 +3,7 @@
 状态: 已定
 日期: 2026-09-23
 来源: 上下文分区设计、主心智模式与渲染机制收敛讨论
+已被取代: 本文的两扇门（`peek_channel_history` / `dispatch_stimulus`）已删除，取而代之的是 cross 合并频道，见 [02-cross-channel-preset-architecture.md](./02-cross-channel-preset-architecture.md)。本文保留为决策记录，不再是现状描述。
 
 ## 结论
 

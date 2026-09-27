@@ -5,10 +5,13 @@ import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gat
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
 
+import * as contextEngines from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
-import { loadProfiles, type ProfileRuntime } from "./runtime.js";
+import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
+import * as toolcallEngines from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
+import * as wakeupEngines from "./wakeup/index.js";
 
 class Ishiki extends Service<Ishiki.Config> {
   static name = "ishiki";
@@ -19,7 +22,7 @@ class Ishiki extends Service<Ishiki.Config> {
   private readonly dataRoot: string;
   private readonly gateway: Gateway;
   private readonly handler = new StandardHandler();
-  private readonly profiles: ProfileRuntime[] = [];
+  private readonly profiles: runtime.ProfileRuntime[] = [];
 
   constructor(ctx: Context, config: Ishiki.Config) {
     super(ctx, "ishiki");
@@ -35,7 +38,6 @@ class Ishiki extends Service<Ishiki.Config> {
       writeFileSync(modelConfigFile, "");
     }
     const modelConfig = (parse(readFileSync(modelConfigFile, "utf-8")) as GatewayConfig) ?? {};
-    this.logger.info(`--- Model Config ---\n${JSON.stringify(modelConfig, null, 2)}`);
     this.gateway = createGateway({
       config: modelConfig,
       fetch: this.config.dumpRequests ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataRoot, "requests") }) : undefined,
@@ -65,16 +67,41 @@ class Ishiki extends Service<Ishiki.Config> {
       return;
     }
 
-    let loaded: ProfileRuntime[];
     try {
-      loaded = loadProfiles(profilesRoot, { ctx: this.ctx, gateway: this.gateway, logger: this.logger });
+      runtime.activateProfiles(runtime.loadProfiles(profilesRoot, this.logger), this.profiles, { ctx: this.ctx, gateway: this.gateway, logger: this.logger });
     } catch (error) {
       this.logger.error(`profile loading failed, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
-      return;
     }
+  }
 
-    this.profiles.push(...loaded);
-    for (const profile of loaded) this.logger.info(`profile "${profile.id}" loaded: ${profile.specs.length} scene spec(s)`);
+  /**
+   * 注册面：社区扩展在 apply 期同步登记自己的引擎变体。社区变体的名字写成 `包名/名字`，
+   * 只有 `extends` 选中该包的 preset 用得上（无前缀的名字是内建变体，不受此门控）；
+   * 注册随调用方的插件生命周期撤销——cordis 把这里的 `this.ctx` 绑在调用方作用域上，
+   * 包卸载时变体一并消失，不会留下悬空的注册。
+   *
+   * 走服务命名空间而不是根导出：包外若把本包装成普通依赖会出现第二份模块实例，写进另一张
+   * 注册表并静默失效；绑定运行中的服务实例没有这个问题。
+   */
+  public registerContextEngine<K extends keyof contextEngines.ContextEngines>(
+    name: K,
+    create: (config: contextEngines.ContextEngines[K], options: contextEngines.ContextEngineOptions) => contextEngines.ContextEngine<K>,
+  ): void {
+    this.ctx.effect(() => contextEngines.registerContextEngine(name, create));
+  }
+
+  public registerWakeupEngine<K extends keyof wakeupEngines.WakeupEngines>(
+    name: K,
+    create: (config: wakeupEngines.WakeupEngines[K], deps: wakeupEngines.WakeupEngineDeps) => wakeupEngines.WakeupEngine<K>,
+  ): void {
+    this.ctx.effect(() => wakeupEngines.registerWakeupEngine(name, create));
+  }
+
+  public registerToolcallEngine<K extends keyof toolcallEngines.ToolcallEngines>(
+    name: K,
+    create: (config: toolcallEngines.ToolcallEngines[K]) => toolcallEngines.ToolcallEngine<K>,
+  ): void {
+    this.ctx.effect(() => toolcallEngines.registerToolcallEngine(name, create));
   }
 
   /** 平台事件进门：自家回声丢掉，其余交给它归属的那个场景。 */
@@ -116,5 +143,11 @@ declare module "koishi" {
     ishiki: Ishiki;
   }
 }
+
+// 社区包需要的东西：继承用的基类与 `declare module` 增强用的参数表接口。
+// 注册动词不走根导出——服务命名空间才是入口，见 `Ishiki.registerContextEngine` 的注释。
+export { ContextEngine, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
+export { ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
+export { WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngines } from "./wakeup/index.js";
 
 export default Ishiki;
