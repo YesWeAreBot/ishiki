@@ -30,36 +30,56 @@ export interface StandardContextConfig {
 const MEMORY_HEAD = "（以下是此前的对话记录，已压缩为摘要）";
 const DEFAULT_REFILL_RATIO = 0.8;
 
-/** 渲染行的时间部分，格式 `HH:mm`。 */
+/** 两位补零。 */
+const pad = (value: number): string => value.toString().padStart(2, "0");
+
+/** 渲染行的时间部分，格式 `MM-DD HH:mm`；与 classic 引擎一致，跨日时日期是唯一线索。 */
 function formatClock(timestamp: number): string {
   const date = new Date(timestamp);
-  return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 人的显示名：有昵称就是「昵称(id)」，否则退回裸 id。 */
+function displayName(user: { id: string; name?: string }): string {
+  return user.name === undefined || user.name.length === 0 ? user.id : `${user.name}(${user.id})`;
 }
 
 /**
- * 拆成寻址头与正文两段。头按形态决定：聚合视窗一行只说「哪来的、谁说的」，正文才是那条事实。
- * 拆开是为了让 {@link collapse} 认出同源连续消息、只留一个头——`group:*` 这类通配认领的频道一多，
- * 逐行重复坐标只是把窗口撑大，对模型没有新信息。
+ * 拆成寻址头与正文两段。头只说坐标，正文自带作者，于是同频道的连续消息合成一段时
+ * 头只出现一次，而换人说活不会断段——`group:*` 这类通配认领的频道一多，
+ * 逐行重复坐标与作者只是把窗口撑大，对模型没有新信息。
+ *
+ * `names` 是窗口内见过的人名，撤回行靠它把 id 还原成昵称：平台的撤回事件只给 id，
+ * 缺了它就只能渲染出一串数字。单条渲染（体积统计、摘要输入）没有窗口，`names` 缺省即退到 id。
  */
-function addressParts(message: AgentMessage, addressing?: AddressingOptions): { head: string; body: string } | undefined {
+function addressParts(message: AgentMessage, addressing?: AddressingOptions, names?: ReadonlyMap<string, string>): { head: string; body: string } | undefined {
   if (message.role !== "custom") return undefined;
 
   // 坐标恒为 `sid/channelId` 复合坐标：各账号下的频道号互不相干，单写 channelId 指不准。
   // core 的 `AgentCustomMessage` 留了一条 `custom: unknown` 占位成员，载荷只能按形状收窄。
-  const head = (who: string, from: { platform: string; selfId: string; channelId: string }) => {
+  const head = (from: { platform: string; selfId: string; channelId: string }) => {
     if (addressing?.cross !== true) return "";
-    return `[#${from.platform}:${from.selfId}/${from.channelId} | ${who}] `;
+    return `[#${from.platform}:${from.selfId}/${from.channelId}] `;
   };
 
   switch (message.type) {
     case "ishiki.message.created": {
       const data: IshikiMessageCreated = message.data;
-      const who = data.user.name === undefined || data.user.name.length === 0 ? data.user.id : `${data.user.name}(${data.user.id})`;
-      return { head: head(who, data), body: `[${formatClock(data.timestamp)}] ${who} #${data.messageId}: ${data.content}` };
+      const who = displayName(data.user);
+      return { head: head(data), body: `[${formatClock(data.timestamp)}] ${who} #${data.messageId}: ${data.content}` };
     }
     case "ishiki.message.deleted": {
       const data: IshikiMessageDeleted = message.data;
-      return { head: head("删除", data), body: `[${formatClock(data.timestamp)}] #${data.messageId}: (已删除)` };
+      // 作者与操作者同一人时合并成一句：「X 的消息被 X 撤回」读着卡带，而自己撤回自己是群里的常态。
+      // 两端任一缺失都只说发生了什么，不猜是谁。
+      const by = data.userId === undefined ? undefined : (names?.get(data.userId) ?? data.userId);
+      const at = data.operatorId === undefined ? undefined : (names?.get(data.operatorId) ?? data.operatorId);
+      const id = `#${data.messageId}`;
+      // 是不是自己撤回，按 id 判，不按显示名：同一个人两个昵称时会被误并成一句。
+      const self = data.userId !== undefined && data.userId === data.operatorId;
+      const fact =
+        by === undefined || at === undefined ? `有一条消息 ${id} 被撤回了` : self ? `${by}撤回了自己的一条消息 ${id}` : `${by} 的消息 ${id} 被 ${at} 撤回了`;
+      return { head: head(data), body: `[${formatClock(data.timestamp)}] ${fact}` };
     }
     default:
       // 无渲染规则的类型不进入上下文输入，仍保留在事件流中。
@@ -94,8 +114,10 @@ function renderText(message: AgentMessage, addressing?: AddressingOptions): stri
 export function collapse(messages: readonly AgentMessage[], addressing?: AddressingOptions): AgentMessage[] {
   const collapsed: AgentMessage[] = [];
   const lines: string[] = [];
-  /** 当前这一段连续消息的寻址头；换源即另起一段，于是头只在段首出现一次。 */
+  /** 当前这一段连续消息的寻址头；换频道即另起一段，于是头只在段首出现一次。 */
   let head: string | undefined;
+  /** 窗口内见过的人名，供撤回行把 id 还原成昵称。 */
+  const names = new Map<string, string>();
 
   const flush = (): void => {
     if (lines.length === 0) return;
@@ -105,7 +127,12 @@ export function collapse(messages: readonly AgentMessage[], addressing?: Address
   };
 
   for (const message of messages) {
-    const parts = addressParts(message, addressing);
+    if (message.role === "custom" && message.type === "ishiki.message.created") {
+      const data: IshikiMessageCreated = message.data;
+      names.set(data.user.id, displayName(data.user));
+    }
+
+    const parts = addressParts(message, addressing, names);
     if (parts === undefined) {
       flush();
       collapsed.push(message);
@@ -113,7 +140,7 @@ export function collapse(messages: readonly AgentMessage[], addressing?: Address
     }
     if (parts.body.length === 0) continue;
 
-    // 同源的连续消息合成一段：头只在第一行前出现，后续行直接接正文。
+    // 同频道的连续消息合成一段：头只在第一行前出现，后续行直接接正文。换人说活不换段。
     if (head !== parts.head) {
       flush();
       head = parts.head;

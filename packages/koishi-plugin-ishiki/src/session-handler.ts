@@ -61,6 +61,7 @@ export class StandardHandler implements SessionHandler {
         channelId: session.channelId,
         selfId: session.selfId,
         messageId: session.messageId,
+        userId: session.userId,
         operatorId: session.operatorId,
       });
     }

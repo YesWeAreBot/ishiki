@@ -52,5 +52,7 @@ export interface IshikiMessageCreated extends IshikiEventBase {
 
 export interface IshikiMessageDeleted extends IshikiEventBase {
   messageId: string;
+  /** 被撤回的那条消息的作者。OneBot 的 `user_id` 与 `operator_id` 分开：管理员代撤时两者不同。 */
+  userId?: string;
   operatorId?: string;
 }

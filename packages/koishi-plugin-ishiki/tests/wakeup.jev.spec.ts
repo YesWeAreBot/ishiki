@@ -41,6 +41,12 @@ const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0
 
 type JevParams = Partial<JevWakeupConfig>;
 
+/**
+ * 「明确该开口」的一组答案：合成 sqrt(0.9 × 0.9) = 0.9。
+ * 单值写法三维同值会被 `others` 压掉一半，只适合断言「不该开口」。
+ */
+const SPEAKS = { addressed: 0.9, interested: 0.9, others: 0.1 } as const;
+
 /** 一条频道消息；默认是最普通的那一种（无 @、无引用、非私聊）。 */
 function message(overrides: Partial<IshikiMessageCreated> = {}) {
   const timestamp = overrides.timestamp ?? Date.now();
@@ -111,9 +117,19 @@ function attached(config: JevParams = {}, stored: readonly AgentEntry[] = []) {
   return { engine, dispose, ...stub };
 }
 
-/** 端点的一次成功作答。 */
-function noul(chance: number) {
-  return { ok: true, json: async () => ({ answers: { should_reply: { type: "noul", noul: chance } } }) };
+/**
+ * 端点的一次成功作答：三个问句各一个 noul。
+ *
+ * 单值是三维取同一个值——大部分用例只关心「三个都给多少」，不关心是哪一维。
+ * 要单独看某一维就传对象。
+ */
+function noul(chance: number | { addressed?: number; interested?: number; others?: number }) {
+  const answers =
+    typeof chance === "number" ? { addressed: chance, interested: chance, others: chance } : { addressed: 0.5, interested: 0.5, others: 0.5, ...chance };
+  return {
+    ok: true,
+    json: async () => ({ answers: Object.fromEntries(Object.entries(answers).map(([name, value]) => [name, { type: "noul", noul: value }])) }),
+  };
 }
 
 /** 一段工具调用的流式分块，形状与 SDK 的 mock model 期望一致。 */
@@ -134,8 +150,8 @@ function textStep(text: string): LanguageModelV4StreamPart[] {
   ];
 }
 
-/** 打一次桩：记下每个请求体，按给定顺序给概率（用尽后一直用最后一个）。 */
-function stubEndpoint(chances: number[]) {
+/** 打一次桩：记下每个请求体，按给定顺序给答案（用尽后一直用最后一个）。 */
+function stubEndpoint(chances: Array<number | { addressed?: number; interested?: number; others?: number }>) {
   const bodies: Array<Record<string, any>> = [];
   let index = 0;
   vi.stubGlobal("fetch", async (_url: string, init?: { body?: string }) => {
@@ -176,7 +192,7 @@ describe("jev wakeup: 兜底规则", () => {
   });
 
   it("规则可以按项开关；只写几项时缺的按本引擎的默认补", async () => {
-    const bodies = stubEndpoint([0.9]);
+    const bodies = stubEndpoint([SPEAKS]);
     const { engine } = attached({ rules: { keywords: ["帮忙"] } });
 
     // 没写 quoteSelf，就按 jev 的默认（关）走模型，而不是回到 standard 的全开。
@@ -248,7 +264,7 @@ describe("jev wakeup: 窗口", () => {
   });
 
   it("存储读不动也照常判：窗口空着，但不从此不醒", async () => {
-    const bodies = stubEndpoint([0.9]);
+    const bodies = stubEndpoint([SPEAKS]);
     const broken = {
       channel: { subscribe: () => () => undefined },
       storage: {
@@ -268,14 +284,15 @@ describe("jev wakeup: 窗口", () => {
 });
 
 describe("jev wakeup: 模型判定", () => {
-  it("概率过阈值才开口，请求体带着窗口与问句", async () => {
-    const bodies = stubEndpoint([0.9]);
+  it("合成量过阈值才开口，请求体带着窗口与问句", async () => {
+    const bodies = stubEndpoint([SPEAKS]);
     // 这条用例只看请求体：关掉冷却，免得「自己刚说过话」把它挡在模型之外。
     const { engine, appended } = attached({
       threshold: 0.5,
       historyMessages: 2,
       cooldownMs: 0,
       instruction: "猫娘 neko，只接和说话人有关的话",
+      interests: ["猫娘 neko", " 群聊插话  "],
     });
 
     await appended(message({ content: "今天好热", user: { id: "u1", name: "小明" } }));
@@ -296,27 +313,44 @@ describe("jev wakeup: 模型判定", () => {
       { author: "self", text: "热就开空调" },
     ]);
     expect(body.state.pending_message).toMatchObject({ text: "你不觉得吗", mentions_bot: false, replies_to_bot: false });
-    expect(body.questions.should_reply.type).toBe("noul");
-    // 判据进 instructions（与问句并列，由问句点名引用），不进 state。
-    expect(body.questions.should_reply.instructions).toEqual({
-      instruction: "猫娘 neko，只接和说话人有关的话",
-      question: expect.stringContaining("`instruction`"),
-    });
-    expect(body.questions.should_reply.criteria.true.length).toBeGreaterThan(0);
+    // 身份进 state：interested 那一维靠它指认「本 bot」，因此兴趣是 state 的一部分而不是问句的一部分。
+    expect(body.state.bot.id).toBe("bot");
+    expect(body.state.bot.interests).toEqual(["猫娘 neko", "群聊插话"]);
+    expect(Object.keys(body.questions)).toEqual(["addressed", "interested", "others"]);
+    for (const name of ["addressed", "interested", "others"]) {
+      expect(body.questions[name].type).toBe("noul");
+      // 判据进 instructions（与问句并列，由问句点名引用），不进 state。
+      expect(body.questions[name].instructions).toEqual({
+        instruction: "猫娘 neko，只接和说话人有关的话",
+        question: expect.stringContaining("`instruction`"),
+      });
+      expect(body.questions[name].criteria.true.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("interests 进 state 且逐条去空白；没写就是空列表，不偏袒任何话题", async () => {
+    const bodies = stubEndpoint([0.9, 0.9]);
+    const withInterests = attached({ interests: ["猫娘 neko", " 群聊插话  ", "   "] });
+    await withInterests.engine.decide(message());
+    const plain = attached();
+    await plain.engine.decide(message());
+
+    expect(bodies[0].state.bot.interests).toEqual(["猫娘 neko", "群聊插话"]);
+    expect(bodies[1].state.bot.interests).toEqual([]);
   });
 
   it("没写 instruction 时问句仍是自包含的一档判据，并点明 self 是谁", async () => {
-    const bodies = stubEndpoint([0.9]);
+    const bodies = stubEndpoint([SPEAKS]);
     const { engine } = attached();
     await engine.decide(message());
 
-    expect(typeof bodies[0].questions.should_reply.instructions).toBe("string");
-    expect(bodies[0].questions.should_reply.instructions).toContain('"self"');
-    expect(bodies[0].questions.should_reply.instructions).toContain("group chat");
+    expect(typeof bodies[0].questions.addressed.instructions).toBe("string");
+    expect(bodies[0].questions.addressed.instructions).toContain('"self"');
+    expect(bodies[0].questions.addressed.instructions).toContain("`state.bot`");
   });
 
-  it("判据按场景分档：私聊默认该回，群聊默认别插话；instruction 只做补充", async () => {
-    const bodies = stubEndpoint([0.9, 0.9, 0.9]);
+  it("三个问句各管一维，判据互不代替；instruction 只做补充", async () => {
+    const bodies = stubEndpoint([0.9, 0.9]);
     // 关掉规则，否则私聊这类消息根本到不了模型。
     const { engine } = attached({ rules: { direct: false, atSelf: false }, instruction: "话不多，别用颜文字" });
 
@@ -325,30 +359,73 @@ describe("jev wakeup: 模型判定", () => {
 
     const [direct, group] = bodies;
     expect(direct.state.scene.type).toBe("direct");
-    expect(direct.questions.should_reply.criteria.true).toContain("direct chat");
-    expect(direct.questions.should_reply.criteria.true).toContain("normal thing to do");
+    // 私聊只体现在场景提示上，三条判据本身不分档：同一个 bot 在哪都按同一把尺子量。
+    expect(direct.state.bot.scene_hint).toContain("private chat");
     expect(group.state.scene.type).toBe("group");
-    expect(group.questions.should_reply.criteria.true).toContain("mentions, quotes or names this bot");
+    expect(group.state.bot.scene_hint).toContain("group chat");
 
-    // 两档都在 criteria 之上加 instruction，而不是让 instruction 顶替它们。
+    // addressed 问「谁在说话」，interested 问「有没有话说」，others 问「是不是别人的对话」——三者措辞不同。
+    expect(direct.questions.addressed.instructions.question).toContain("addressing this bot");
+    expect(direct.questions.interested.instructions.question).toContain("worth saying");
+    expect(direct.questions.others.instructions.question).toContain("between other participants");
+    // 每个问句只管自己那一维，明确告诉模型别去答别的。
+    for (const name of ["addressed", "interested", "others"]) {
+      expect(direct.questions[name].instructions.question).toContain("the others are asked separately");
+    }
+
+    // 三个问句都在 criteria 之上加 instruction，而不是让 instruction 顶替它们。
     for (const body of [direct, group]) {
-      expect(body.questions.should_reply.instructions.instruction).toBe("话不多，别用颜文字");
-      expect(body.questions.should_reply.instructions.question).toContain("`criteria` describe");
-      expect(body.questions.should_reply.instructions.question).toContain("without replacing them");
+      for (const name of ["addressed", "interested", "others"]) {
+        expect(body.questions[name].instructions.instruction).toBe("话不多，别用颜文字");
+        expect(body.questions[name].instructions.question).toContain("`criteria` describe");
+        expect(body.questions[name].instructions.question).toContain("without replacing them");
+      }
     }
     expect(bodies).toHaveLength(2);
   });
 
-  it("概率不到阈值就不开口", async () => {
+  it("合成量不到阈值就不开口", async () => {
     stubEndpoint([0.49]);
     const { engine } = attached({ threshold: 0.5 });
     expect(await engine.decide(message())).toBe("wait");
   });
 
+  it("没人在找它但它有话想说，照样开口：interested 单独撑着入场", async () => {
+    stubEndpoint([{ addressed: 0.1, interested: 0.9, others: 0.1 }]);
+    const { engine } = attached();
+    // 这正是单问句治不了的漏判：0.9 的兴趣在「该不该说话」这一个数里读不出来。
+    expect(await engine.decide(message())).toBe("trigger");
+  });
+
+  it("明显是别人之间的对话就不插话：others 压过 interested", async () => {
+    stubEndpoint([{ addressed: 0.1, interested: 0.9, others: 0.95 }]);
+    const { engine } = attached();
+    expect(await engine.decide(message())).toBe("wait");
+  });
+
+  it("中性区连续：三个问句都给 0.5 时合成恰好 0.5，稍有证据就往上走", async () => {
+    const { engine } = attached({ threshold: 0.5 });
+    stubEndpoint([0.5]);
+    expect(await engine.decide(message())).toBe("trigger");
+
+    // 触发与不触发必须由证据决定，而不是由「恰好压在门槛上」决定：同一组答案换一个阈值就不该过。
+    const { engine: stricter } = attached({ threshold: 0.51 });
+    stubEndpoint([0.5]);
+    expect(await stricter.decide(message())).toBe("wait");
+  });
+
+  it("缺任何一个问句的答案就整次作废，不拿缺省值补", async () => {
+    vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ answers: { addressed: { noul: 0.9 }, interested: { noul: 0.9 } } }) }));
+    const { engine } = attached();
+    // 缺一维等于回到「只有一个数」，那正是拆成三个问句要治的病。
+    expect(await engine.decide(message())).toBe("wait");
+    expect(warnings.some((line) => line.includes('"others" is not a number'))).toBe(true);
+  });
+
   it("自己刚说过话，冷却期内连请求都不发", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const bodies = stubEndpoint([0.9]);
+    const bodies = stubEndpoint([SPEAKS]);
     const { engine, appended } = attached({ cooldownMs: 60_000 });
 
     // agent 落盘的顺序：触发它的那条先落，模型的话随后；引擎据此知道这两句算进哪本账。
@@ -389,7 +466,8 @@ describe("jev wakeup: 决策日志", () => {
   it("每条路径都留一行：规则、模型、冷却、不可用", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const bodies = stubEndpoint([0.9, 0.1]);
+    // 第二条要 wait：三维同值的 0.1 合成 sqrt(0.1 × 0.9) = 0.3，正好在阈值之下。
+    const bodies = stubEndpoint([SPEAKS, 0.1]);
     const { engine, appended } = attached({ cooldownMs: 60_000 });
 
     expect(await engine.decide(message({ content: '<at id="bot"/>在吗' }))).toBe("trigger");
@@ -406,7 +484,7 @@ describe("jev wakeup: 决策日志", () => {
 
     vi.setSystemTime(new Date("2026-01-01T00:02:00Z"));
     expect(await engine.decide(message({ content: "第三条" }))).toBe("wait");
-    expect(logs.at(-1)).toMatch(/^debug wakeup jev \[room\] wait model chance=0\.10 threshold=0\.5 window=2 elapsed=\d+ms$/);
+    expect(logs.at(-1)).toMatch(/^debug wakeup jev \[room\] wait model chance=0\.30 threshold=0\.5 window=\d+ elapsed=\d+ms$/);
 
     vi.stubGlobal("fetch", async () => {
       throw new Error("boom");
@@ -463,7 +541,7 @@ describe("jev wakeup: 配置", () => {
 
 describe("jev wakeup: 接进场景", () => {
   it("模型说该开口就真的唤起一轮；它自己发出去的话回到窗口，并顶起冷却", async () => {
-    const bodies = stubEndpoint([0.9]);
+    const bodies = stubEndpoint([SPEAKS]);
     const sent: Array<{ channelId: string; content: string }> = [];
     const ctx = {
       bots: {

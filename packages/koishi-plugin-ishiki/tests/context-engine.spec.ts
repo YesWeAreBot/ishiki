@@ -17,7 +17,6 @@ import { describe, expect, it } from "vitest";
 
 import { StandardContextEngine, collapse } from "../src/context/index.js";
 import { createAgentPlugin } from "../src/runtime.js";
-
 const logger = { warn: () => undefined } as unknown as Logger;
 const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
 const calls = { count: 0 };
@@ -72,6 +71,12 @@ function lines(entries: readonly AgentEntry[]): string[] {
   return entries.filter((item) => item.type === "message").map((item) => (item.type === "message" ? String(item.data.role) : ""));
 }
 
+/** collapse 的产物必定是 user 消息，取它的正文。 */
+function body(message: AgentMessage | undefined): string {
+  if (message?.role !== "user" || typeof message.content !== "string") throw new Error("not a user message");
+  return message.content;
+}
+
 describe("collapse", () => {
   it("folds consecutive lines into one user message and lets tool traces cut the run", () => {
     const tool = createToolMessage([{ type: "tool-result", toolCallId: "call-1", toolName: "peek", output: { type: "text", value: "ok" } }]);
@@ -83,6 +88,100 @@ describe("collapse", () => {
     expect(String(collapsed[0].content)).toContain("m-b");
     expect(collapsed[1].role).toBe("tool");
     expect(collapsed[2].role).toBe("user");
+  });
+
+  it("keeps one run across a change of speaker, and names the recall operator", () => {
+    const other = createCustomMessage("ishiki.message.created", {
+      timestamp: 1,
+      platform: "onebot",
+      selfId: "1",
+      channelId: "group:2",
+      isDirect: false,
+      messageId: "m-other",
+      content: "我也在",
+      user: { id: "77", name: "马克柴" },
+    });
+    const recall = createCustomMessage("ishiki.message.deleted", {
+      timestamp: 1,
+      platform: "onebot",
+      selfId: "1",
+      channelId: "group:2",
+      messageId: "m-other",
+      userId: "77",
+      operatorId: "77",
+    });
+    const out = collapse([message("a"), other, recall], { cross: true });
+
+    // 三条同频道：合成一段，头只出现一次且不带作者
+    expect(out).toHaveLength(1);
+    const text = body(out[0]);
+    expect(text.split("\n")[0]).toBe("[#onebot:1/group:2] ");
+    expect(text).toContain("Miaow(42)");
+    expect(text).toContain("马克柴(77)");
+
+    // 撤回者就是作者本人时合并成一句；名字从窗口内的人名表还原
+    expect(text).toContain("马克柴(77)撤回了自己的一条消息 #m-other");
+  });
+
+  it("names both ends when someone else recalls the message", () => {
+    const recall = createCustomMessage("ishiki.message.deleted", {
+      timestamp: 1,
+      platform: "onebot",
+      selfId: "1",
+      channelId: "group:2",
+      messageId: "m-a",
+      userId: "42",
+      operatorId: "77",
+    });
+    const text = body(collapse([message("a"), recall])[0]);
+
+    expect(text).toContain("Miaow(42) 的消息 #m-a 被 77 撤回了");
+  });
+
+  it("falls back to bare ids when the window never saw the people", () => {
+    const recall = createCustomMessage("ishiki.message.deleted", {
+      timestamp: 1,
+      platform: "onebot",
+      selfId: "1",
+      channelId: "group:2",
+      messageId: "m-gone",
+      userId: "77",
+      operatorId: "88",
+    });
+    const text = body(collapse([recall])[0]);
+
+    expect(text).toContain("77 的消息 #m-gone 被 88 撤回了");
+  });
+
+  it("only says a message went away when the platform names nobody", () => {
+    const recall = createCustomMessage("ishiki.message.deleted", {
+      timestamp: 1,
+      platform: "onebot",
+      selfId: "1",
+      channelId: "group:2",
+      messageId: "m-gone",
+    });
+    const text = body(collapse([recall])[0]);
+
+    expect(text).toContain("有一条消息 #m-gone 被撤回了");
+  });
+
+  it("stamps the date, not just the clock", () => {
+    // 时刻取当天 00:07 本地时间，带上日期才认得出跨日的窗口
+    const at = new Date(2026, 8, 28, 0, 7).getTime();
+    const recall = createCustomMessage("ishiki.message.created", {
+      timestamp: at,
+      platform: "onebot",
+      selfId: "1",
+      channelId: "group:2",
+      isDirect: false,
+      messageId: "m-d",
+      content: "x",
+      user: { id: "42", name: "Miaow" },
+    });
+    const text = body(collapse([recall])[0]);
+
+    expect(text).toContain("[09-28 00:07]");
   });
 });
 

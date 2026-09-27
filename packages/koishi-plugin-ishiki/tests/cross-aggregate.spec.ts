@@ -276,11 +276,11 @@ describe("cross 聚合：输入侧寻址头", () => {
 
     const prompt = promptText(rigged);
     // 坐标恒为复合坐标：各账号下的频道号互不相干，单写频道号模型无从分辨
-    expect(prompt).toContain("[#onebot:1/group:2 | Miaow(42)]");
-    expect(prompt).toContain("[#onebot:1/group:7 | Miaow(42)]");
+    expect(prompt).toContain("[#onebot:1/group:2]");
+    expect(prompt).toContain("[#onebot:1/group:7]");
     // 五条群消息分属两个来源，各只留一个头：同源连续的不重复标出处
-    expect(prompt.split("[#onebot:1/group:2 | Miaow(42)]").length - 1).toBe(1);
-    expect(prompt.split("[#onebot:1/group:7 | Miaow(42)]").length - 1).toBe(1);
+    expect(prompt.split("[#onebot:1/group:2]").length - 1).toBe(1);
+    expect(prompt.split("[#onebot:1/group:7]").length - 1).toBe(1);
     // 两条内容都还在，合并的是头不是事实
     expect(prompt).toContain("g2");
     expect(prompt).toContain("h3");
@@ -385,7 +385,7 @@ describe("cross 聚合：跨账号认领", () => {
     await shared.idle();
 
     // 多 sid 时寻址头必须带 sid：两个账号的 group:2 只写频道号，模型无从分辨
-    expect(promptText(rigged)).toContain("[#onebot:1/group:2 |");
+    expect(promptText(rigged)).toContain("[#onebot:1/group:2]");
     await teardown(rigged);
   });
 });

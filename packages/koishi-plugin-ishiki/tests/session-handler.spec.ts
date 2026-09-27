@@ -28,9 +28,9 @@ describe("StandardHandler: 私聊判定", () => {
 
   it("适配器只给 private: 频道号时也认私聊", () => {
     // onebot 这类适配器不填 channel.type，`session.isDirect` 因此是 false，只看它就会把私聊当群聊。
-    expect(handler.handle(session({ isDirect: false, channelId: "private:1293865264" }))?.data).toMatchObject({
+    expect(handler.handle(session({ isDirect: false, channelId: "private:u1" }))?.data).toMatchObject({
       isDirect: true,
-      channelId: "private:1293865264",
+      channelId: "private:u1",
     });
   });
 

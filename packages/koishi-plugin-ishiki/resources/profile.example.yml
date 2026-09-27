@@ -144,17 +144,33 @@ presets:
     wakeup:
       engine: jev
       jev:
-        # 补充判据：身份、语气、什么时候该闭嘴都写在这里。内置判据已按场景分档（私聊默认该回、
-        # 群聊默认别插话），这段是在它之上加约束——写得好是加分，写漏了也不塌下限。
+        # 三个问句各判一维，再合成一个量：
+        #   addressed  这条是不是在跟本 bot 说
+        #   interested  本 bot 对这个话题有没有话说（读下面的 interests）
+        #   others     是不是别人之间的对话
+        # 合成式 sqrt(max(addressed, interested) × (1 - others))，过 threshold 才开口。
+        # 拆成三维而不是一个数，是因为「没人在找它，但它正好有话想说」在单问句里只能给低分。
+
+        # 补充判据：语气、什么时候该闭嘴都写在这里。三个问句的 criteria 是判定下限，
+        # 这段在它之上加约束——写得好是加分，写漏了也不塌下限。身份与兴趣不进这里，见 interests。
         instruction: |
           neko，猫娘，话不多但会接梗。
           只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
           几个人互相寒暄时保持安静。
-        threshold: 0.5 # 概率阈值，调高更沉默
+        # 本 bot 关心的话题，逐条写。只 interested 那一维读它，也是它唯一的信息来源：
+        # 留空 = 不偏袒任何话题，判定只靠 addressed 与 others 两维。
+        interests:
+          - LLM 工程与调试
+          - 群聊 bot 的行为设计
+          - TypeScript
+        # 合成量的下限，不是单个问句的置信度：三个问句都给 0.5（都没证据）时合成恰好 0.5。
+        # 因此 0.5 是「毫无证据也开口」的临界值，调高它收紧的是合成量。
+        threshold: 0.5
         cooldownMs: 30000 # 上次开口后的静默期（毫秒）；硬命中的规则不受它约束
         historyMessages: 8 # 喂给模型的最近消息条数
         timeoutMs: 1500 # 单次判定等待上限（毫秒），超时按不唤醒处理
-        # 兜底规则：命中即唤醒、不问模型。默认只开私聊与 @，其余交给模型
+        # 兜底规则：命中即唤醒、不问模型。默认只开私聊与 @，其余交给模型。
+        # 只在 engine: jev 这一段里写——写成 jev 同级的 standard 段不会被读。
         rules:
           direct: true
           atSelf: true
@@ -162,7 +178,7 @@ presets:
           keywords: []
 
     scenes:
-      # Jev 的兜底规则按场景分档，群聊与私聊各一个生效单位。
+      # 引擎在 preset 层造一次，各 scene 只引用，因此冷却账本是全 preset 共用的一本。
       groups:
         sid: onebot:10000
         whitelist: ["group:*"]
