@@ -67,6 +67,35 @@ export const TypingConfig: Schema<Partial<TypingConfig>> = Schema.object({
 });
 
 /**
+ * 代码模式的参数：模型改写一段程序，程序在沙箱里调工具，中间数据不出上下文。
+ *
+ * 它不动工具调用协议（仍是模型原生的 function call），只改工具面：除 `direct` 里的工具外，
+ * 其余工具全部收进沙箱，模型的目录里只剩 code_mode 一个。
+ */
+export interface CodemodeConfig {
+  /** 是否启用；关闭时工具面与配置无关，模型照旧逐个调工具。 */
+  enable: boolean;
+  /**
+   * 仍只给模型直调、不收进沙箱的工具名。
+   * `send_message` 与 `finish` 恒在模型目录里，不靠这份清单：前者的停轮语义挂在直调的那次调用上
+   * （程序里也能说话，但不结束轮次），后者是直调的专属动作（程序够不着）。这里给的是额外那份。
+   */
+  direct: string[];
+  /** 单次沙箱执行的总时限（毫秒）；超时连同在飞的调用一并中止。 */
+  timeoutMs: number;
+}
+
+/**
+ * 唯一一份声明：preset 与 scene 共用它。
+ * 不给默认值——被它补上的值与用户写的值在合并层形状相同、无从分辨，覆写语义会因此失效；缺省值在 {@link FALLBACK}。
+ */
+export const CodemodeConfig: Schema<Partial<CodemodeConfig>> = Schema.object({
+  enable: Schema.boolean().description("启用代码模式：模型写程序，程序在沙箱里调工具"),
+  direct: Schema.array(Schema.string()).description("仍只给模型直调、不收进沙箱的工具名（send_message 与 finish 恒在目录里）"),
+  timeoutMs: Schema.number().description("单次沙箱执行的总时限（毫秒）"),
+});
+
+/**
  * 一次模型调用的降级与重试。谁在组里、按什么顺序试、熔断阈值多少，都在 models.yaml 的 group 里；
  * 这里只管这一次调用最多试几次、隔多久。
  *
@@ -127,9 +156,6 @@ export const ChannelClaim: Schema<ChannelClaim> = Schema.object({
  * 不是覆写同 preset 的兄弟 scene。三层合并（内置缺省 ← preset ← scene）逐 scene 独立进行，
  * 生效范围被它自己的名单圈住，跨 scene 的配置冲突在结构上不可能发生，不需要任何合法性规则。
  *
- * 引擎（`context` / `wakeup`）不在这一层：两者都带着账（压缩水位、各频道的冷却账本），
- * 挂在 scene 上只会造出几份互不相干的账。
- *
  * Example:
  * ```yaml
 presets:
@@ -142,6 +168,10 @@ presets:
         blacklist: ["12345678"]
         # 就地扩展 preset 基线；未写的字段沿用 preset，preset 也没写就用内置缺省
         model: <model-or-group-name>
+        wakeup: # 引擎变体也可就地覆盖；准入仍受 preset 的 extends 约束
+          engine: <wakeup-engine-b>
+          <wakeup-engine-b>:
+            paramA:
         typing:
           charPerSecond: 8
  * ```
@@ -156,9 +186,15 @@ export interface SceneConfig extends ChannelClaim {
   model?: string;
   /** 降级与重试的局部扩展；未写的字段沿用 preset（若 preset 也没写，用内置缺省）。 */
   failover?: Partial<FailoverConfig>;
+  /** 上下文引擎的局部覆盖；未写沿用 preset。引擎实例随 AgentRuntime 诞生，一个实例一份。 */
+  context?: ContextConfig;
+  /** 唤醒引擎的局部覆盖；未写沿用 preset。跨实例状态经 WakeupEngineDeps.shared，不依赖共享实例。 */
+  wakeup?: WakeupConfig;
   toolcall?: ToolcallConfig;
   /** 是否启用幕后通道：每个工具的参数表前置 inner_thoughts，think 工具退场。默认关闭。 */
   innerThoughts?: boolean;
+  /** 代码模式的局部覆盖；未写沿用 preset（若 preset 也没写，默认关闭）。 */
+  codemode?: Partial<CodemodeConfig>;
   /** 打字节奏的局部扩展；未写的字段沿用 preset（若 preset 也没写，用内置缺省）。 */
   typing?: Partial<TypingConfig>;
 }
@@ -170,8 +206,11 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
   sid: Schema.string().description("绑定的 Bot 账号；其名下频道均由该 scene 认领"),
   model: Schema.string(),
   failover: FailoverConfig,
+  context: ContextConfig,
+  wakeup: WakeupConfig,
   toolcall: ToolcallConfig,
   innerThoughts: Schema.boolean().description("将幕后念头挂到每个工具的参数表上（inner_thoughts），并移除 think 工具"),
+  codemode: CodemodeConfig,
   typing: TypingConfig,
 });
 
@@ -187,9 +226,6 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
  *
  * 形态与归属都写在结构里，不靠「哪个 scene 引用了我」反推：给已被多 scene 挂靠的 preset 打上 cross
  * 不可能顺带合流谁，合流范围就是写下 `claims` 的那几行。
- *
- * 引擎（`context` / `wakeup`）也只在这一层：它们带着账——压缩水位与各频道的冷却——是活物，
- * 挂到 scene 上只会造出几份互不相干的账。
  *
  * Example:
  * ```yaml
@@ -243,13 +279,15 @@ export interface PresetConfig {
    */
   extends?: string[];
   failover?: Partial<FailoverConfig>;
-  /** 上下文引擎。一 preset 一份实例，缺省补成 `standard`。 */
+  /** 上下文引擎。缺省补成 `standard`；实例随 AgentRuntime 各造一份。 */
   context?: ContextConfig;
-  /** 唤醒引擎。一 preset 一份实例，缺省补成 `standard`。 */
+  /** 唤醒引擎。缺省补成 `standard`；跨实例状态经 WakeupEngineDeps.shared。 */
   wakeup?: WakeupConfig;
   toolcall?: ToolcallConfig;
   /** 是否启用幕后通道：每个工具的参数表前置 inner_thoughts，think 工具退场。默认关闭。 */
   innerThoughts?: boolean;
+  /** 代码模式。缺省关闭；启用后除收尾工具与 `direct` 列出的之外，全部工具收进沙箱。 */
+  codemode?: Partial<CodemodeConfig>;
   typing?: Partial<TypingConfig>;
   /** 声明本 preset 自身即生效单位（跨频道合流）；与 `scenes` 互斥。 */
   cross?: boolean;
@@ -268,6 +306,7 @@ export const PresetConfig: Schema<PresetConfig> = Schema.object({
   wakeup: WakeupConfig,
   toolcall: ToolcallConfig,
   innerThoughts: Schema.boolean().description("将幕后念头挂到每个工具的参数表上（inner_thoughts），并移除 think 工具"),
+  codemode: CodemodeConfig,
   typing: TypingConfig,
   cross: Schema.boolean().description("声明本 preset 自身即生效单位（跨频道合流）；与 scenes 互斥"),
   scenes: Schema.dict(SceneConfig).description("普通形态下挂靠的 scene 们"),
@@ -315,7 +354,8 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
  * 展开后的装配清单，即一份工厂，Preset 已展开到本层。
  * 它描述一个生效单位的运行参数；匹配到的每个频道各创建一个 `AgentRuntime`（一 Channel 一 Agent）。
  *
- * 引擎不在这一层：引擎配置归 preset，本 spec 只留 {@link SceneSpec.preset} 键指回去。
+ * 引擎配置随三层合并落到本层：引擎实例在装配期按 spec 逐个诞生（一生效单位一份），
+ * 配置与实例同层，不再有按 preset 归集的旁路。
  *
  * 两种形态共用一个形状而不是联合类型：运行参数与名单的读法完全一致，差别只在
  * `cross` 这一个判别位与「认领的频道集合怎么来」。多写一套联合会让每个读 spec 的人
@@ -354,10 +394,16 @@ export interface SceneSpec {
   model: string;
   /** 降级与重试，Preset 与 Scene 的扩展已在此合并。 */
   failover: FailoverConfig;
+  /** 上下文引擎配置，内置缺省 ← preset ← scene 已在此合并；缺省补成 standard。 */
+  context: ContextConfig;
+  /** 唤醒引擎配置，合并规则同 context；缺省补成 standard。 */
+  wakeup: WakeupConfig;
   /** 工具调用方式，Preset 与 Scene 的扩展已在此合并；缺省 native。 */
   toolcall: ToolcallConfig;
   /** 幕后通道是否启用，Preset 与 Scene 的扩展已在此合并；缺省关闭。 */
   innerThoughts: boolean;
+  /** 代码模式配置，Preset 与 Scene 的扩展已在此合并；缺省关闭。 */
+  codemode: CodemodeConfig;
   /** 打字节奏，Preset 与 Scene 的扩展已在此合并。 */
   typing: TypingConfig;
 }
@@ -441,43 +487,22 @@ function merge<T>(base: T, ...layers: readonly unknown[]): T {
  * Spec 的缺省层：三层合并的最底层，也是配置面唯一的默认值来源。
  * Schema 里一律不留 default——被它补上的值与用户写的值在合并层形状相同，覆写语义会因此失效。
  */
-const FALLBACK: Pick<SceneSpec, "failover" | "toolcall" | "innerThoughts" | "typing" | "whitelist" | "blacklist"> = {
+const FALLBACK: Pick<SceneSpec, "failover" | "context" | "wakeup" | "toolcall" | "innerThoughts" | "codemode" | "typing" | "whitelist" | "blacklist"> = {
   failover: { backoffMs: 500, failoverOn: "unavailable" },
+  context: { engine: "standard" },
+  wakeup: { engine: "standard" },
   toolcall: { engine: "native" },
   innerThoughts: false,
+  codemode: { enable: false, direct: [], timeoutMs: 30_000 },
   typing: { baseDelay: 500, charPerSecond: 5, minDelay: 800, maxDelay: 4000 },
   whitelist: [],
   blacklist: [],
 };
 
-/**
- * 引擎的缺省层：preset 没写引擎块时落到该家族的默认引擎。
- * Schema 会为空缺的块物化出空对象，{@link merge} 已经把「不含键的对象」当未写处理，这里不必特判。
- */
-const ENGINE_FALLBACK: Pick<PresetEngineConfig, "context" | "wakeup"> = { context: { engine: "standard" }, wakeup: { engine: "standard" } };
-
-/**
- * 一 preset 的引擎配置。引擎配置归 preset 层，spec 只按 `preset` 键回来看它——
- * 同一 preset 下的全部频道共用这同一套配置、同一套实例。
- */
-export interface PresetEngineConfig {
-  context: ContextConfig;
-  wakeup: WakeupConfig;
-  /**
-   * 该 preset 是否 cross 形态。装配侧据此给上下文引擎开寻址头——形态本就是 preset 的属性，
-   * 引擎又归 preset 层造，于是这一个开关在造引擎时就定了，不必留到每个频道上再判一次。
-   */
-  cross: boolean;
-  /** 该 preset 选中的扩展包名，供引擎变体的准入检查。 */
-  extends: string[];
-}
-
-/** 展开一份 profile 的结果：生效单位清单，加上按 preset 归集的引擎配置。 */
+/** 展开一份 profile 的结果：生效单位清单。引擎配置已随三层合并落进各 spec。 */
 export interface ResolvedProfile {
   /** 各生效单位的装配清单。 */
   specs: SceneSpec[];
-  /** 引擎配置，键是 preset 名，与 `spec.preset` 一致。 */
-  engines: Record<string, PresetEngineConfig>;
 }
 
 /**
@@ -488,16 +513,14 @@ export interface ResolvedProfile {
  */
 export function resolveProfile(profile: ProfileConfig, id: string): ResolvedProfile {
   const specs: SceneSpec[] = [];
-  const engines: Record<string, PresetEngineConfig> = {};
 
   for (const [presetName, preset] of Object.entries(profile.presets)) {
     const scenes = preset.scenes ?? {};
     const sceneNames = Object.keys(scenes);
-    // 形态开关、两处名单与引擎块不是心智基线：不剥掉会随 preset 层并进每个 spec。
-    // 引擎配置按 preset 归集到这里，spec 只留一个 `preset` 键指回来。
-    const { scenes: _scenes, claims: presetClaims, cross: _cross, context: _context, wakeup: _wakeup, extends: presetExtends, ...baseline } = preset;
+    // 形态开关与两处名单不是心智基线：不剥掉会随 preset 层并进每个 spec。
+    // 引擎块随 baseline 进三层合并——实例按 spec 逐个诞生，配置没有理由留在别处。
+    const { scenes: _scenes, claims: presetClaims, cross: _cross, extends: presetExtends, ...baseline } = preset;
     const selected = presetExtends ?? [];
-    engines[presetName] = { ...merge(ENGINE_FALLBACK, { context: preset.context, wakeup: preset.wakeup }), cross: preset.cross === true, extends: selected };
 
     // 形态互斥与空心智是一组判断：认不出这个 preset 以什么形态生效，就没法装配。
     if (preset.cross === true) {
@@ -551,7 +574,27 @@ export function resolveProfile(profile: ProfileConfig, id: string): ResolvedProf
   }
 
   assertNoOverlap(specs, id);
-  return { specs, engines };
+  assertEngineAdmission(specs);
+  return { specs };
+}
+
+/**
+ * 引擎变体的准入校验：带包前缀的名字要求包在 extends 里，装载期报出。
+ * 准入是 preset 的承诺，scene 覆写也不能越过它——「这个 preset 能用哪些变体」
+ * 读 preset 一处就能回答，不必扫所有 scene。
+ */
+function assertEngineAdmission(specs: readonly SceneSpec[]): void {
+  for (const spec of specs) {
+    for (const [family, engine] of [
+      ["context", spec.context],
+      ["wakeup", spec.wakeup],
+      ["toolcall", spec.toolcall],
+    ] as const) {
+      if (!isSelected(engine.engine, spec.extends)) {
+        throw new Error(`${family} engine "${engine.engine}" of spec "${spec.name}" comes from an extension package not listed in "extends"`);
+      }
+    }
+  }
 }
 
 /**

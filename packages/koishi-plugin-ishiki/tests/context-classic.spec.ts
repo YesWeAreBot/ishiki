@@ -61,7 +61,8 @@ function renderWorld(engine: ClassicContextEngine, entries: readonly AgentEntry[
   const messages = windowed.filter((entry) => entry.type === "message").map((entry) => entry.data);
   const rendered = engine.transformMessages([...messages]);
   const first = rendered[0];
-  return first !== undefined && typeof first.content === "string" ? first.content : "";
+  if (first === undefined || !("content" in first)) return "";
+  return typeof first.content === "string" ? first.content : "";
 }
 
 /** 取出一节的内容。 */

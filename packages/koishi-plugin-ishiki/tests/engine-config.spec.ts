@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { ProfileConfig, resolveProfile, type PresetEngineConfig, type SceneSpec } from "../src/profile.js";
+import { ProfileConfig, resolveProfile, type SceneSpec } from "../src/profile.js";
 
-/** 展开一份树，断言只看 spec —— 配置面除引擎外都归 scene 层的三层合并。 */
+/** 展开一份树，断言只看首个 spec —— 三层合并（内置缺省 ← preset ← scene）的全部字段。 */
 function makeSpec(preset: Record<string, unknown>, scene: Record<string, unknown> = {}): SceneSpec {
   return resolveProfile(
     ProfileConfig({
@@ -13,61 +13,82 @@ function makeSpec(preset: Record<string, unknown>, scene: Record<string, unknown
   ).specs[0]!;
 }
 
-/** 同一个形状，但断言看的是 preset 级的引擎表。 */
-function makeEngines(preset: Record<string, unknown>): PresetEngineConfig {
-  return resolveProfile(
-    ProfileConfig({
-      id: "neko",
-      presets: { base: { model: "test:model", ...preset, scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } } },
-    }),
-    "neko",
-  ).engines.base!;
-}
-
 describe("engine config precedence", () => {
   it("都没写时落到各自默认引擎", () => {
-    const engines = makeEngines({});
-    expect(engines.context.engine).toBe("standard");
-    expect(engines.wakeup.engine).toBe("standard");
-    expect(makeSpec({}).toolcall.engine).toBe("native");
+    const spec = makeSpec({});
+    expect(spec.context.engine).toBe("standard");
+    expect(spec.wakeup.engine).toBe("standard");
+    expect(spec.toolcall.engine).toBe("native");
   });
 
   it("preset 写下的引擎与参数原样带过来", () => {
-    const engines = makeEngines({
+    const spec = makeSpec({
       context: { engine: "standard", standard: { maxChars: 1234 } },
       wakeup: { engine: "standard", standard: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } },
     });
     // 断言整块：按引擎名分键，参数留在同名键下
-    expect(engines.context).toEqual({ engine: "standard", standard: { maxChars: 1234 } });
-    expect(engines.wakeup).toEqual({ engine: "standard", standard: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } });
+    expect(spec.context).toEqual({ engine: "standard", standard: { maxChars: 1234 } });
+    expect(spec.wakeup).toEqual({ engine: "standard", standard: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } });
   });
 
-  it("形态带给装配侧：cross preset 的上下文引擎要开寻址头", () => {
-    const config = ProfileConfig({
-      id: "neko",
-      presets: {
-        lounge: { model: "test:model", cross: true, claims: { "onebot:1": { whitelist: ["group:*"] } } },
-        base: { model: "test:model", scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } },
-      },
-    });
-    const { engines } = resolveProfile(config, "neko");
-    expect(engines.lounge!.cross).toBe(true);
-    expect(engines.base!.cross).toBe(false);
+  it("scene 可就地覆盖引擎变体，未写字段沿用 preset", () => {
+    const spec = makeSpec(
+      { wakeup: { engine: "standard", standard: { direct: true, atSelf: true } } },
+      { wakeup: { engine: "standard", standard: { atSelf: false } } },
+    );
+    // 逐键递归合并：scene 只改 atSelf，direct 沿用 preset
+    expect(spec.wakeup).toEqual({ engine: "standard", standard: { direct: true, atSelf: false } });
   });
 
-  it("spec 上没有引擎可读：一份 spec 指回它所属的 preset", () => {
-    const spec = makeSpec({ context: { engine: "standard", standard: { maxChars: 10_000 } } });
-    expect(spec).not.toHaveProperty("context");
-    expect(spec).not.toHaveProperty("wakeup");
-    expect(spec.preset).toBe("base");
-    // preset 写的那份一路带到引擎表，没在 scene 上丢
-    expect(makeEngines({ context: { engine: "standard", standard: { maxChars: 10_000 } } }).context).toEqual({
-      engine: "standard",
-      standard: { maxChars: 10_000 },
-    });
+  it("scene 可以整个换掉引擎变体", () => {
+    const spec = makeSpec({ wakeup: { engine: "standard" } }, { wakeup: { engine: "classic" } });
+    expect(spec.wakeup.engine).toBe("classic");
   });
 
-  it("toolcall 仍是 scene 层的：没写时沿用 preset，显式写回默认引擎时不退回", () => {
+  it("cross preset 的 spec 带上引擎配置，没有 scene 层", () => {
+    const { specs } = resolveProfile(
+      ProfileConfig({
+        id: "neko",
+        presets: {
+          lounge: {
+            model: "test:model",
+            cross: true,
+            context: { engine: "standard", standard: { maxChars: 40_000 } },
+            claims: { "onebot:1": { whitelist: ["group:*"] } },
+          },
+        },
+      }),
+      "neko",
+    );
+    expect(specs[0]!.cross).toBe(true);
+    expect(specs[0]!.context).toEqual({ engine: "standard", standard: { maxChars: 40_000 } });
+  });
+
+  it("带包前缀的引擎变体不在 extends 里时装载报错", () => {
+    expect(() =>
+      resolveProfile(
+        ProfileConfig({
+          id: "neko",
+          presets: { base: { model: "test:model", wakeup: { engine: "ext/wakeup" as never }, scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } } },
+        }),
+        "neko",
+      ),
+    ).toThrow(`wakeup engine "ext/wakeup" of spec "dms" comes from an extension package not listed in "extends"`);
+  });
+
+  it("scene 覆写的引擎变体同样受 preset 的 extends 约束", () => {
+    expect(() =>
+      resolveProfile(
+        ProfileConfig({
+          id: "neko",
+          presets: { base: { model: "test:model", scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"], context: { engine: "ext/ctx" as never } } } } },
+        }),
+        "neko",
+      ),
+    ).toThrow(`context engine "ext/ctx" of spec "dms" comes from an extension package not listed in "extends"`);
+  });
+
+  it("toolcall 的覆盖：没写时沿用 preset，显式写回默认引擎时不退回", () => {
     expect(makeSpec({ toolcall: { engine: "classic" } }).toolcall.engine).toBe("classic");
     expect(makeSpec({ toolcall: { engine: "classic" } }, { toolcall: { engine: "native" } }).toolcall.engine).toBe("native");
   });

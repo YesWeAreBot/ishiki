@@ -36,15 +36,17 @@ src/<族>/
 
 前两族实现 `AgentPlugin`：它们的钩子挂在 agent 实例上，随场景装配。第三族不进 `AgentPlugin` 体系——它作用于装配期的模型值，由调用点在装配时取用一次。记忆族只有抽象基类与一个返回空工具集的占位实现，插槽关系已定（它是被查询的数据源，不是管道上的兄弟），实现留给以后。
 
-## 前两族归 preset 层
+## 引擎随 AgentRuntime 诞生
 
-`context` 与 `wakeup` 只写在 preset 上：挂在 scene 上只会造出几份互不相干的账。
+三个族的配置走同一条三层合并（内置缺省 ← preset ← scene，见 [01-profile](./01-profile.md)），实例全部随 `AgentRuntime` 在装配点诞生、随实例销毁——生命周期只有「实例」一种单位：
 
-- **配置**按 preset 存，按 preset 造实例。寻址头在造上下文引擎时就定下——形态本就是 preset 的属性。
-- **唤醒引擎**一 preset 一份，全部频道共用：它带的是各频道的冷却账本，共用才看得见「刚在群里说过话」。
-- **上下文引擎**一生效单位一份。它不能跨 agent 共享——core 在 `createAgent` 时就把插件 hook 的引用绑好，引擎自己也记着 agent、压缩水位与在途压缩，共享会让这个频道的压缩去读另一个频道的存储。幸而这一层本就是「一生效单位」：cross 形态整个 preset 只有一块视窗、一个 agent。
+- **上下文引擎**一实例一份。它不能跨 agent 共享——core 在 `createAgent` 时就把插件 hook 的引用绑好，引擎自己也记着 agent、压缩水位与在途压缩，共享会让这个频道的压缩去读另一个频道的存储。
+- **唤醒引擎**一实例一份。它曾经的账本「跨频道可见」依赖 preset 级共享实例；现状里冷却账本只看本视窗的事实流。真需要跨实例感知（如全局限频），变体从 `WakeupEngineDeps.shared`（profile 级状态池，随 ProfileRuntime 生灭）取自己的键自管读写，不用模块级闭包——插件重载时闭包会留下幽灵账。
+- **工具调用引擎**在装配点就地包裹本实例的模型：它不带账，只是按需包裹模型的一层中间件。
 
-`toolcall` 留在 scene 层：它不带账，只是按需包裹模型的一层中间件，构造一次扔掉即可。
+`attach` 契约保留但收窄为单次挂载：一个引擎实例只 attach 一个 agent，返回的 disposer 由实例停止时调用。引擎要「这个场景发生了什么」，从这里订阅事实流即可。
+
+变体准入（带包前缀的名字要求包在 preset 的 `extends` 里）在配置展开期校验；scene 就地覆写引擎变体同样受这道门约束——准入是 preset 的承诺，不随覆写放开。
 
 ### 工具调用引擎
 
@@ -53,6 +55,41 @@ src/<族>/
 `native` 不接管模型（用模型原生的 function call）；其余变体用于不支持原生 function call 的模型，或需要固定输出形状的场景。模型不是 v4 规格（网关没解析出 v4 provider）时中间件不适用，模型原样返回。
 
 `classic` 是 YesImBot v3 的 JSON OUTPUT：`thoughts`（observe / analyze_infer / plan）+ `actions` 两块，空 `actions` 即结束本轮。它与 `context.classic` 共用同一份 `<action>` / `<observation>` 渲染（`src/toolcall/classic.engine.ts` 导出），协议钩子与上下文投影不会各写一份而漂移。
+
+## 停轮判定
+
+core 的缺省是「本步出现了工具调用就再走一步」，靠 `maxSteps` 封顶。ishiki 在此基础上加一条停轮规则，写在 core 侧唯一插件的 `onStepFinish` 里（`src/runtime.ts`）：只读本步的消息流，不靠工具侧回调、不留跨步标志。
+
+- 本步直调了 `finish` → 停。收尾是模型的显式宣言，同批还有别的工具也停。
+- 本步直调了 `send_message`，且每次调用的结果都是 `ok: true`、没有任何一次带 `continue: true` → 本步没有别的工具调用时停；有则续。
+- 本步调用过其他工具（含 `code_mode`）→ 续。
+- 其余交 core 缺省：有工具调用即续，`maxSteps` 兜底。
+
+两处细节值得记下：同一批里只要有一次 `send_message` 返回 `ok: false`（含发送中途失败），判为未完成、继续走，把失败交给模型决定重试还是改口；嵌套调用（程序里调的 `send_message`）结果不落 step messages，所以程序内的发言不结束轮次——这是刻意的，程序是编排者，轮次留给模型读它的返回值。
+
+工具名在这条判定里是字面量：`finish` 与 `send_message` 是内核机制的一部分（唯一通道与显式收尾），不由工具注册决定，与 `classic` 协议里空 `actions` 即结束同源。
+
+## 代码模式不在工具调用族里
+
+代码模式与上面那六个变体是**两个维度**：`toolcall` 说的是模型的输出怎么读成工具调用（用哪种协议），代码模式说的是工具面长什么样（模型直接调，还是写程序调）。两者正交，所以代码模式不进注册表，它是一块与 `innerThoughts` 平级的顶层配置（`src/tools/codemode.ts`，装配点在 `runtime.ts` 的 `ensure()`）。
+
+机制：模型那一侧只剩一个工具 `code_mode`，参数是一段程序；程序在 QuickJS 沙箱里跑，经 SDK 绑定的 `tools.*` 调宿主工具。宿主工具在模型目录里被摘掉，模型的工具描述里换成从 schema 生成的 TS 签名。省下的是上下文而不是时间——工具返回的中间数据进的是沙箱变量，只有 `return` 出去的那一份回模型。
+
+分区由「谁能调谁」一张表决定，语义由 SDK 定：
+
+- 表里点名的工具从模型目录消失，只从沙箱可达；
+- 表里没点名的工具留在模型目录，沙箱也够不着——所以「只直调」不必写进表；
+- 同时写 `code_mode` 与直调标记的工具两处都可达。
+
+`send_message` 走第三条：两处都可达。停轮判定读本步的消息流，只认模型直调的那次调用——嵌套调用的结果不落 step messages，程序里说了话也不结束轮次，模型下一步拿到程序 `return` 的值再决定收尾。两头都要：直调发言省一层程序，程序里也要能说话。于是表里同时写两个 caller。`finish` 与 `direct` 追加的纯直调工具只留在目录：收尾是模型直调的专属动作，程序里的收尾不该结束轮次。
+
+三条边界（库的既定行为，不是本插件的选择）：
+
+- 沙箱内拿不到 `process`、`require`、文件系统、`fetch`、WebCrypto，`eval` 也没有；宿主工具本身跑在沙箱外面，授权与校验仍要在每个工具里自己做。
+- 工具审批不集成：沙箱内的调用没法暂停生成去弹审批框，被误收进沙箱的审批类工具会被拒绝而非执行。
+- 程序返回时还有未 await 的调用在飞 = 整次调用失败；返回值必须 JSON 可序列化。
+
+嵌套调用是普通的工具调用：core 的 runTool 包装在 caller 工具与它绑定的宿主工具上各套一层，于是内层的 `tool.start` / `tool.done` 事件与 `beforeToolCall` / `afterToolCall` 钩子照常发生，日志与 hook 都不失明。core 侧的这两处改动见 `@yesimagent` 的 `AgentConfig.toolCallers`（转发给 AI SDK 时改名为 `experimental_toolCallers`）。
 
 ## 降级与重试
 

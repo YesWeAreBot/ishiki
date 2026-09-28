@@ -243,10 +243,12 @@ describe("cross 聚合：claims 的频道共用一块视窗", () => {
     expect(file).toContain("group:7");
   });
 
-  it("claims 里的全部频道共用 preset 造的那一个唤醒引擎", () => {
+  it("claims 里的全部频道共用同一块视窗与同一个唤醒引擎实例", () => {
     built = 0;
     const shared = rig(crossSpecs({ "onebot:1": { whitelist: ["group:*", "private:9"] } }, { engine: "counting" } as never));
-    // 两个 sid claim、三个频道：引擎在 preset 层造一次，认领再多也只造这一次
+    // 引擎随首个实例诞生，装配期不预建
+    expect(built).toBe(0);
+    expect(shared.runtime.route(message("group:2", "a"))).toBeDefined();
     expect(built).toBe(1);
     expect(shared.runtime.route(message("group:2", "a"))).toBe(shared.runtime.route(message("group:7", "b")));
     expect(built).toBe(1);
@@ -436,8 +438,8 @@ describe("非 cross 零收缩", () => {
   });
 });
 
-describe("引擎按 preset 共享", () => {
-  it("同一 preset 下的兄弟 scene 共用那一个唤醒引擎", async () => {
+describe("引擎随生效单位独立", () => {
+  it("同一 preset 下的兄弟 scene 是两个实例，唤醒引擎各自一份", async () => {
     built = 0;
     const resolved = resolveProfile(
       ProfileConfig({
@@ -462,9 +464,9 @@ describe("引擎按 preset 共享", () => {
     const rigged = rig(resolved);
     const room = rigged.runtime.route(message("group:2", "a"));
     const dm = rigged.runtime.route(message("private:9", "c"));
-    // 两个 scene 是两个生效单位、两个 agent；唤醒引擎仍是 preset 层造的那一个，不按 scene 复制
+    // 两个 scene 是两个生效单位、两个 agent；引擎随实例各造一份，跨实例状态走 shared 池
     expect(room).not.toBe(dm);
-    expect(built).toBe(1);
+    expect(built).toBe(2);
 
     await teardown(rigged);
   });

@@ -1,5 +1,4 @@
-import type { ToolResultPart } from "@ai-sdk/provider-utils";
-import type { LanguageModelV4Content, LanguageModelV4FunctionTool, LanguageModelV4StreamPart, LanguageModelV4ToolCall } from "@yesimagent/core";
+import type { LanguageModelV4Content, LanguageModelV4FunctionTool, LanguageModelV4StreamPart, LanguageModelV4ToolCall, ToolResultPart } from "@yesimagent/core";
 
 import { ToolcallEngine, registerToolcallEngine } from "./engine.js";
 import { JsonParser } from "./json-parser.js";

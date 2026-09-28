@@ -24,9 +24,9 @@
   },
   "dependencies": {
     "@ai-sdk-tool/parser": "5.1.6",
-    "@ai-sdk/provider-utils": "5.0.39",
+    "@ai-sdk/code-mode": "1.0.54",
     "@huggingface/jinja": "^0.5.10",
-    "@yesimagent/core": "0.0.4",
+    "@yesimagent/core": "link:@yesimagent/core",
     "@yesimagent/gateway": "0.0.4",
     "jsonrepair": "^3.12.0",
     "yaml": "^2.9.0"

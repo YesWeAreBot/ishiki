@@ -112,7 +112,7 @@ function stubAgent(stored: readonly AgentEntry[] = []) {
 /** 一个挂到打桩 agent 上的引擎。 */
 function attached(config: JevParams = {}, stored: readonly AgentEntry[] = []) {
   const stub = stubAgent(stored);
-  const engine = new JevWakeupEngine({ apiKey: "k", ...config }, { logger });
+  const engine = new JevWakeupEngine({ apiKey: "k", ...config }, { logger, shared: new Map() });
   const dispose = engine.attach(stub.agent);
   return { engine, dispose, ...stub };
 }
@@ -274,7 +274,7 @@ describe("jev wakeup: 窗口", () => {
       },
       id: "broken",
     } as unknown as Agent;
-    const engine = new JevWakeupEngine({ apiKey: "k" }, { logger });
+    const engine = new JevWakeupEngine({ apiKey: "k" }, { logger, shared: new Map() });
     engine.attach(broken);
 
     expect(await engine.decide(message())).toBe("trigger");
@@ -500,7 +500,7 @@ describe("jev wakeup: 决策日志", () => {
     const now = Date.now();
     const stored = [createEntry("message", message({ content: "下午的会定了吗", timestamp: now - 1_000 }), { timestamp: now - 1_000 })];
     const stub = stubAgent(stored);
-    const engine = new JevWakeupEngine({ apiKey: "k" }, { logger });
+    const engine = new JevWakeupEngine({ apiKey: "k" }, { logger, shared: new Map() });
 
     const dispose = engine.attach(stub.agent);
     expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[stub\] attached$/));
@@ -562,7 +562,7 @@ describe("jev wakeup: 接进场景", () => {
       doStream: async () => ({ stream: simulateReadableStream({ chunks: steps.shift() ?? textStep("嗯") }) }),
     });
 
-    const wakeup = new JevWakeupEngine({ apiKey: "k" }, { logger });
+    const wakeup = new JevWakeupEngine({ apiKey: "k" }, { logger, shared: new Map() });
     // 自定义消息要有人投影成模型消息，否则一轮的 prompt 是空的。
     const context = new StandardContextEngine({ logger }, { maxChars: 10_000 });
     const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-jev-"));
@@ -575,7 +575,6 @@ describe("jev wakeup: 接进场景", () => {
         model,
         instructions: "",
         context,
-        control: undefined,
         tools: {
           send_message: createSendMessage({
             ctx,
@@ -583,7 +582,6 @@ describe("jev wakeup: 接进场景", () => {
             sid: "onebot:1",
             channelId: "room",
             typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
-            onEndTurn: () => undefined,
           }),
         },
         wakeup,

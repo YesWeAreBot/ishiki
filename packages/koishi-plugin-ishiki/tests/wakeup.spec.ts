@@ -217,7 +217,7 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
         model,
         instructions: "",
         context,
-        control: undefined,
+
         tools: {},
         wakeup,
         logger,

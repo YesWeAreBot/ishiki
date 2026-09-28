@@ -262,7 +262,7 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
   /** 装载历史的进行中：`decide` 等它落地，免得重启后第一条判定看不见前情。 */
   private readonly seeding = new Set<Promise<void>>();
 
-  constructor(config: Partial<JevWakeupConfig> = {}, deps: WakeupEngineDeps = {}) {
+  constructor(config: Partial<JevWakeupConfig> = {}, deps: WakeupEngineDeps = { shared: new Map() }) {
     super("jev", normalize(config));
     this.logger = deps.logger;
     this.rules = new StandardWakeupEngine(this.config.rules);

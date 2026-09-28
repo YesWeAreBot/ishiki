@@ -49,6 +49,11 @@ function message(id: string): AgentMessage {
   });
 }
 
+/** 断言用：一条消息的文本。非 user 消息（自定义消息没有 content）读不出文本。 */
+function userText(entry: AgentMessage): string {
+  return entry.role === "user" ? String(entry.content) : "";
+}
+
 /** One streamed text answer, the shape the SDK's mock model expects. */
 function textStep(text: string): LanguageModelV4StreamPart[] {
   return [
@@ -84,8 +89,8 @@ describe("collapse", () => {
 
     expect(collapsed).toHaveLength(3);
     expect(collapsed[0].role).toBe("user");
-    expect(String(collapsed[0].content)).toContain("m-a");
-    expect(String(collapsed[0].content)).toContain("m-b");
+    expect(userText(collapsed[0]!)).toContain("m-a");
+    expect(userText(collapsed[0]!)).toContain("m-b");
     expect(collapsed[1].role).toBe("tool");
     expect(collapsed[2].role).toBe("user");
   });
@@ -243,7 +248,7 @@ describe("standard context engine", () => {
 
     // 第二次装配：水位生效，记忆开在最前，且不再压缩
     const again = await engine.transformEntries([...(await storage.read())]);
-    expect(String(again[0].type === "message" ? again[0].data.content : "")).toContain("记住：她在准备搬家");
+    expect(again[0].type === "message" ? userText(again[0].data) : "").toContain("记住：她在准备搬家");
     expect(again.filter((item) => item.type === "message" && item.id.startsWith("e-")).map((item) => item.id)).toEqual(kept);
 
     engine.onTurnFinish();

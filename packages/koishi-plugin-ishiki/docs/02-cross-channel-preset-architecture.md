@@ -32,7 +32,7 @@
 
 - 配置统一为 preset 树：preset 下要么有 `scenes`（普通形态，每个 scene 是独立生效单位，可就地扩展 preset 基线），要么 `cross: true`（cross 形态，preset 本身是生效单位，`claims` 按 sid 认领频道：`claims: { "<sid>": { whitelist, blacklist } }`）。两者互斥，装载期校验。
 - cross preset 的配置只有 preset 层生效：`claims` 之外的全部运行参数（model / context / wakeup / toolcall / typing / extends）内联在 preset 块内，无 scene 层扩展权。被此 preset 认领的频道不再为每个 `channelId` 单独创建实例，而是以该 Preset 的名字为聚合键，在 Profile 级别实例化唯一的共享 `AgentRuntime`。
-- `context` 与 `wakeup` 只在 preset 上写，不在 scene 上扩展：两者都带账（压缩水位、各频道的冷却），挂到 scene 上只会造出几份互不相干的账。唤醒引擎一 preset 一份，普通 preset 下的多个 scene 共用它正是所需行为——「刚在群里说过话」能被同 preset 的另一个频道看见。上下文引擎则是一生效单位一份：cross 形态整个 preset 只有一块视窗、一个 agent，而普通 scene 本就一频道一引擎。
+- 引擎实例随 `AgentRuntime` 诞生与销毁，一个实例一套；配置走三层合并，scene 可就地覆盖。cross preset 没有 scene 层，引擎配置只能写在 preset 上——这是树形状决定的。唤醒引擎需要跨实例感知时经 `WakeupEngineDeps.shared`（profile 级状态池）自管读写，不共享实例。
 - 物理存储落盘至共享路径：`data/ishiki/profiles/<profile>/scenes/cross_<presetName>/events.jsonl`。
 - 选择树形结构而非布尔字段的理由：布尔字段（`cross-channel: true` 打在 preset 上）使聚合关系隐式——哪些 scene 合流要按引用关系全文拼图，且给已有多 scene 引用的 preset 加 cross 会立即合流全部引用者，副作用范围不由声明处决定。树形结构下归属由结构显式声明（scenes 挂在谁身上、claims 写在谁身上），合流范围 = 声明处所见；`cross` 开关只影响叶子层语义。
 

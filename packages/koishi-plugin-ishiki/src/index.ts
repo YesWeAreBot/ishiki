@@ -11,6 +11,7 @@ import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import * as toolcallEngines from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
+import { loadCodemode } from "./tools/codemode.js";
 import * as wakeupEngines from "./wakeup/index.js";
 
 class Ishiki extends Service<Ishiki.Config> {
@@ -59,11 +60,13 @@ class Ishiki extends Service<Ishiki.Config> {
       return;
     }
 
-    // 协议引擎要它；在装载任何 profile 之前备好，免得装配场景时才发现。装载完成前本服务不接事件。
+    // 协议引擎与代码模式要这两个 ESM 库；在装载任何 profile 之前备好，免得装配场景时才发现。
+    // 装载完成前本服务不接事件。
     try {
       await loadParser();
+      await loadCodemode();
     } catch (error) {
-      this.logger.error(`toolcall parser unavailable, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.error(`toolcall runtime unavailable, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
 

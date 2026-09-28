@@ -22,6 +22,11 @@ export type WakeupDecision = "trigger" | "wait";
  */
 export interface WakeupEngineDeps {
   logger?: Logger;
+  /**
+   * profile 级共享状态池：需要跨实例感知的引擎（如全局限频）从这里取自己的键。
+   * 池随 ProfileRuntime 诞生与销毁，宿主兜底生命周期；不需要跨实例的引擎不碰它。
+   */
+  shared: Map<string, unknown>;
 }
 
 export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupEngines> {
@@ -47,7 +52,7 @@ export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupE
    * 视窗内见过哪些频道，引擎从事件里读，跨频道聚合与单频道因此走同一份代码。
    *
    * 返回拆卸函数：调用点在场景停止时调它，取消订阅并丢掉这次挂载攒下的账。
-   * 一个引擎实例按 spec 共享，可能被多个 agent 先后挂上来；每次挂载各自独立，拆卸只拆自己那次。
+   * 引擎实例随 agent 诞生，只挂载这一个 agent：账本与实例同生共死，跨实例状态走 deps.shared。
    */
   attach?(agent: Agent): () => void;
 }
@@ -78,7 +83,7 @@ export function registerWakeupEngine<K extends keyof WakeupEngines>(
 }
 
 /** 按配置建出引擎：参数取与引擎名同名的那个键，未写则空。未登记的名字抛错，不静默退化。 */
-export function createWakeupEngine(config: { engine: string; [k: string]: unknown }, deps: WakeupEngineDeps = {}): WakeupEngine {
+export function createWakeupEngine(config: { engine: string; [k: string]: unknown }, deps: WakeupEngineDeps = { shared: new Map() }): WakeupEngine {
   const create = wakeupEngines[config.engine];
   if (create === undefined) {
     throw new Error(`unknown wakeup engine "${config.engine}", available: ${Object.keys(wakeupEngines).join(", ")}`);

@@ -69,35 +69,17 @@ describe("send_message", () => {
     },
   };
   const ctx = { bots } as unknown as Context;
-  const build = (onEndTurn: () => void = () => undefined, typing = instant) =>
-    createSendMessage({ ctx, logger, sid: "onebot:1", channelId: "group:2", typing, onEndTurn });
+  const build = (typing = instant) => createSendMessage({ ctx, logger, sid: "onebot:1", channelId: "group:2", typing });
 
-  it("sends each message as its own platform message and ends the turn by default", async () => {
+  it("sends each message as its own platform message", async () => {
     sent.length = 0;
-    let ended = 0;
-    const result = await run(
-      build(() => (ended += 1)),
-      { messages: ["早", "在干嘛"] },
-    );
+    const result = await run(build(), { messages: ["早", "在干嘛"] });
 
     expect(result).toEqual({ ok: true, count: 2 });
     expect(sent).toEqual([
       { channelId: "group:2", content: "早" },
       { channelId: "group:2", content: "在干嘛" },
     ]);
-    expect(ended).toBe(1);
-  });
-
-  it("keeps the turn alive when continue is true", async () => {
-    sent.length = 0;
-    let ended = 0;
-    const result = await run(
-      build(() => (ended += 1)),
-      { messages: ["先看一眼"], continue: true },
-    );
-
-    expect(result).toEqual({ ok: true, count: 1 });
-    expect(ended).toBe(0);
   });
 
   it("escapes the text in raw mode so markup arrives as literal characters", async () => {
@@ -110,7 +92,6 @@ describe("send_message", () => {
 
   it("stops at the failing message and reports what already left", async () => {
     sent.length = 0;
-    let ended = 0;
     bots["onebot:2"] = {
       platform: "onebot",
       selfId: "2",
@@ -118,21 +99,17 @@ describe("send_message", () => {
         throw Object.assign(new Error("blocked"), { name: "BotOffline" });
       },
     };
-    const tool = createSendMessage({ ctx, logger, sid: "onebot:2", channelId: "group:2", typing: instant, onEndTurn: () => (ended += 1) });
+    const tool = createSendMessage({ ctx, logger, sid: "onebot:2", channelId: "group:2", typing: instant });
     const result = await run(tool, { messages: ["第一句"] });
 
     expect(result).toEqual({ ok: false, sent: [], failedAt: 0, error: { name: "BotOffline", message: "blocked" } });
-    // 没发出去就不算「说完了」：轮次留着，模型可以换个说法再来
-    expect(ended).toBe(0);
   });
 
   it("reports an unconnected account and rejects empty input", async () => {
-    let ended = 0;
-    const tool = createSendMessage({ ctx, logger, sid: "onebot:9", channelId: "group:2", typing: instant, onEndTurn: () => (ended += 1) });
+    const tool = createSendMessage({ ctx, logger, sid: "onebot:9", channelId: "group:2", typing: instant });
 
     expect(await run(tool, { messages: ["在吗"] })).toMatchObject({ ok: false, error: { name: "BotNotFound" } });
     expect(await run(tool, { messages: [] })).toMatchObject({ ok: false, error: { name: "InvalidInput" } });
-    expect(ended).toBe(0);
   });
 
   it("waits out the typing rhythm before each bubble", async () => {
@@ -140,7 +117,7 @@ describe("send_message", () => {
     vi.useFakeTimers();
     try {
       // charPerSecond 归零：延迟就是固定的 minDelay（同时也是 maxDelay）。
-      const pending = run(build(undefined, { baseDelay: 0, charPerSecond: 0, minDelay: 250, maxDelay: 250 }), { messages: ["早", "在的"] });
+      const pending = run(build({ baseDelay: 0, charPerSecond: 0, minDelay: 250, maxDelay: 250 }), { messages: ["早", "在的"] });
 
       await vi.advanceTimersByTimeAsync(200);
       expect(sent).toHaveLength(0); // 还在"打字"
@@ -158,12 +135,10 @@ describe("send_message", () => {
 });
 
 describe("finish", () => {
-  it("asks the container to stop the turn", async () => {
-    let stopped = 0;
-    const result = await run(createFinish({ onStop: () => (stopped += 1) }), { reason: "没什么好说的" });
+  it("acknowledges the request", async () => {
+    const result = await run(createFinish(), { reason: "没什么好说的" });
 
     expect(result).toEqual({ ok: true });
-    expect(stopped).toBe(1);
   });
 });
 
@@ -187,6 +162,11 @@ describe("tools through a real agent", () => {
   let steps: LanguageModelV4StreamPart[][];
   let prompts: string[];
   const platform = { sent: [] as Array<{ channelId: string; content: string }>, streams: 0 };
+  /** 每次赋值覆盖发送行为：缺省成功，用例里换成抛错来模拟平台失败。 */
+  let deliverMessage: (channelId: string, content: string) => Promise<string[]> = async (channelId, content) => {
+    platform.sent.push({ channelId, content });
+    return [`id-${platform.sent.length}`];
+  };
 
   const config = ProfileConfig({
     id: "neko",
@@ -223,10 +203,8 @@ describe("tools through a real agent", () => {
         "onebot:1": {
           platform: "onebot",
           selfId: "1",
-          sendMessage: async (channelId: string, content: string) => {
-            platform.sent.push({ channelId, content });
-            return [`id-${platform.sent.length}`];
-          },
+          // 解引用而不是取值：用例可以在运行中换掉发送行为来模拟平台失败。
+          sendMessage: (channelId: string, content: string) => deliverMessage(channelId, content),
         },
       },
     } as unknown as Context;
@@ -266,12 +244,26 @@ describe("tools through a real agent", () => {
     expect(platform.streams).toBe(1);
   });
 
+  it("keeps the turn alive when send_message asks to continue", async () => {
+    platform.sent.length = 0;
+    platform.streams = 0;
+    // 发了话但话没说完：continue 让这一批不作数，下一步才收尾。
+    steps = [toolStep("send_message", { messages: ["先看一眼"], continue: true }), toolStep("finish", { reason: "看完了" }), textStep("这一步不该被走到")];
+
+    const scene = runtime.route(direct("f"))!;
+    await scene.deliver(direct("f"));
+    await scene.idle();
+
+    expect(platform.sent.map((entry) => entry.content)).toEqual(["先看一眼"]);
+    expect(platform.streams).toBe(2);
+  });
+
   it("keeps the turn alive when the batch carries tools besides speaking", async () => {
     platform.sent.length = 0;
     platform.streams = 0;
-    // 同一批里既说了话又要查资料：这一批不停，等下一批（没有别的工具了）才收尾
+    // 同一批里既说了话又调了别的工具：这一批不停，等下一批只发言时才收尾
     steps = [
-      toolBatch(["send_message", { messages: ["我看看"] }], ["peek_channel_history", { channelId: "group:2", limit: 3 }]),
+      toolBatch(["send_message", { messages: ["我看看"] }], ["lookup", { keyword: "喵" }]),
       toolStep("send_message", { messages: ["看完了"] }),
       textStep("这一步不该被走到"),
     ];
@@ -282,5 +274,28 @@ describe("tools through a real agent", () => {
 
     expect(platform.sent.map((entry) => entry.content)).toEqual(["我看看", "看完了"]);
     expect(platform.streams).toBe(2);
+  });
+
+  it("keeps the turn alive when a partial batch send fails", async () => {
+    platform.sent.length = 0;
+    platform.streams = 0;
+    // 第一条成功、第二条抛错：轮次留着，让模型看到 ok:false 再决定重试。
+    const original = deliverMessage;
+    deliverMessage = async (channelId, content) => {
+      if (content === "第二条") throw Object.assign(new Error("blocked"), { name: "BotOffline" });
+      return original(channelId, content);
+    };
+    steps = [toolStep("send_message", { messages: ["第一条", "第二条"] }), toolStep("finish", { reason: "重试过了" }), textStep("这一步不该被走到")];
+
+    try {
+      const scene = runtime.route(direct("e"))!;
+      await scene.deliver(direct("e"));
+      await scene.idle();
+
+      expect(platform.sent.map((entry) => entry.content)).toEqual(["第一条"]);
+      expect(platform.streams).toBe(2);
+    } finally {
+      deliverMessage = original;
+    }
   });
 });

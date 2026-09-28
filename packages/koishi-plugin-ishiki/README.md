@@ -14,7 +14,7 @@
 npm i koishi-plugin-ishiki
 ```
 
-需要 `koishi ^4.18.11`。运行时依赖 `@yesimagent/core`（agent 循环与存储）、`@yesimagent/gateway`（模型解析与降级）、`@ai-sdk-tool/parser`（纯文本工具调用协议），随本包一起安装。
+需要 `koishi ^4.18.11`。运行时依赖 `@yesimagent/core`（agent 循环与存储）、`@yesimagent/gateway`（模型解析与降级）、`@ai-sdk-tool/parser`（纯文本工具调用协议）、`@ai-sdk/code-mode`（代码模式的沙箱），随本包一起安装。代码模式用到 core 的 `AgentConfig.toolCallers`（转发给 AI SDK 时改名 `experimental_toolCallers`），需要一个带该配置的 `@yesimagent/core`。
 
 ## 数据目录
 
@@ -78,7 +78,7 @@ scenes:
 ## 启动行为
 
 - `profiles/` 不存在：只记一条告警，不装载任何心智。
-- 工具调用解析库装载失败：一个 profile 都不装载，服务继续存在但不接事件。
+- 工具调用解析库或代码模式库装载失败：一个 profile 都不装载，服务继续存在但不接事件。
 - 单个 profile 目录读不动、引用不存在的 preset、缺 `sid`：只跳过它自己，其余照常装载。
 - 账号自己的平台消息（`userId === selfId`）在入口丢弃，不进入任何事实流。
 - 场景实例在首次有事件落到它头上时创建，进程退出时统一停止。

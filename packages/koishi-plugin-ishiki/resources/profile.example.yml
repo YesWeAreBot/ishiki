@@ -34,6 +34,16 @@ presets:
       # 其余按输出协议名取，由解析引擎从纯文本输出里提取调用，不需要模型原生支持 function call：
       # classic（v3 的 JSON OUTPUT，每步必带 thoughts 三段）/ hermes / qwen3coder / morph-xml / yaml-xml
       engine: native
+    # 代码模式：模型改写一段程序，程序在沙箱里调工具，中间数据不出上下文。
+    # 与 toolcall 正交——toolcall 管输出协议，这里管工具面。默认关闭。
+    codemode:
+      enable: false
+      # 哪些工具能被谁调。没写进 direct 的工具收进沙箱、从模型目录里消失，
+      # 只有程序调得到；写进 direct 的工具只留模型目录，程序够不着它。
+      # send_message 固定两处都可达（直调发言省一层程序，程序里也要能说话），
+      # finish 固定只留目录（收尾由模型直调发起，程序里的收尾不该结束轮次）。
+      direct: []
+      timeoutMs: 30000 # 单次沙箱执行的总时限（毫秒）
     # 发消息前等多久，模拟打字
     typing:
       baseDelay: 500
@@ -178,7 +188,8 @@ presets:
           keywords: []
 
     scenes:
-      # 引擎在 preset 层造一次，各 scene 只引用，因此冷却账本是全 preset 共用的一本。
+      # 引擎配置在 scene 层可就地覆盖（context / wakeup / toolcall），未写的键沿用 preset；
+      # 变体准入仍受本 preset 的 extends 约束。引擎实例随每个频道实例各造一份。
       groups:
         sid: onebot:10000
         whitelist: ["group:*"]

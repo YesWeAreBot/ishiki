@@ -1,10 +1,8 @@
 import { jsonSchema, tool, Tool } from "@yesimagent/core";
 
 export namespace FinishTool {
-  export interface Options {
-    /** Ends the turn without speaking. */
-    onStop: () => void;
-  }
+  /** 无参数：本工具的语义全在消息流里，停轮判定由 onStepFinish 读 tool-call 位完成。 */
+  export type Options = Record<string, never>;
   export interface Input {
     reason?: string;
   }
@@ -13,7 +11,7 @@ export namespace FinishTool {
   }
 }
 
-export function createFinish(options: FinishTool.Options): Tool<FinishTool.Input, FinishTool.Output> {
+export function createFinish(): Tool<FinishTool.Input, FinishTool.Output> {
   return tool({
     description: "结束本轮而不发言。看过消息但决定不回复时用它。",
     inputSchema: jsonSchema<FinishTool.Input>({
@@ -24,7 +22,6 @@ export function createFinish(options: FinishTool.Options): Tool<FinishTool.Input
       required: [],
     }),
     execute: async () => {
-      options.onStop();
       return { ok: true as const };
     },
   });

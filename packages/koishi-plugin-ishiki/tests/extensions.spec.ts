@@ -8,7 +8,7 @@ import { Context, Service, sleep, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createContextEngine, registerContextEngine } from "../src/context/index.js";
-import Ishiki, { ContextEngine } from "../src/index.js";
+import Ishiki, { ContextEngine, type ContextEngines } from "../src/index.js";
 import { activateProfiles, loadProfiles, type ProfileRuntime } from "../src/runtime.js";
 
 /** 变体参数表：社区包用 `declare module` 增强，名字带包前缀。 */
@@ -22,9 +22,9 @@ declare module "../src/index.js" {
 /** 变体被实例化的痕迹：装配确实走到了社区包提供的实现。 */
 const built = { engines: 0 };
 
-class RollingEngine extends ContextEngine<"neko-tools/rolling"> {
-  constructor(config: { maxChars?: number }) {
-    super("neko-tools/rolling", config);
+class RollingEngine<K extends keyof ContextEngines> extends ContextEngine<K> {
+  constructor(name: K, config: ContextEngines[K]) {
+    super(name, config);
     built.engines += 1;
   }
 
@@ -44,7 +44,7 @@ function extensionPackage() {
         }
       }
       new NekoTools(ctx);
-      ctx.ishiki.registerContextEngine("neko-tools/rolling", (config) => new RollingEngine(config));
+      ctx.ishiki.registerContextEngine("neko-tools/rolling", (config) => new RollingEngine("neko-tools/rolling", config));
     },
     { inject: ["ishiki"] },
   );
@@ -136,7 +136,10 @@ describe("社区扩展：注册面与 fiber 化的 profile", () => {
     const pkg = root.plugin(extensionPackage());
     await sleep(20);
     expect(profiles.map((profile) => profile.id)).toEqual(["neko"]);
-    // 实例化走到了 preset 选中的那个变体
+    // 变体登记着、包也选中了：引擎随首个实例诞生，装配期不预建
+    expect(built.engines).toBe(0);
+    const first = profiles[0]!.route(message("private:7", "hi"));
+    expect(first).toBeDefined();
     expect(built.engines).toBe(1);
 
     // 包停用：fiber 复位，profile 停止并移出；包回来再重建
@@ -147,6 +150,8 @@ describe("社区扩展：注册面与 fiber 化的 profile", () => {
     const again = root.plugin(extensionPackage());
     await sleep(20);
     expect(profiles.map((profile) => profile.id)).toEqual(["neko"]);
+    // fiber 重建后引擎重新随实例诞生：路由一次，计到 2
+    expect(profiles[0]!.route(message("private:7", "hi"))).toBeDefined();
     expect(built.engines).toBe(2);
 
     await profiles[0]?.stop();
@@ -159,18 +164,14 @@ describe("社区扩展：注册面与 fiber 化的 profile", () => {
     writeProfile(stray, "stray", "stray", false);
 
     logs.length = 0;
-    const pkg = root.plugin(extensionPackage());
-    await sleep(20);
     const profiles: ProfileRuntime[] = [];
     activateProfiles(loadProfiles(stray, logger), profiles, { ctx: root, gateway, logger });
     await sleep(20);
 
-    // 变体登记着，但它所属的包没进 extends：装载期报出，spec 跳过自己，profile 照常在场
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]!.specs).toHaveLength(0);
+    // 准入在展开期拦截：整个 profile 装载失败，其余照常装载的原则由 loadProfiles 的 try 保证
+    expect(profiles).toHaveLength(0);
     expect(logs.some((line) => line.includes("not listed in"))).toBe(true);
 
-    pkg.dispose();
     rmSync(stray, { recursive: true, force: true });
   });
 
@@ -234,14 +235,14 @@ describe("社区扩展：注册面与 fiber 化的 profile", () => {
 
   it("注册动词直接返回撤销函数：调用后名字不再可用，重名抛错", () => {
     const options = { logger };
-    const dispose = registerContextEngine("probe/rolling", (config) => new RollingEngine(config));
+    const dispose = registerContextEngine("probe/rolling", (config) => new RollingEngine("probe/rolling", config));
     expect(() => createContextEngine({ engine: "probe/rolling" }, options)).not.toThrow();
 
     dispose();
     expect(() => createContextEngine({ engine: "probe/rolling" }, options)).toThrow(/unknown context engine/);
 
-    const again = registerContextEngine("probe/rolling", (config) => new RollingEngine(config));
-    expect(() => registerContextEngine("probe/rolling", (config) => new RollingEngine(config))).toThrow(/already registered/);
+    const again = registerContextEngine("probe/rolling", (config) => new RollingEngine("probe/rolling", config));
+    expect(() => registerContextEngine("probe/rolling", (config) => new RollingEngine("probe/rolling", config))).toThrow(/already registered/);
     again();
   });
 });

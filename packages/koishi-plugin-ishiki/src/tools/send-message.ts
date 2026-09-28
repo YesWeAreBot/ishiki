@@ -10,12 +10,11 @@ export namespace SendMessageTool {
     sid: string;
     channelId: string;
     typing: TypingConfig;
-    onEndTurn: () => void;
     /**
-     * 聚合形态的可达频道集合与坐标解析：跨频道视窗没有单值「当前位置」，
-     * 目标由模型显式给。缺省即单频道形态——坐标唯一，模型看不到也不必给 target。
+     * 多频道视窗的坐标解析：跨频道没有单值「当前位置」，目标由模型显式给。
+     * 缺省即单频道形态——坐标唯一，模型看不到也不必给 target。
      */
-    routing?: TargetRouting;
+    routing?: MultiChannelRouting;
   }
   export interface Input {
     messages: string[];
@@ -27,8 +26,12 @@ export namespace SendMessageTool {
   export type Output = { ok: true; count: number } | { ok: false; error: { name: string; message: string }; sent: string[]; failedAt: number };
 }
 
-/** 聚合形态的出站寻址：可达频道清单与坐标解析。 */
-export interface TargetRouting {
+/**
+ * 多频道视窗的出站寻址：可达频道清单与坐标解析。
+ * 只在装配点内部构造，扩展作者不接触——Schema 派生与校验都由 {@link createSendMessage} 按
+ * 该参数的存在与否完成。
+ */
+interface MultiChannelRouting {
   /**
    * 本生效单位 claims 认领的频道，写成 `sid/白名单模式` 逐行列出（模式可能带通配，展开不了）。
    * 报错信息与系统提示里的地址簿都取它：模型据此知道能往哪儿发，内核据此说它没往哪儿发。
@@ -146,7 +149,6 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
         }
       }
 
-      if (input.continue !== true) options.onEndTurn();
       return { ok: true as const, count: sent.length };
     },
   });

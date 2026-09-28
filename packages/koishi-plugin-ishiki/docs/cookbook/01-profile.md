@@ -46,6 +46,10 @@ presets:
     toolcall:
       engine: native
     innerThoughts: false
+    codemode:
+      enable: false
+      direct: []
+      timeoutMs: 30000
     typing:
       baseDelay: 500
       charPerSecond: 5
@@ -66,28 +70,27 @@ scenes:
 ```
 
 - **Preset**：`model` 必填；`context` 与 `wakeup` 在类型上必填，运行期缺失时由内置缺省补成 `standard`。引擎参数写在以引擎名命名的同级键下（`context.standard`），换引擎时旧引擎的参数会留在合并结果里，但消费端只读 `config[config.engine]`，读不到旧参数。
-- **Scene**：`sid` 与 `preset` 必填，`whitelist` / `blacklist` 是渠道模式；其余字段（`model`、`failover`、`toolcall`、`innerThoughts`、`typing`）是对 preset 的局部覆写。`context` 与 `wakeup` 不在这一层，理由见下。
+- **Scene**：`sid` 与 `preset` 必填，`whitelist` / `blacklist` 是渠道模式；其余字段（`model`、`failover`、`context`、`wakeup`、`toolcall`、`innerThoughts`、`codemode`、`typing`）是对 preset 的局部覆写，未写的键沿用 preset。
 
-## 引擎归 preset 层
+## 引擎配置随三层合并
 
-`context` 与 `wakeup` 只写在 preset 上：两者都带账——压缩水位、各频道的冷却——挂在 scene 上只会造出几份互不相干的账。
+`context` / `wakeup` / `toolcall` 全部走同一条三层合并（内置缺省 ← preset ← scene），没有字段例外：
 
-- 唤醒引擎一 preset 一份，该 preset 的全部频道共用——跨频道共享冷却账本正是「刚在群里说过话」能被另一个频道看见的原因。
-- 上下文引擎一生效单位一份：core 在建 agent 时就把插件 hook 的引用绑好，引擎自己又记着 agent 与在途压缩，跨 agent 共享会让一个频道的压缩去读另一个频道的存储。
-- 寻址头（每段事实行前的 `[#坐标]`）是 cross 形态的装配选项，形态本就是 preset 的属性，于是在造上下文引擎时就定下。
-
-因此展开结果有两份：`specs`（各生效单位的装配清单，不含引擎）与 `engines`（按 preset 名索引的引擎配置）。spec 只留一个 `preset` 键指回来。
+- 引擎实例随 `AgentRuntime` 诞生与销毁，一个实例一套：上下文引擎记着本实例的 agent 与压缩水位；唤醒引擎的账本只看本视窗的事实流；工具调用层在本实例的模型上就地包裹。跨实例感知（如全局发言限频）不是共享实例，而是唤醒引擎经 `WakeupEngineDeps.shared` 访问 profile 级状态池，池随 ProfileRuntime 生灭。
+- 配置在展开期整体落到 `SceneSpec` 上；引擎变体的准入校验（带包前缀的名字要求包在 preset 的 `extends` 里）也在展开期做。scene 覆写不能越过 preset 的 `extends`——准入是 preset 的承诺。
+- 寻址头（每段事实行前的 `[#坐标]`）与工具的 `target` 参数按可达频道数派生：一个可达频道就没有 target、没有寻址头；聚合视窗必填 target。
+- cross preset 没有 scene 层，引擎配置只能写在 preset 上——这是树形状决定的，不是规则强加。
 
 ## 三层合并
 
 运行参数按三层叠加：内置缺省 ← preset ← scene。
 
 - 普通对象逐键递归合并；数组与标量整体替换；`undefined` 与空缺的键都算「未写」，沿用前一层。
-- 内置缺省（`FALLBACK`）是配置面唯一的默认值来源：`toolcall.native`、`innerThoughts: false`、`failover` 为 500ms 退避 + `unavailable`、`typing` 为 500/5/800/4000。引擎另有 `ENGINE_FALLBACK`：`context.standard` 与 `wakeup.standard`。
+- 内置缺省（`FALLBACK`）是配置面唯一的默认值来源：`context.standard`、`wakeup.standard`、`toolcall.native`、`innerThoughts: false`、`codemode` 为 `enable: false` / `direct: []` / `timeoutMs: 30000`、`failover` 为 500ms 退避 + `unavailable`、`typing` 为 500/5/800/4000。
 - Schema 里一律不写默认值。补上的值与用户写的值在合并层形状相同，无从分辨，覆写语义会因此失效——preset 里写的引擎永远轮不到。
 - `sid` 与 `preset` 只用于定位，不参与合并。
 
-展开后的 spec 叫 **SceneSpec**：一份工厂的运行参数，由 profile 与 scene 名唯一标识。引擎不在里面——见上。
+展开后的 spec 叫 **SceneSpec**：一份工厂的运行参数，由 profile 与 scene 名唯一标识，引擎配置在内。
 
 ## 渠道认领
 

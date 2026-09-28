@@ -7,12 +7,13 @@ import {
   createJsonlStorage,
   type Agent,
   type AgentEvent,
+  type AgentMessage,
   type AgentPlugin,
   type AgentStorage,
+  type ToolContent,
   type LanguageModel,
   type LanguageModelUsage,
-  type StepFinishDecision,
-  type StepFinishInfo,
+  type ToolCallers,
   type ToolSet,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
@@ -23,17 +24,16 @@ import { createContextEngine, type ContextEngine } from "./context/index.js";
 import { FailoverModel } from "./failover.js";
 import {
   claimsChannel,
-  isSelected,
   matchSceneSpec,
   matchesChannel,
   ProfileConfig,
   resolveProfile,
   sceneDirectoryName,
-  type PresetEngineConfig,
   type ResolvedProfile,
   type SceneSpec,
 } from "./profile.js";
-import { createToolcallEngine, type ToolcallEngine } from "./toolcall/index.js";
+import { createToolcallEngine } from "./toolcall/index.js";
+import { assembleCodemode, CODE_MODE } from "./tools/codemode.js";
 import { createFinish } from "./tools/finish.js";
 import { withInnerThoughts } from "./tools/inner-thoughts.js";
 import { createSendMessage } from "./tools/send-message.js";
@@ -59,50 +59,6 @@ function resourcePath(...segments: string[]): string {
   return path.resolve(here, "..", "resources", ...segments);
 }
 
-/**
- * 一轮的收尾控制：工具只置标志，收尾在步边界决定。
- *
- * `finish` 直接请求结束。`send_message` 只在「没写 continue 且全部发出成功」时置请求
- * （判定在工具里，见 send-message），请求还要等本批没有再调用别的工具才生效——
- * 同一批里可能还有别的实义工具，它们的失败不该被静默地当成「说完了」。
- */
-class TurnControl implements AgentPlugin {
-  readonly name = "ishiki.turn-control";
-
-  private stopRequested = false;
-  private sendRequested = false;
-
-  private stopTools = new Set(["finish", "send_message"]);
-
-  requestStop(): void {
-    this.stopRequested = true;
-  }
-
-  requestSendStop(): void {
-    this.sendRequested = true;
-  }
-
-  /** core 会摘取这些 hook 单独调用，因此必须绑定在实例上（箭头属性）。 */
-  onStepFinish = (info: StepFinishInfo): StepFinishDecision | undefined => {
-    const blocking = info.result.messages.some(
-      (message) =>
-        message.role === "assistant" &&
-        Array.isArray(message.content) &&
-        // 取反：`stopTools` 里的都是「说了话/收尾」这类不打断收尾工具，本步只要碰了别的实义工具就不停。
-        message.content.some((part) => part.type === "tool-call" && !this.stopTools.has(part.toolName)),
-    );
-    const stop = this.stopRequested || (this.sendRequested && !blocking);
-    this.stopRequested = false;
-    this.sendRequested = false;
-    return stop ? { continue: false } : undefined;
-  };
-
-  onTurnFinish = (): void => {
-    this.stopRequested = false;
-    this.sendRequested = false;
-  };
-}
-
 /** 一个频道实例的完整运行配置：落址、目录，以及已就绪的构造件。 */
 export interface AgentRuntimeConfig {
   /** 实例标识，用于日志与 agent id。 */
@@ -115,10 +71,13 @@ export interface AgentRuntimeConfig {
   instructions: string;
   /** 上下文引擎：由所属生效单位造好后传进来，一个 agent 一份。 */
   context: ContextEngine;
-  /** 收尾控制：停轮的独占决策点，由容器装配。 */
-  control?: AgentPlugin;
   /** 该实例可用的工具集，由容器按 spec 与该频道装配。 */
   tools: ToolSet;
+  /**
+   * 哪些工具可以被谁调用，代码模式用：`{ search: ['code_mode'] }` 让沙箱里的程序能调 search，
+   * 而模型的工具目录里没有它。表里没点名的工具既留在目录也不进沙箱，所以直调不必写进来。
+   */
+  toolCallers?: ToolCallers;
   /** 唤醒引擎：按 preset 共享，同一 preset 下各频道的冷却账本是同一本。 */
   wakeup: WakeupEngine;
   logger: Logger;
@@ -146,13 +105,14 @@ function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
 }
 
 /**
- * core 侧的插件：上下文引擎与收尾控制在这一点收拢成 core 见的唯一入口。
+ * core 侧的插件：上下文引擎与停轮判定在这一点收拢成 core 见的唯一入口。
  *
- * 上下文引擎只声明自己干预管线上哪几段，钩子在这一点按固定顺序转发；`TurnControl` 的停轮是
- * 唯一决策点，保持内核独占，不对外开放。
+ * 上下文引擎只声明自己干预管线上哪几段，钩子在这一点按固定顺序转发；停轮判定读本步消息流，
+ * 不设跨步标志：嵌套调用（code mode 沙箱内）的结果不落 step messages，扫描天然看不见它们，
+ * 于是程序内说过的、做过的都不结束轮次，轮次的收尾只由直调产生。
  */
-export function createAgentPlugin(parts: { context: ContextEngine; control?: Pick<AgentPlugin, "onStepFinish" | "onTurnFinish"> }): AgentPlugin {
-  const { context, control } = parts;
+export function createAgentPlugin(parts: { context: ContextEngine }): AgentPlugin {
+  const { context } = parts;
   return {
     name: "ishiki",
     // 引擎要在 agent 上挂东西（订阅、压缩水位），收尾控制没有。
@@ -164,14 +124,65 @@ export function createAgentPlugin(parts: { context: ContextEngine; control?: Pic
     transformMessages: (messages, options) => context.transformMessages?.(messages, options) ?? messages,
     // 引擎给出的那一段提示词接在内核拼好的提示词之后。
     extendInstructions: () => context.extendInstructions?.(),
-    // 收尾回执：引擎先记账，收尾控制最后清标志。两者都要跑，缺一不可。
+    // 收尾回执：引擎记账。判定无跨步状态，无需清理。
     onTurnFinish: async (result) => {
       await context.onTurnFinish?.(result);
-      await control?.onTurnFinish?.(result);
     },
-    // 停轮：唯一决策点，归于收尾控制。
-    onStepFinish: (info) => control?.onStepFinish?.(info),
+    // 停轮：唯一决策点，读本步消息流。finish 出现即停；否则发言（send_message 直调且全部
+    // continue!==true 且结果全成功）且本步没有别的实义工具时停；其余交 core 默认。
+    onStepFinish: (info) => {
+      const calls = new Set<string>();
+      for (const message of info.result.messages) {
+        if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+        for (const part of message.content) {
+          if (part.type === "tool-call") calls.add(part.toolName);
+        }
+      }
+      const others = [...calls].some((name) => name !== FINISH_TOOL && name !== SEND_MESSAGE_TOOL);
+      if (calls.has(FINISH_TOOL) || (!others && calls.has(SEND_MESSAGE_TOOL) && spoke(info.result.messages))) {
+        return { continue: false };
+      }
+      return undefined;
+    },
   };
+}
+
+/** 收尾类工具名。停轮判定按名读消息流；这两个名字是内核机制的一部分，不由工具注册决定。 */
+const FINISH_TOOL = "finish";
+const SEND_MESSAGE_TOOL = "send_message";
+
+/**
+ * 发言是否完成：本步每个 send_message 调用都未请求继续，且结果全部成功。
+ * 部分失败（同批发送中一条 ok:false）判未完成，轮次留给模型看到失败再决定重试或改口。
+ */
+function spoke(messages: AgentMessage[]): boolean {
+  let seen = false;
+  for (const message of messages) {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (part.type !== "tool-call" || part.toolName !== SEND_MESSAGE_TOOL) continue;
+        // continue:true 是模型显式要求续轮：发了话但话没说完。
+        if ((part.input as { continue?: boolean } | undefined)?.continue === true) return false;
+        seen = true;
+      }
+    }
+  }
+  if (!seen) return false;
+  for (const message of messages) {
+    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "tool-result" || part.toolName !== SEND_MESSAGE_TOOL) continue;
+      if (!spokeResult(part.output)) return false;
+    }
+  }
+  return true;
+}
+
+/** send_message 的一次结果是否成功。error-text（执行抛错）与 ok:false 都算没说成。 */
+function spokeResult(output: Extract<ToolContent[number], { type: "tool-result" }>["output"]): boolean {
+  if (output.type === "error-text" || output.type === "error-json") return false;
+  const value = output.type === "json" ? output.value : undefined;
+  return (value as { ok?: boolean } | undefined)?.ok === true;
 }
 
 /** 一 Scene = 一 Channel = 一 Agent。 */
@@ -205,9 +216,11 @@ export class AgentRuntime {
       model: config.model,
       instructions: config.instructions,
       storage: this.storage,
-      // core 只见一个插件：上下文引擎与收尾控制在这一点收拢。
-      plugins: [createAgentPlugin({ context: config.context, control: config.control })],
+      // core 只见一个插件：上下文引擎与停轮判定在这一点收拢。
+      plugins: [createAgentPlugin({ context: config.context })],
       tools: config.tools,
+      // core 的配置字段叫 toolCallers；它转发给 streamText 时才改名为 experimental_toolCallers。
+      ...(config.toolCallers === undefined ? {} : { toolCallers: config.toolCallers }),
     });
 
     // 引擎自己订阅事实流、读存储；运行时不替它转述发生了什么，也不告诉它记账归谁——
@@ -299,35 +312,6 @@ export interface ProfileRuntimeOptions {
   logger: Logger;
 }
 
-/**
- * 一个生效单位内共享的活物：模型（含降级重试状态）、唤醒引擎、工具调用引擎。
- * 由 Plan 在诞生时从冻结配置造出，频道实例引用它们而不是各自新建。
- */
-interface PlanEngines {
-  model: LanguageModel;
-  /**
-   * 上下文引擎。它只能是这一份：core 在 `createAgent` 时就把插件 hook 的引用绑好，
-   * 引擎自己还记着 agent、压缩水位与在途压缩——跨 agent 共享会让这个频道的压缩去读另一个频道的存储。
-   * 幸而这一层本就是「一生效单位」：cross 形态整个 preset 只有一块视窗、一个 agent。
-   */
-  context: ContextEngine;
-  toolcall: ToolcallEngine;
-}
-
-/**
- * 一个生效单位的冻结配置。键是生效单位键：非 cross 是 scene 名，cross 形态是 preset 名。
- *
- * 配置与活物分层是为「一配置单位对多运行单位」：配置单位一旦定下，频道实例各建各的
- * （按需包裹的工具调用层、逐频道装配的工具集），上游配置不用因此变形。
- * 唤醒引擎不在这一层：它不带逐 agent 的状态，跨频道共用一套账才是要的，见 {@link ProfileRuntime}。
- */
-interface Plan {
-  /** 冻结后的配置：装配所需的全部输入，载入后不再变。 */
-  readonly spec: SceneSpec;
-  /** 从上面这份配置造出的共享活物。 */
-  readonly engines: PlanEngines;
-}
-
 /** 一份人设的运行态：静态的工厂清单，加上按需长出来的频道实例。 */
 export class ProfileRuntime {
   readonly id: string;
@@ -337,20 +321,14 @@ export class ProfileRuntime {
   private readonly gateway: Gateway;
   private readonly directory: string;
   private readonly scenesDir: string;
-  /** preset 级的引擎配置，装配上下文引擎时按 `spec.preset` 回查。 */
-  private readonly engineConfigs: Record<string, PresetEngineConfig>;
   /** 本 profile 的装配清单；加载后不变。 */
   readonly specs: SceneSpec[] = [];
-  /** 每个可用生效单位一份，按生效单位键索引；模型与引擎在 profile 内共享，由实例引用。 */
-  private readonly plans: Record<string, Plan | undefined> = {};
-  /**
-   * 唤醒引擎按 preset 索引：该 preset 下全部频道共用一套，冷却账本因此跨频道可见——
-   * 同一个群里刚说过话，同 preset 的另一个频道的判定看得见。
-   *
-   * 引擎配置与实例在这一层对齐：spec 只留 `preset` 键，装配时回这里取。
-   */
-  private readonly wakeups: Record<string, WakeupEngine | undefined> = {};
   private readonly scenes: Record<string, AgentRuntime | undefined> = {};
+  /**
+   * profile 级共享状态池：需要跨实例感知的引擎（如全局限频）在这里放自己的键，
+   * 生命周期由本 runtime 兜底——dispose 时整池消失，不留幽灵账。
+   */
+  private readonly shared = new Map<string, unknown>();
   /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
   private persona?: string;
   private systemTemplate?: string;
@@ -362,64 +340,8 @@ export class ProfileRuntime {
     this.gateway = options.gateway;
     this.directory = options.directory;
     this.scenesDir = path.join(options.directory, "scenes");
-    this.engineConfigs = options.resolved.engines;
-
-    // 唤醒引擎在 preset 层诞生：认不出的引擎名在这里就报出，不必等到某个频道第一次被路由。
-    for (const [name, config] of Object.entries(options.resolved.engines)) {
-      try {
-        if (!isSelected(config.wakeup.engine, config.extends)) {
-          throw new Error(`wakeup engine "${config.wakeup.engine}" comes from an extension package not listed in "extends"`);
-        }
-        this.wakeups[name] = createWakeupEngine(config.wakeup, { logger: this.logger });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.logger.error(`[${this.id}/${name}] wakeup engine unavailable, skipped: ${reason}`);
-      }
-    }
-
-    for (const spec of options.resolved.specs) {
-      try {
-        this.plans[spec.name] = this.createPlan(spec);
-        this.specs.push(spec);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.logger.error(`[${this.id}/${spec.name}] spec unavailable, skipped: ${reason}`);
-      }
-    }
-  }
-
-  /**
-   * 把一份 spec 冻成 Plan：活物在这里诞生，频道实例只引用。
-   * 组名，或显式配了重试次数的引用，才包一层降级重试；其余原样交给网关，不付额外开销。
-   * 造不出来的（模型名悬空、组为空）在此报出，由构造器记一条 error 并跳过这个 spec。
-   */
-  private createPlan(spec: SceneSpec): Plan {
-    const failover = this.gateway.groups().includes(spec.model) || (spec.failover.attempts ?? 1) > 1;
-    const model = failover ? new FailoverModel(this.gateway, spec.model, spec.failover, this.logger) : this.gateway.languageModel(spec.model);
-    const engines = this.wakeups[spec.preset];
-    if (engines === undefined) throw new Error(`preset "${spec.preset}" has no usable wakeup engine`);
-    const context = this.engineConfigs[spec.preset]!;
-    if (!isSelected(context.context.engine, context.extends)) {
-      throw new Error(`context engine "${context.context.engine}" comes from an extension package not listed in "extends"`);
-    }
-    if (!isSelected(spec.toolcall.engine, spec.extends)) {
-      throw new Error(`toolcall engine "${spec.toolcall.engine}" comes from an extension package not listed in "extends"`);
-    }
-    return {
-      spec,
-      engines: {
-        model,
-        context: createContextEngine(context.context, {
-          logger: this.logger,
-          gateway: this.gateway,
-          directory: this.directory,
-          resources: resourcePath(),
-          // 聚合视窗一块视窗吃下多个频道，事实行不带坐标就分不清谁说的；缺省即无寻址头。
-          ...(context.cross ? { addressing: { cross: true } } : {}),
-        }),
-        toolcall: createToolcallEngine(spec.toolcall),
-      },
-    };
+    // 展开失败的 spec 不进清单（准入校验在 resolveProfile），装载期报错到此为止。
+    this.specs.push(...options.resolved.specs);
   }
 
   /** 按事件定位其归属频道实例，未创建时按需创建。 */
@@ -436,17 +358,13 @@ export class ProfileRuntime {
 
   /**
    * 按需创建实例：首次有事件落到它头上时创建，同时初始化目录、引擎与存储。
+   * 装配的唯一决策点：模型、上下文引擎、唤醒引擎、工具调用层都随本实例在此诞生，
+   * 随实例停止一起销毁——生命周期只有「实例」一种单位，不再有 preset 级的共享活物。
    *
    * 实例坐标随形态分岔：非聚合形态是 `(sid, channelId)`，每个频道一块视窗；聚合形态整块视窗
    * 以 preset 名为键，claims 里的全部频道汇进同一份 `events.jsonl`——合流的范围就是声明处所写的那些行。
    */
   private ensure(spec: SceneSpec, channelId: string, address: { platform: string; selfId: string }): AgentRuntime {
-    // 构造期建不出 Plan 的 spec 不在 `specs` 里，调用到这里即契约被破坏。
-    const plan = this.plans[spec.name];
-    if (plan === undefined) throw new Error(`spec "${spec.name}" has no usable model and must not receive deliveries`);
-    // 唤醒引擎在 preset 层造好了，这里只取引用：同一 preset 下的频道共用一套冷却账本。
-    const wakeup = this.wakeups[spec.preset];
-    if (wakeup === undefined) throw new Error(`preset "${spec.preset}" has no usable wakeup engine and must not receive deliveries`);
     const cross = spec.cross;
     const key = cross ? `cross_${spec.name}` : channelKey(spec.sid, channelId);
     const existing = this.scenes[key];
@@ -454,7 +372,7 @@ export class ProfileRuntime {
 
     // 聚合视窗没有「自己所在的那个频道」：sid 取事件来源的账号，决定本实例从哪个 bot 发消息。
     const sid = cross ? `${address.platform}:${address.selfId}` : spec.sid;
-    const control = new TurnControl();
+
     /** 聚合形态的出站寻址：可达清单与坐标解析都从 claims 现算一次，装配时冻结在工具里。非聚合形态取不到 claims。 */
     const claims = spec.claims ?? {};
     const patterns = Object.entries(claims).flatMap(([account, claim]) => (claim.whitelist ?? []).map((pattern) => ({ account, pattern })));
@@ -465,7 +383,6 @@ export class ProfileRuntime {
         sid,
         channelId,
         typing: spec.typing,
-        onEndTurn: () => control.requestSendStop(),
         // 坐标由模型给，内核只验它落不落在本视窗认领的频道集合内。
         // 坐标两种写法都收：带 sid 的复合坐标直接取；裸 channelId 只在恰好被一个 sid 认领时才算数——
         // 多个账号都认领同名频道时它指不准，宁可报错让模型补上 sid，也不猜一个发出去。
@@ -487,12 +404,20 @@ export class ProfileRuntime {
             }
           : {}),
       }),
-      finish: createFinish({ onStop: () => control.requestStop() }),
+      finish: createFinish(),
     };
 
-    const tools = spec.innerThoughts ? withInnerThoughts(baseTools, this.logger) : baseTools;
+    const base = spec.innerThoughts ? withInnerThoughts(baseTools, this.logger) : baseTools;
+    // 代码模式只改工具面：宿主工具一件不动，模型目录收窄成只剩沙箱那一件。
+    // 收窄与沙箱工具是同一次装配的两半——表里点名的进沙箱，没点名的留在目录。
+    const sandbox = spec.codemode.enable ? assembleCodemode(spec.codemode, base) : undefined;
+    const tools: ToolSet = sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool };
 
-    const model = plan.engines.toolcall.wrap(plan.engines.model);
+    // 模型与引擎在这里诞生，随本实例同生共死：上下文引擎记着本实例的 agent 与压缩水位，
+    // 唤醒引擎的账本只看本视窗的事实流，跨实例状态经 deps.shared（见 WakeupEngineDeps）。
+    const failover = this.gateway.groups().includes(spec.model) || (spec.failover.attempts ?? 1) > 1;
+    const raw = failover ? new FailoverModel(this.gateway, spec.model, spec.failover, this.logger) : this.gateway.languageModel(spec.model);
+    const model = createToolcallEngine(spec.toolcall).wrap(raw);
     const directory = path.join(this.scenesDir, sceneDirectoryName(key));
 
     const scene = new AgentRuntime({
@@ -512,10 +437,17 @@ export class ProfileRuntime {
             ...Object.entries(claims).map(([account, claim]) => `- ${account}: ${(claim.whitelist ?? []).join(", ")}`),
           ].join("\n")}`
         : this.instructions(),
-      context: plan.engines.context,
-      control,
+      context: createContextEngine(spec.context, {
+        logger: this.logger,
+        gateway: this.gateway,
+        directory: this.directory,
+        resources: resourcePath(),
+        // 多频道视窗一块吃下多个频道，事实行不带坐标就分不清谁说的；单频道即无寻址头。
+        ...(cross ? { addressing: { cross: true } } : {}),
+      }),
       tools,
-      wakeup,
+      ...(sandbox === undefined ? {} : { toolCallers: sandbox.callers }),
+      wakeup: createWakeupEngine(spec.wakeup, { logger: this.logger, shared: this.shared }),
       logger: this.logger,
     });
     this.scenes[key] = scene;

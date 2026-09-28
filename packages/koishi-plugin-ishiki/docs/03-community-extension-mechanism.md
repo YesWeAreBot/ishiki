@@ -48,23 +48,23 @@
    - **为什么站不住**：这条规则建立在误读上——「共享 preset」共享的是定义，不是配置产物。scene 的字段是在 preset 基线上的**扩展**，三层合并 per-scene 独立进行，生效范围被自己的 matchlist 天然圈住，跨 scene 冲突在结构上不可能产生。cross preset 则相反：scene 只有路由权，配置只有 preset 层生效。
    - **替换判定**：树形结构下扩展（scene 就地覆写、范围限自身频道）与禁止（cross 下 scene 无配置权）都是结构事实，无需任何规则条文与校验逻辑。
 
-## 装配层级（Scene / Plan / Runtime）
+## 装配层级（Scene / Spec / Runtime）
 
-配置单位与运行单位脱钩，消除「一 spec 产出多 Runtime」与「多 scene 合并进一 Runtime」的不对等：
+配置单位与运行单位脱钩：配置只算一次，实例按需长出来。
 
 ```
 Preset   配置层   心智基线 + 形态开关（scenes 挂靠 或 cross: true + claims）
-Plan     装配层   一个生效单位的冻结配置（含贡献清单与可见域）
-Runtime  运行层   AgentRuntime 实例（原 SceneRuntime 更名），吃一份 Plan
+Spec     展开层   SceneSpec：三层合并后的装配清单（含引擎配置与可见域）
+Runtime  运行层   AgentRuntime 实例（原 SceneRuntime 更名），按 spec 诞生
 ```
 
-**生效单位**：非 cross 是 scene（matchlist 圈定的频道集）；cross 是 preset（全部 claims 的频道并集）。**Plan 的键 = 生效单位键**（scene 名，或 cross preset 名）。
+**生效单位**：非 cross 是 scene（matchlist 圈定的频道集）；cross 是 preset（全部 claims 的频道并集）。
 
-**Plan 是冻结配置，不是活实例**：模型引用名、引擎配置、`extends` 贡献清单、可见域（匹配器或频道并集）。模型实例（`FailoverModel`）、工具调用层、工具集全部在 Runtime 诞生时从 Plan 构造——Pre-Channel 每实例各建一份，Pre-Profile 一套。Plan 持实例会让两条形态需要两套 Plan 语义，脱钩失败。
+**Spec 是冻结配置，不是活实例**：模型引用名、引擎配置、可见域（匹配器或频道并集）。模型实例（`FailoverModel`）、上下文引擎、唤醒引擎、工具调用层、工具集全部在 Runtime 诞生时构造，随实例销毁——生命周期只有「实例」一种单位，没有 preset 级的共享活物。
 
-`context` 与 `wakeup` 另有一层：它们是 preset 级配置，不在 scene 上扩展。唤醒引擎按 preset 造唯一一份，全部频道共用——带账的活物不按频道分家，跨频道共享冷却账本正是唤醒想要的行为。上下文引擎则是一生效单位一份（它与 agent 一对一，跨 agent 共享会让一个频道的压缩读另一个频道的存储），cross 形态正好只有一块视窗、一个 agent。
+引擎（`context` / `wakeup` / `toolcall`）配置走同一条三层合并，scene 可就地覆盖；实例随 `AgentRuntime` 诞生与销毁，一个实例一套。上下文引擎与 agent 一对一（跨 agent 共享会让一个频道的压缩读另一个频道的存储）；唤醒引擎的账本只看本视窗的事实流，需要跨实例感知时经 `WakeupEngineDeps.shared`（profile 级状态池）自管读写，不共享实例。变体准入仍按 preset 的 `extends` 校验，scene 覆写不放开这道门。
 
-**展开规则只有一条**：一个 Plan，按可见域基数诞生 Runtime——Pre-Channel 每匹配频道一个（共享 Plan），Pre-Profile 每块一个。`matchSceneSpec` 路由照旧（事件 → scene → 归属频道），scene 持有自己的合并结果；cross 的 Plan 直接来自 preset 层。
+**展开规则只有一条**：一个生效单位，按可见域基数诞生 Runtime——Pre-Channel 每匹配频道一个，Pre-Profile 每块一个。`matchSceneSpec` 路由照旧（事件 → scene → 归属频道），scene 持有自己的合并结果；cross 的生效单位就是 preset 自身。
 
 ## 配置面（preset 树）
 
@@ -157,7 +157,7 @@ ctx.ishiki.registerToolcallEngine("neko-tools/xml", (config) => new XmlToolcall(
 
 ### 5. 装配器（core 唯一 AgentPlugin）
 
-core 侧只有一个插件，由 `AgentRuntime` 装配时在 `runtime.ts` 里就地拼出（`createAgentPlugin`）：上下文引擎不再实现 `AgentPlugin`，它只声明自己干预上下文管线上的哪几段（`init` / `stop` / `onAppend` / `transformEntries` / `transformMessages` / `extendInstructions` / `onTurnFinish`，签名直接取自 core 的插件契约），由这一个入口按固定顺序转发。`TurnControl` 的 `onStepFinish` 保持内核独占（停轮是内核机制，不是扩展点），不进社区面。唤醒与工具调用引擎不进 `AgentPlugin`，只负责建好交给既有取用点。
+core 侧只有一个插件，由 `AgentRuntime` 装配时在 `runtime.ts` 里就地拼出（`createAgentPlugin`）：上下文引擎不再实现 `AgentPlugin`，它只声明自己干预上下文管线上的哪几段（`init` / `stop` / `onAppend` / `transformEntries` / `transformMessages` / `extendInstructions` / `onTurnFinish`，签名直接取自 core 的插件契约），由这一个入口按固定顺序转发。停轮判定写在同一个插件的 `onStepFinish` 里，读本步消息流得出（停轮是内核机制，不是扩展点），不进社区面。唤醒与工具调用引擎不进 `AgentPlugin`，只负责建好交给既有取用点。
 
 Service 化的只是生命周期容器，不是装配逻辑：`ensure`/装配器照旧是普通代码，不因 fiber 化改形状——fiber 重跑从 Plan 零装配是接受的代价（事实流在盘上）。
 
