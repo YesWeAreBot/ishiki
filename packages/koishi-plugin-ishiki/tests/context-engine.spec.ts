@@ -115,7 +115,7 @@ describe("collapse", () => {
       userId: "77",
       operatorId: "77",
     });
-    const out = collapse([message("a"), other, recall], { cross: true });
+    const out = collapse([message("a"), other, recall], { form: "cross", accounts: [{ sid: "onebot:1", claim: { whitelist: ["group:2"] } }] });
 
     // 三条同频道：合成一段，头只出现一次且不带作者
     expect(out).toHaveLength(1);

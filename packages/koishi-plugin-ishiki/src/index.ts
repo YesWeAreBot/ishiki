@@ -150,6 +150,8 @@ declare module "koishi" {
 // 社区包需要的东西：继承用的基类与 `declare module` 增强用的参数表接口。
 // 注册动词不走根导出——服务命名空间才是入口，见 `Ishiki.registerContextEngine` 的注释。
 export { ContextEngine, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
+export type { ClaimedAccount, InstanceDomain } from "./domain.js";
+export type { Extension, ExtensionCoords, ExtensionProvider } from "./extension.js";
 export { ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
 export { WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngines } from "./wakeup/index.js";
 

@@ -2,7 +2,6 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { LanguageModelV4CallOptions, LanguageModelV4FunctionTool, LanguageModelV4Prompt } from "@ai-sdk/provider";
 import {
   MockLanguageModelV4,
   createCustomMessage,
@@ -10,6 +9,9 @@ import {
   type Agent,
   type AgentEvent,
   type AgentMessage,
+  type LanguageModelV4CallOptions,
+  type LanguageModelV4FunctionTool,
+  type LanguageModelV4Prompt,
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
@@ -170,7 +172,7 @@ async function teardown(rigged: Rig): Promise<void> {
 
 /** 一个 cross preset：preset 自身即生效单位，claims 认领两个群与一个私聊。 */
 function crossSpecs(
-  claims: Record<string, { whitelist: string[] }> = { "onebot:1": { whitelist: ["group:*", "private:9"] } },
+  claims: Record<string, { whitelist: string[]; blacklist?: string[] }> = { "onebot:1": { whitelist: ["group:*", "private:9"] } },
   wakeup: Wakeup = { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
 ): ResolvedProfile {
   return resolveProfile(
@@ -324,6 +326,28 @@ describe("cross 聚合：出站要显式寻址", () => {
     await teardown(rigged);
   });
 
+  it("被黑名单排除的频道不达：裸坐标指到它也不发出去", async () => {
+    const rigged = rig(crossSpecs({ "onebot:1": { whitelist: ["private:*"], blacklist: ["private:9"] } }));
+    sent.length = 0;
+    rigged.script.push(
+      toolStep("send_message", { target: "private:9", messages: ["这条不该出去"] }),
+      toolStep("send_message", { target: "private:5", messages: ["这条该出去"] }),
+      textStep("说完了"),
+    );
+    const shared = rigged.runtime.route(message("private:5", "wake"))!;
+
+    await shared.deliver(message("private:5", "wake"));
+    await shared.idle();
+
+    // 白名单认领了它、黑名单排除了它：认领判定只有一处，可达与坐标校验不会各判一套
+    expect(sent).toEqual([{ sid: "onebot:1", channelId: "private:5", content: "这条该出去" }]);
+    // 排除项进地址簿：不写出来，模型会照着认领模式反复试同一个不达的坐标
+    const prompt = promptText(rigged);
+    expect(prompt).toContain("- onebot:1/private:*");
+    expect(prompt).toContain("- onebot:1/private:9");
+    await teardown(rigged);
+  });
+
   it("可达地址簿进系统提示，坐标在参数表里且必填", async () => {
     const rigged = rig(crossSpecs());
     rigged.script.push(textStep("知道了"));
@@ -334,7 +358,8 @@ describe("cross 聚合：出站要显式寻址", () => {
 
     const prompt = promptText(rigged);
     // 通配认领原样进地址簿：展开要一张运行时才知道的表，写模式才是配置者写下的那句事实
-    expect(prompt).toContain("onebot:1: group:*, private:9");
+    expect(prompt).toContain("- onebot:1/group:*");
+    expect(prompt).toContain("- onebot:1/private:9");
     // 坐标在参数表里，且是必填：没有默认投递目标可猜
     const send = toolCatalog(rigged).find((tool) => tool.name === "send_message")!;
     expect(send.inputSchema.required).toEqual(["messages", "target"]);

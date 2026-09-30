@@ -42,9 +42,9 @@ function engineWith(overrides: Partial<ConstructorParameters<typeof ClassicWakeu
 
 describe("classic wakeup: 配置", () => {
   it("按名从注册表建出引擎", () => {
-    expect(createWakeupEngine({ engine: "classic" }).name).toBe("classic");
-    expect(createWakeupEngine({ engine: "standard" }).name).toBe("standard");
-    expect(() => createWakeupEngine({ engine: "nope" })).toThrow(/unknown wakeup engine/);
+    expect(createWakeupEngine({ engine: "classic" }, {}).name).toBe("classic");
+    expect(createWakeupEngine({ engine: "standard" }, {}).name).toBe("standard");
+    expect(() => createWakeupEngine({ engine: "nope" }, {})).toThrow(/unknown wakeup engine/);
   });
 
   it("越界的数值回落到默认值，不把 NaN 放进概率", () => {

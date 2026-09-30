@@ -11,10 +11,23 @@ export namespace SendMessageTool {
     channelId: string;
     typing: TypingConfig;
     /**
-     * 多频道视窗的坐标解析：跨频道没有单值「当前位置」，目标由模型显式给。
+     * 多频道视窗的出站寻址：跨频道没有单值「当前位置」，目标由模型显式给。
      * 缺省即单频道形态——坐标唯一，模型看不到也不必给 target。
      */
-    routing?: MultiChannelRouting;
+    routing?: {
+      /**
+       * 本视窗可达的频道，写成 `sid/模式`：报错文本取它，模型据此知道能往哪儿发。
+       * 写模式而不是频道清单——认领通常写成 `group:*` 这类通配，逐个频道要等运行时才知道。
+       */
+      reachable: readonly string[];
+      /** 认领范围里被黑名单排除的频道，写法同上：不写出来，模型会反复试同一个不达的坐标。 */
+      excluded: readonly string[];
+      /**
+       * 把模型给的坐标解析成一个频道：带 sid 的复合坐标直接取，无 sid 的裸 channelId 只在
+       * 恰好被一个 sid 认领时才算数。解析不出返回 undefined，调用方报 `InvalidTarget`。
+       */
+      resolve: (target: string) => { sid: string; channelId: string } | undefined;
+    };
   }
   export interface Input {
     messages: string[];
@@ -24,24 +37,6 @@ export namespace SendMessageTool {
     target?: string;
   }
   export type Output = { ok: true; count: number } | { ok: false; error: { name: string; message: string }; sent: string[]; failedAt: number };
-}
-
-/**
- * 多频道视窗的出站寻址：可达频道清单与坐标解析。
- * 只在装配点内部构造，扩展作者不接触——Schema 派生与校验都由 {@link createSendMessage} 按
- * 该参数的存在与否完成。
- */
-interface MultiChannelRouting {
-  /**
-   * 本生效单位 claims 认领的频道，写成 `sid/白名单模式` 逐行列出（模式可能带通配，展开不了）。
-   * 报错信息与系统提示里的地址簿都取它：模型据此知道能往哪儿发，内核据此说它没往哪儿发。
-   */
-  reachable: readonly string[];
-  /**
-   * 把模型给的坐标解析成一个频道：带 sid 的复合坐标直接取，无 sid 的裸 channelId 只在
-   * 恰好被一个 sid 认领时才算数。解析不出返回 undefined，调用方报 `InvalidTarget`。
-   */
-  resolve: (target: string) => { sid: string; channelId: string } | undefined;
 }
 
 /** 聚合形态下的工具说明：目标由模型给，错误表达在结果里，模型据此重试。 */
@@ -60,6 +55,13 @@ const TARGET_PROPERTY = {
 
 export function createSendMessage(options: SendMessageTool.Options): Tool<SendMessageTool.Input, SendMessageTool.Output> {
   const routing = options.routing;
+  /** 报错里那句「能发到哪儿」：可达清单加上被排除的那些，别让模型反复试一个已经被排除的坐标。 */
+  const reachText = (): string => {
+    if (routing === undefined) return "";
+    const parts = [`可达：${routing.reachable.join("、")}`];
+    if (routing.excluded.length > 0) parts.push(`已排除：${routing.excluded.join("、")}`);
+    return parts.join("；");
+  };
   return tool({
     description:
       routing === undefined
@@ -107,7 +109,7 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
         if (typeof input.target !== "string" || input.target.trim().length === 0) {
           return {
             ok: false as const,
-            error: { name: "InvalidTarget", message: `target 必填。本视窗可达的频道：${routing.reachable.join("、")}` },
+            error: { name: "InvalidTarget", message: `target 必填。${reachText()}` },
             sent: [],
             failedAt: 0,
           };
@@ -116,7 +118,7 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
         if (address === undefined) {
           return {
             ok: false as const,
-            error: { name: "InvalidTarget", message: `"${input.target}" 不在本视窗可达的频道内：${routing.reachable.join("、")}` },
+            error: { name: "InvalidTarget", message: `"${input.target}" 不在本视窗可达的频道内。${reachText()}` },
             sent: [],
             failedAt: 0,
           };

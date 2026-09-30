@@ -1,9 +1,7 @@
-import { AgentPlugin } from "@yesimagent/core";
-
 export interface MemoryEngines {}
 export interface MemoryEngineOptions {}
 
-export abstract class MemoryEngine<K extends keyof MemoryEngines = keyof MemoryEngines> implements AgentPlugin {
+export abstract class MemoryEngine<K extends keyof MemoryEngines = keyof MemoryEngines> {
   public readonly name: K;
   public readonly config: MemoryEngines[K];
 

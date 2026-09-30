@@ -1,20 +1,43 @@
 # 社区扩展机制（Pre-Channel / Pre-Profile 分区下的注册与可见域）
 
-状态: 已定（8 步全部落地；唯一的实测假设已由 `tests/extensions.spec.ts` 验证）
+状态: 已定（9 步全部落地；inject fiber 的失效语义已由 `tests/extensions.spec.ts` 实测）
 日期: 2026-09-27
 来源: 扩展设计讨论（多群寻址 → 包外受众 → 分区梳理 → cordis 失效语义 → 装配层级）
 
 ## 结论
 
-扩展机制面向社区作者，围绕 Agent 的两种运行形态（Pre-Channel / Pre-Profile）组织为三层：**进程级注册表 → preset 级选中 → 形态决定的实例层**。配置面统一为一棵 preset 树（preset 下要么挂 `scenes`，要么 `cross: true` + `claims`），装配面以 Scene/Plan/Runtime 三层消除配置单位与运行单位的不对等。社区只能向既有引擎族注册新变体，core 的分区与插入位置封闭；变体的可见性由 preset 的 `extends` 显式选中，未列出的不生效；ProfileRuntime Service 化，扩展失效时受影响的 profile 经 cordis inject fiber 整体重启，失效传播不自造。**工具与提示词的加法贡献本阶段不做**（见「本阶段范围」）。
+扩展机制面向社区作者，围绕 Agent 的两种运行形态（Pre-Channel / Pre-Profile）组织为三层：**进程级注册表 → preset 级选中 → 形态决定的实例层**。配置面统一为一棵 preset 树（preset 下要么挂 `scenes`，要么 `cross: true` + `claims`），装配面以 Scene/Plan/Runtime 三层消除配置单位与运行单位的不对等。社区只能向既有引擎族注册新变体，core 的分区与插入位置封闭；变体的可见性由 preset 的 `extends` 显式选中，未列出的不生效；ProfileRuntime Service 化，扩展失效时受影响的 profile 经 cordis inject fiber 整体重启，失效传播不自造。除此之外社区面还有一件加法：包对某一个 AgentRuntime 提供工具与提示词，由服务上的 `extend(coords)` 承担（见「贡献物（加法）」）。
 
-## 本阶段范围
+## 贡献物（加法）
 
-贡献物（扩展包提供的工具与提示词：注册动词、按 `extends` 过滤、装配时实例化）在设计里成立，但**本阶段不实现**——相关注册表与装配合流已撤除。当前社区面只有一件事：向三族引擎注册新变体，并由 `extends` 决定哪些 preset 用得上它。贡献物落地时要一并定的三件事记在这里，免得重新讨论一遍：
+社区面除了注册引擎变体，还有一件加法：包对某一个 AgentRuntime 提供工具与提示词。
 
-1. 注册名 `包名/名字`，前缀即归属与准入依据；工具对模型可见的名字取斜杠后那一段（平台对工具名有字符限制）。
-2. 贡献物按装配坐标实例化：工厂拿到 `{ ctx, logger, sid, channelId, directory, resources }`，这次装配里不适用时返回 `undefined`；两个包给出同一个可见名时在装配处报错，不静默覆盖。
-3. 贡献物是加法（`extendTools` / 提示词接在内核之后），不进上下文管线的改写段；停轮等唯一决策点仍归内核。
+**注册**：不走注册动词，也不新开注册表。工具不从配置按名查找，配置只写 `extends: [包名]`，服务名 `ishiki.ext.<包名>` 已经是准入门；服务本身就是登记处。包在服务上暴露一个成员：
+
+```ts
+extend(coords: ExtensionCoords): Extension | undefined
+```
+
+- 内核在装配点（`ensure()`）对每个生效单位叫一次，**同步**；异步准备在包的 apply 期做完。
+- 成员缺席表示这个包只提供引擎变体：跳过，记一条 debug（好把「包选错了」与「成员名拼错了」分开）。
+- 返回 `undefined` 是包的正常回答（这个实例用不上我），不是失败。每频道的过滤归包自己。
+- 实例活着期间不再问：包的判断是实例级的，没有按调用变化的输入，所以工具不带上下文参数。
+
+**坐标**（`ExtensionCoords`）只有三样：`{ ctx, domain, directory }`。
+
+- `ctx`：平台能力与其它 Koishi 服务的入口。内核不另造能力面——插件是 Koishi 插件，手上本来就有 `ctx`，缺的只有实例坐标。
+- `domain`：本实例的可见域，形态进判别式。单频道形态给 `{ form: "channel", platform, selfId, channelId }`（取自路由已知的事件寻址）；聚合形态给 `{ form: "cross", accounts: [{ sid, claim }] }`，`sid` 就是配置面 `claims` 的键本身。从 sid 反推 platform 与 selfId 是 00 号文第 6 条禁止的那件事，所以两种形态各给自己手上那份。
+- `directory`：本实例的数据目录，包自己的文件放自己的子目录里。
+
+同一份 domain 也交给本实例的上下文引擎（决定事实行带不带寻址头）：它是「本实例覆盖哪些频道」的唯一载体，形态只在这一处表达，各消费方自己按 `form` 分支。
+
+刻意不给：`channel.type`（要用自己从 Koishi 取）、`logger`（`ctx.logger("包名")` 才是 tag 正确的那个）、`resources`（内核拿不到别的包的路径）、profile / preset / scene 名（要按 preset 行为是包配置的寻址问题，不靠坐标加名字）。
+
+**归位**：工具并入内核工具之后、`innerThoughts` 之前（整份工具面统一前置念头字段）、代码模式收窄之前（贡献的工具因此能进沙箱表）；提示词接在内核那一段之后，按 `extends` 的顺序。与内核工具或先装配的包撞名在装配点抛错，不静默覆盖。贡献物是纯加法：上下文管线的改写段与唯一的收尾、停轮判定都不进社区面。
+
+**出站**：包有 `ctx`，要发消息就能发，内核不铺路也不设闸；但停轮判定只认内核的 `finish` 与 `send_message`，包的工具落在「其他工具 → 续轮」，包自己发的消息不结束轮次。
+
+**代价**：贡献物的错误只能在实例诞生时暴露（重名、`extend` 抛错）。引擎的准入在装载期查得出来（名字带前缀），贡献物查不出来，因为它依赖实例坐标——这是「实例按需诞生」的必然。
 
 ## 被否定的前提
 
@@ -121,7 +144,7 @@ presets:
 
 | 层     | 单位       | 内容                                                                                      | 生命周期                                                   |
 | ------ | ---------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| 注册层 | 进程级全局 | 引擎变体的类型定义（贡献物留待后续阶段）                                                  | 模块加载或 apply 期，宿主持有，随 Koishi 插件 dispose 撤销 |
+| 注册层 | 进程级全局 | 引擎变体的类型定义；贡献物不注册，服务自身即登记处                                        | 模块加载或 apply 期，宿主持有，随 Koishi 插件 dispose 撤销 |
 | 选中层 | preset 级  | preset 的 `extends` 决定哪些包的变体可用、`context.engine` 等选哪个变体；scene 可就地扩展 | 静态配置，树内合并                                         |
 | 实例层 | 形态决定   | Pre-Channel 每频道一份；Pre-Profile 每块一份                                              | 按需诞生，随实例 dispose                                   |
 
@@ -142,11 +165,13 @@ ctx.ishiki.registerToolcallEngine("neko-tools/xml", (config) => new XmlToolcall(
 
 注册随调用方的插件生命周期撤销：cordis 把服务方法里的 `this.ctx` 绑在调用方作用域上，转发器据此把反注册挂进调用方的 effect——包卸载即消失，重装同名注册不会撞「已登记」。
 
+贡献物不走这几个动词：它没有按名查找的需求，见「贡献物（加法）」。
+
 ### 4. 选中与寻址
 
 `extends` 是**扩展包名数组**，选中单位是包，不含任何参数级配置；包内的细分归包自身 Koishi Config。preset 说「这个心智用得上这个包的能力」，包配置说「这个包怎么行为」。preset 文件 + `extends` 清单即完整依赖声明，分享 preset 等于声明了它需要的扩展包。带包前缀的名字（`包名/名字`）要求该包被 `extends` 选中：装载期检查，未选中的 spec 跳过自己并报出原因；无前缀的名字是内建变体，不问 `extends`。`extends` 因此是唯一的依赖声明处。
 
-静态准入与动态过滤的分界：**静态管谁能上场，动态管这场谁上场**。`extends` 只做包级准入（进程粒度、装载期解析）；到了贡献物那一阶段，运行时过滤归包自己——工厂拿得到装配上下文（哪个频道、什么形态），按自己的逻辑决定给出什么（onebot-utils 的 `isGroupScope` 模式）。内核不替包做频道级过滤。内核两件工具（`send_message` / `finish`）不受此表管辖，它们是内核机制。
+静态准入与动态过滤的分界：**静态管谁能上场，动态管这场谁上场**。`extends` 只做包级准入（进程粒度、装载期解析）；贡献物这一层，运行时过滤归包自己——`extend` 拿得到本实例的坐标（具体频道，或聚合形态下的认领），按自己的逻辑决定给出什么（onebot-utils 的 `isGroupScope` 模式）。内核不替包做频道级过滤。内核两件工具（`send_message` / `finish`）不受此表管辖，它们是内核机制。
 
 工具寻址随形态分两条路径、同一份校验代码：
 
@@ -197,4 +222,4 @@ Service 化的只是生命周期容器，不是装配逻辑：`ensure`/装配器
 7. [x] ProfileRuntime fiber 化 + 注册面导出（`loadProfiles`/`activateProfiles` 两步、`ctx.inject` 按 `extends` 并集门控、`ctx.ishiki.registerContextEngine`/`registerWakeupEngine`/`registerToolcallEngine` 三件、根导出基类与参数表接口）。
 8. [x] 端到端验证（`tests/extensions.spec.ts` 5 例：缺席等待与重装重建、装载出的 profile 能路由起场景、注册随包停用撤销、未选中包变体跳过、无前缀变体不受门控）。
 
-贡献物（工具与提示词）的注册与装配合流本阶段未做，见「本阶段范围」。
+9. [x] 贡献物落地（`src/domain.ts` 的可见域类型与 `src/extension.ts` 的加法契约、`ensure()` 的装配点、成员缺席与返回 `undefined` 两条空路径、撞名抛错；`tests/extension-contributions.spec.ts` 4 例：选中后工具与提示词进模型、聚合形态把认领的账号交给包且同一实例只问一次、未选中与包说不加时工具面相同、撞名抛错）。

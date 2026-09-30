@@ -4,7 +4,7 @@
 
 agent 循环里有些环节**只能有一个**：上下文怎么组装、这一条消息唤不唤醒我、模型的输出怎么读成工具调用。上一代把这些交给插件抢：插件用 `priority` 与 `match(session)` 全局匹配，彼此不兼容、无法组合，一个群装三个插件就打架。
 
-ishiki 的做法是把这些环节收进**引擎**：一个引擎 = 一个环节的一种实现 + 它的参数；同族互斥，preset 只能选一个。插件退回到加法——加工具、加提示词、加收尾动作，不抢决策。
+ishiki 的做法是把这些环节收进**引擎**：一个引擎 = 一个环节的一种实现 + 它的参数；同族互斥，preset 只能选一个。插件退回到加法——加工具、加提示词，不抢决策。
 
 ## 注册表形态
 
@@ -121,3 +121,14 @@ failover:
 3. 在 `index.ts` 里 import 该文件。
 4. 示例与文档同步：`resources/profile.example.yml` 与 cookbook 对应章节。
 5. 配置层不用改：`context` / `wakeup` / `toolcall` 的 Schema 是按引擎名判别的联合，新变体走同一形状。
+
+## 新增一个贡献物
+
+引擎是「选一个」，贡献物是「加一些」：包对某一个 AgentRuntime 提供工具与提示词，不抢决策。
+
+1. 建一个 Koishi 插件，以 `ishiki.ext.<包名>` 提供服务（`new Service(ctx, "ishiki.ext.<包名>")`）。
+2. 在服务上写 `extend(coords)`：内核在装配点对每个实例叫一次的就是这个成员。它拿到本实例的坐标（单频道形态是一个具体频道，聚合形态是认领的账号），返回 `{ tools, instructions }`；这个实例用不上它就返回 `undefined`。
+3. 在 preset 的 `extends` 里写上包名。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名在装配点抛错。
+4. 归位由内核定：工具并入内核工具之后、`innerThoughts` 之前、代码模式收窄之前；提示词接在内核那一段之后，按 `extends` 的顺序。
+
+坐标里没有的东西不要从别处推：`channel.type` 要用自己从 Koishi 取；包自己发的消息不结束轮次（停轮只认 `finish` 与 `send_message`）。完整契约与刻意的缺失项见 [03-community-extension-mechanism.md](../03-community-extension-mechanism.md)。

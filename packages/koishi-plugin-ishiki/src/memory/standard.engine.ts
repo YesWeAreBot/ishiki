@@ -14,8 +14,4 @@ export class StandardMemoryEngine extends MemoryEngine<"standard"> {
   constructor(config: StandardMemoryEngineConfig) {
     super("standard", config);
   }
-
-  extendTools = (): Awaitable<ToolSet | void> => {
-    return {};
-  };
 }

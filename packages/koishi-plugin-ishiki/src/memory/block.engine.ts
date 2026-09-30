@@ -1,4 +1,4 @@
-import { MemoryEngine, registerMemoryEngine, createMemoryEngine } from "./engine.js";
+import { MemoryEngine, registerMemoryEngine } from "./engine.js";
 
 export interface BlockMemoryEngineConfig {}
 

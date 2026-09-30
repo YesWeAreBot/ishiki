@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { StandardContextEngine } from "../src/context/standard.engine.js";
 import { ProfileConfig, resolveProfile } from "../src/profile.js";
 import { AgentRuntime, ProfileRuntime } from "../src/runtime.js";
-import { assembleCodemode, CODE_MODE, loadCodemode } from "../src/tools/codemode.js";
+import { CODE_MODE, createCodemode, loadCodemode } from "../src/tools/codemode.js";
 import { createFinish } from "../src/tools/finish.js";
 import { createSendMessage } from "../src/tools/send-message.js";
 import { createWakeupEngine } from "../src/wakeup/index.js";
@@ -131,7 +131,7 @@ describe("code mode", () => {
 
   /** 造一个开着代码模式的场景：工具面按配置收窄，收尾工具留在外。 */
   function openScene(): AgentRuntime {
-    const sandbox = assembleCodemode(config, baseTools);
+    const sandbox = createCodemode(config, baseTools);
     const model = new MockLanguageModelV4({
       doStream: async (request) => {
         toolNames.push((request.tools ?? []).map((tool) => tool.name));
@@ -148,7 +148,7 @@ describe("code mode", () => {
       tools: { ...baseTools, [CODE_MODE]: sandbox.tool },
       toolCallers: sandbox.callers,
       // 唤醒引擎不参与这个用例的断言：直接送事实行，起轮次靠的是引擎存在即可。
-      wakeup: createWakeupEngine({ engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } }, { shared: new Map() }),
+      wakeup: createWakeupEngine({ engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } }, {}),
       logger,
     });
     return scene;

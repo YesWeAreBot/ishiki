@@ -26,7 +26,7 @@ export interface WakeupEngineDeps {
    * profile 级共享状态池：需要跨实例感知的引擎（如全局限频）从这里取自己的键。
    * 池随 ProfileRuntime 诞生与销毁，宿主兜底生命周期；不需要跨实例的引擎不碰它。
    */
-  shared: Map<string, unknown>;
+  // shared: Map<string, unknown>;
 }
 
 export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupEngines> {
@@ -83,7 +83,7 @@ export function registerWakeupEngine<K extends keyof WakeupEngines>(
 }
 
 /** 按配置建出引擎：参数取与引擎名同名的那个键，未写则空。未登记的名字抛错，不静默退化。 */
-export function createWakeupEngine(config: { engine: string; [k: string]: unknown }, deps: WakeupEngineDeps = { shared: new Map() }): WakeupEngine {
+export function createWakeupEngine(config: { engine: string; [k: string]: unknown }, deps: WakeupEngineDeps): WakeupEngine {
   const create = wakeupEngines[config.engine];
   if (create === undefined) {
     throw new Error(`unknown wakeup engine "${config.engine}", available: ${Object.keys(wakeupEngines).join(", ")}`);

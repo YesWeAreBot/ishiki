@@ -1,8 +1,9 @@
 import { createEntry, createUserMessage, generateText, type Agent, type AgentEntry, type AgentMessage } from "@yesimagent/core";
 import type { Logger } from "koishi";
 
+import type { InstanceDomain } from "../domain.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, registerContextEngine, type AddressingOptions, type ContextEngineOptions } from "./engine.js";
+import { ContextEngine, registerContextEngine, type ContextEngineOptions } from "./engine.js";
 
 declare module "@yesimagent/core" {
   interface AgentCustomEntry {
@@ -52,13 +53,13 @@ function displayName(user: { id: string; name?: string }): string {
  * `names` 是窗口内见过的人名，撤回行靠它把 id 还原成昵称：平台的撤回事件只给 id，
  * 缺了它就只能渲染出一串数字。单条渲染（体积统计、摘要输入）没有窗口，`names` 缺省即退到 id。
  */
-function addressParts(message: AgentMessage, addressing?: AddressingOptions, names?: ReadonlyMap<string, string>): { head: string; body: string } | undefined {
+function addressParts(message: AgentMessage, domain?: InstanceDomain, names?: ReadonlyMap<string, string>): { head: string; body: string } | undefined {
   if (message.role !== "custom") return undefined;
 
   // 坐标恒为 `sid/channelId` 复合坐标：各账号下的频道号互不相干，单写 channelId 指不准。
   // core 的 `AgentCustomMessage` 留了一条 `custom: unknown` 占位成员，载荷只能按形状收窄。
   const head = (from: { platform: string; selfId: string; channelId: string }) => {
-    if (addressing?.cross !== true) return "";
+    if (domain?.form !== "cross") return "";
     return `[#${from.platform}:${from.selfId}/${from.channelId}] `;
   };
 
@@ -87,15 +88,15 @@ function addressParts(message: AgentMessage, addressing?: AddressingOptions, nam
   }
 }
 
-/** 将一条 ishiki 消息渲染为上下文中的一行；非本命名空间返回 undefined。`addressing` 缺省即无寻址头。 */
-export function renderLine(message: AgentMessage, addressing?: AddressingOptions): string | undefined {
-  const parts = addressParts(message, addressing);
+/** 将一条 ishiki 消息渲染为上下文中的一行；非本命名空间返回 undefined。`domain` 缺省即无寻址头。 */
+export function renderLine(message: AgentMessage, domain?: InstanceDomain): string | undefined {
+  const parts = addressParts(message, domain);
   return parts === undefined ? undefined : `${parts.head}${parts.body}`;
 }
 
 /** 消息在体积统计与摘要输入中的文本：本命名空间按渲染行计，其余按消息内容计。 */
-function renderText(message: AgentMessage, addressing?: AddressingOptions): string {
-  const line = renderLine(message, addressing);
+function renderText(message: AgentMessage, domain?: InstanceDomain): string {
+  const line = renderLine(message, domain);
   if (line !== undefined) return line;
 
   switch (message.role) {
@@ -111,7 +112,7 @@ function renderText(message: AgentMessage, addressing?: AddressingOptions): stri
 }
 
 /** 连续的 ishiki 消息合并为单条 user 消息；其余消息原样透传，并中断行序列。 */
-export function collapse(messages: readonly AgentMessage[], addressing?: AddressingOptions): AgentMessage[] {
+export function collapse(messages: readonly AgentMessage[], domain?: InstanceDomain): AgentMessage[] {
   const collapsed: AgentMessage[] = [];
   const lines: string[] = [];
   /** 当前这一段连续消息的寻址头；换频道即另起一段，于是头只在段首出现一次。 */
@@ -132,7 +133,7 @@ export function collapse(messages: readonly AgentMessage[], addressing?: Address
       names.set(data.user.id, displayName(data.user));
     }
 
-    const parts = addressParts(message, addressing, names);
+    const parts = addressParts(message, domain, names);
     if (parts === undefined) {
       flush();
       collapsed.push(message);
@@ -167,17 +168,17 @@ function lastCompact(entries: readonly AgentEntry[]): AgentEntry<"ishiki.compact
  * 切点必须落在 user / custom 行上：截断 tool call / tool result 配对会被提供商拒绝，所以工具轨迹整段留在切点之后。
  * 没有这样的点返回 -1。
  */
-function findCut(tail: readonly AgentEntry[], head: number, target: number, addressing?: AddressingOptions): number {
+function findCut(tail: readonly AgentEntry[], head: number, target: number, domain?: InstanceDomain): number {
   let suffix = 0;
   for (const entry of tail) {
-    if (entry.type === "message") suffix += renderText(entry.data, addressing).length;
+    if (entry.type === "message") suffix += renderText(entry.data, domain).length;
   }
 
   for (let at = 0; at < tail.length; at += 1) {
     const entry = tail[at];
     if (!(entry.type === "message")) continue;
     if ((entry.data.role === "user" || entry.data.role === "custom") && head + suffix <= target) return at;
-    suffix -= renderText(entry.data, addressing).length;
+    suffix -= renderText(entry.data, domain).length;
   }
 
   return -1;
@@ -196,8 +197,8 @@ function findCut(tail: readonly AgentEntry[], head: number, target: number, addr
 export class StandardContextEngine extends ContextEngine<"standard"> {
   private agent?: Agent;
   private readonly logger?: Logger;
-  /** 装配侧按形态给定的寻址头；缺省即单频道视窗，行不带坐标。 */
-  private readonly addressing?: AddressingOptions;
+  /** 本实例的可见域；缺省即单频道视窗，行不带坐标。 */
+  private readonly domain?: InstanceDomain;
   private readonly ceiling: number;
   private readonly target: number;
   /** 上一次装配是否超预算：后台压缩的触发条件。 */
@@ -210,7 +211,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
     super("standard", { maxChars, refillRatio });
     this.logger = options.logger;
-    this.addressing = options.addressing;
+    this.domain = options.domain;
     this.ceiling = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : 0;
     this.target = this.ceiling * refillRatio;
     if (this.ceiling === 0) this.logger?.warn("context budget disabled: maxChars is non-positive, compaction off");
@@ -240,7 +241,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
 
     let size = head.length;
     for (const entry of tail) {
-      if (entry.type === "message") size += renderText(entry.data, this.addressing).length;
+      if (entry.type === "message") size += renderText(entry.data, this.domain).length;
     }
     if (size <= this.ceiling) {
       this.over = false;
@@ -248,7 +249,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     }
 
     this.over = true;
-    const cut = findCut(tail, head.length, this.target, this.addressing);
+    const cut = findCut(tail, head.length, this.target, this.domain);
     if (cut < 0) {
       this.logger?.warn("context over budget with no valid cut point, entries passed through");
       return this.prepend(head, [...tail]);
@@ -256,7 +257,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     return this.prepend(head, tail.slice(cut));
   };
 
-  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages, this.addressing);
+  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages, this.domain);
 
   /** 后台：一轮结束后，若刚才是超预算装配的，把切掉的那段并进摘要。不阻塞轮次结束。 */
   onTurnFinish = (): void => {
@@ -284,7 +285,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     const tail = memory === undefined ? entries : entries.slice(anchor + 1);
     const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
 
-    const cut = findCut(tail, head.length, this.target, this.addressing);
+    const cut = findCut(tail, head.length, this.target, this.domain);
     const dropped = cut > 0 ? tail.slice(0, cut).filter((e) => e.type === "message") : [];
     if (dropped.length === 0) {
       // 没有可切的点，或切出来没有可见行：等下一次装配重新判定。
@@ -312,7 +313,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     const agent = this.agent;
     if (agent === undefined) return undefined;
 
-    const material = dropped.map((entry) => renderText(entry.data, this.addressing)).join("\n");
+    const material = dropped.map((entry) => renderText(entry.data, this.domain)).join("\n");
     const prompt = [
       "将新增记录并入既有摘要，输出更新后的摘要。",
       "保留后续仍需的信息：事实、约定、关系与称谓的变化、未完成事项、对方偏好。",

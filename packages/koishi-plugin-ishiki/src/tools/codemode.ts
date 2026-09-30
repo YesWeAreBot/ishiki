@@ -47,7 +47,7 @@ const BOTH_REACHABLE: readonly string[] = ["send_message"];
 const DIRECT_ONLY: readonly string[] = ["finish"];
 
 /** 代码模式在工具面上的一次装配：多出来的那件工具，加上把宿主工具收窄的调用者表。 */
-export interface CodemodeAssembly {
+export interface CodemodeSurface {
   /** 交给 agent 的沙箱工具。 */
   tool: Tool;
   /**
@@ -61,7 +61,7 @@ export interface CodemodeAssembly {
  * 按配置装配代码模式。宿主工具不由这里交给它——那件工具由 SDK 在生成时绑定，
  * 这里只声明「谁能调谁」与造出沙箱本身。
  */
-export function assembleCodemode(config: CodemodeConfig, tools: ToolSet): CodemodeAssembly {
+export function createCodemode(config: CodemodeConfig, tools: ToolSet): CodemodeSurface {
   const direct = new Set([...DIRECT_ONLY, ...config.direct]);
   const callers: ToolCallers = {};
   for (const name of Object.keys(tools)) {
