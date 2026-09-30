@@ -11,7 +11,6 @@ import {
   type AgentStorage,
   type LanguageModel,
   type LanguageModelUsage,
-  type ToolCallers,
   type ToolSet,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
@@ -20,9 +19,18 @@ import { parse } from "yaml";
 
 import { contextEngineServiceName, type ContextEngine, type ContextEngineInstance, type ContextEngines } from "./context/index.js";
 import type { InstanceDomain } from "./domain.js";
-import type { ExtensionCoords, ExtensionProvider } from "./extension.js";
+import { type Disposer, type ExtensionHandler, type ExtensionService, extensionServiceName } from "./extension.js";
 import { FailoverModel } from "./failover.js";
-import { claimsChannel, engineParams, matchSceneSpec, resolveProfile, sceneDirectoryName, type ResolvedPreset, type SceneSpec } from "./profile.js";
+import {
+  claimsChannel,
+  engineParams,
+  matchSceneSpec,
+  resolveProfile,
+  sceneDirectoryName,
+  type CodemodeConfig,
+  type ResolvedPreset,
+  type SceneSpec,
+} from "./profile.js";
 import { toolcallEngineServiceName, type ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
 import { CODE_MODE, createCodemode } from "./tools/codemode.js";
 import { createFinish } from "./tools/finish.js";
@@ -69,16 +77,25 @@ export interface AgentRuntimeConfig {
   /** 该频道的独立目录，存放 `events.jsonl` 及后续的附件。 */
   directory: string;
   model: LanguageModel;
+  /** 平台能力与其它 Koishi 服务的入口；扩展包经 {@link AgentRuntime.addTools} 一类的挂载面用到它。 */
+  ctx: Context;
+  /** 本实例的可见域。 */
+  domain: InstanceDomain;
+  /** 基础提示词：内核那一段（身份与处境），聚合形态的地址簿跟在后面。扩展包的在它们之后。 */
   instructions: string;
   /** 上下文引擎运行体：由所属生效单位从 provider 造好后传进来，一个 agent 一份。 */
   context: ContextEngineInstance;
-  /** 该实例可用的工具集，由容器按 spec 与该频道装配。 */
+  /** 内核工具面（`send_message` 与 `finish`）。扩展包在构造期间往这里加，加完才算定。 */
   tools: ToolSet;
   /**
-   * 哪些工具可以被谁调用，代码模式用：`{ search: ['code_mode'] }` 让沙箱里的程序能调 search，
-   * 而模型的工具目录里没有它。表里没点名的工具既留在目录也不进沙箱，所以直调不必写进来。
+   * 本实例启用的扩展包，按 preset 配置里的书写顺序。包名到 provider 的解析由所属生效单位完成，
+   * 这里只按顺序各叫一次 `provide()`。
    */
-  toolCallers?: ToolCallers;
+  extensions: Array<{ handler: ExtensionHandler; config: unknown }>;
+  /** 是否给整份工具面前置 `inner_thoughts`；扩展包加的工具一并覆盖。 */
+  innerThoughts: boolean;
+  /** 代码模式配置；收窄在扩展包加完工具之后进行，所以包的工具也进得了沙箱表。 */
+  codemode: CodemodeConfig;
   /** 唤醒引擎运行体：本实例一份，账本只记本视窗的事实流。 */
   wakeup: WakeupEngineInstance;
   logger: Logger;
@@ -193,12 +210,24 @@ export class AgentRuntime {
   readonly channelId: string;
   readonly directory: string;
   readonly storage: AgentStorage;
+  /** 平台能力与其它 Koishi 服务的入口。扩展包挂载期间经它取用别的服务。 */
+  readonly ctx: Context;
+  /** 本实例的可见域：单频道视窗给出那个频道，聚合视窗给出认领的账号与各自名单。 */
+  readonly domain: InstanceDomain;
 
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
   private readonly agent: Agent;
   /** 唤醒引擎这次挂载的拆卸函数：场景停止时调它，取消订阅并丢掉这次挂载攒下的账。 */
   private readonly disposeWakeup?: () => void;
+  /** 装配期的工具面：内核工具先落进来，扩展包逐个往上加，加完才交给 core。 */
+  private readonly tools: ToolSet;
+  /** 扩展包交回来的提示词段，按包的挂载顺序；收尾时接在内核那一段与地址簿之后。 */
+  private readonly addedTexts: string[] = [];
+  /** 扩展包各自交回的拆卸函数，按挂载先后入队；停止时逆序执行，先挂的后拆。 */
+  private readonly disposers: Disposer[] = [];
+  /** 装配是否仍在进行：只在这段里 `addTools` / `addInstructions` 可用，Agent 诞生后工具面即固定。 */
+  private assembling = true;
   /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
   private readonly toolStartedAt = new Map<string, number>();
   private readonly stepStartedAt = new Map<string, number>();
@@ -207,27 +236,69 @@ export class AgentRuntime {
     this.label = config.label;
     this.channelId = config.channelId;
     this.directory = config.directory;
+    this.ctx = config.ctx;
+    this.domain = config.domain;
     this.logger = config.logger;
     this.wakeup = config.wakeup;
 
     mkdirSync(this.directory, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.directory, "events.jsonl"));
+
+    // 扩展包在 Agent 诞生之前加法：工具面与提示词都还没定下来，撞名在这里抛，
+    // 代码模式的收窄表也还看得见包加的工具。往后这个口就关了——工具面在实例生命周期内固定。
+    this.tools = { ...config.tools };
+    for (const { handler, config: presetConfig } of config.extensions) {
+      try {
+        const dispose = handler(presetConfig, this);
+        if (dispose !== undefined) this.disposers.push(dispose);
+      } catch (error) {
+        // 装配失败就等于这个实例从未存在：已拿到拆卸函数的挂载按逆序拆掉，不给包留悬挂的引用。
+        // 包自己在返回拆卸函数之前开的资源由它自己负责——内核拿不到拆卸函数就拆不了。
+        for (const dispose of this.disposers.splice(0).reverse()) dispose();
+        throw error;
+      }
+    }
+
+    const base = config.innerThoughts ? withInnerThoughts(this.tools, this.logger) : this.tools;
+    // 代码模式只改工具面：宿主工具一件不动，模型目录收窄成只剩沙箱那一件。
+    // 收窄与沙箱工具是同一次装配的两半——表里点名的进沙箱，没点名的留在目录。
+    const sandbox = config.codemode.enable ? createCodemode(config.codemode, base) : undefined;
+
     this.agent = createAgent({
       id: this.label,
       model: config.model,
-      instructions: config.instructions,
+      instructions: [config.instructions, ...this.addedTexts].filter((text) => text.length > 0).join("\n\n"),
       storage: this.storage,
       // core 只见一个插件：上下文引擎与停轮判定在这一点收拢。
       plugins: [createAgentPlugin({ context: config.context })],
-      tools: config.tools,
+      tools: sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool },
       // core 的配置字段叫 toolCallers；它转发给 streamText 时才改名为 experimental_toolCallers。
-      ...(config.toolCallers === undefined ? {} : { toolCallers: config.toolCallers }),
+      ...(sandbox === undefined ? {} : { toolCallers: sandbox.callers }),
     });
+    this.assembling = false;
 
     // 引擎自己订阅事实流、读存储；运行时不替它转述发生了什么，也不告诉它记账归谁——
     // 账的归属由事实流里每条消息自带的频道号给出，跨频道聚合与单频道走同一份代码。
     this.disposeWakeup = config.wakeup.attach?.(this.agent);
     this.agent.channel.subscribe("agent", (event) => this.logEvent(event));
+  }
+
+  /**
+   * 往本实例的工具面加一组工具：与内核工具或先挂的包撞名在这里抛错，不静默覆盖。
+   * 只在装配期（Agent 诞生之前）可用，之后工具面固定。
+   */
+  addTools(tools: ToolSet): void {
+    if (!this.assembling) throw new Error(`[${this.label}] tools are fixed once the agent exists`);
+    for (const [name, value] of Object.entries(tools)) {
+      if (name in this.tools) throw new Error(`tool "${name}" is already provided`);
+      this.tools[name] = value;
+    }
+  }
+
+  /** 追加一段系统提示词，位置在内核那一段与地址簿之后；按 {@link AgentRuntimeConfig.extensions} 的顺序接续。 */
+  addInstructions(instructions: string): void {
+    if (!this.assembling) throw new Error(`[${this.label}] instructions are fixed once the agent exists`);
+    if (instructions.length > 0) this.addedTexts.push(instructions);
   }
 
   /**
@@ -299,6 +370,8 @@ export class AgentRuntime {
   async stop(): Promise<void> {
     this.disposeWakeup?.();
     await this.agent.stop();
+    // 逆序拆：后挂的包可能用着先挂的包开的资源，先挂的拆了就悬空。
+    for (const dispose of this.disposers.splice(0).reverse()) await dispose();
   }
 }
 
@@ -344,6 +417,7 @@ export class ProfileRuntime {
     const preset = new PresetRuntime({
       name: load.name,
       specs: load.specs,
+      extensions: load.extensions,
       directory: this.directory,
       scenesDir: this.scenesDir,
       ctx: this.ctx,
@@ -393,6 +467,8 @@ export interface PresetRuntimeOptions {
   name: string;
   /** 本 preset 的装配清单；加载后不变。 */
   specs: SceneSpec[];
+  /** 本 preset 启用的扩展包：包名到 `config` 原样内容，按书写顺序。 */
+  extensions: Record<string, unknown>;
   /** 所属 profile 的目录：事实根与人设都在这里。 */
   directory: string;
   /** 实例根目录：`<profileDir>/scenes`。 */
@@ -409,6 +485,8 @@ export class PresetRuntime {
   readonly name: string;
 
   private readonly specs: SceneSpec[];
+  /** 启用的扩展包，包名到 config；provider 每次实例化时现取，服务因此不必被 preset 记住。 */
+  private readonly extensions: Record<string, unknown>;
   private readonly directory: string;
   private readonly scenesDir: string;
   private readonly ctx: Context;
@@ -420,6 +498,7 @@ export class PresetRuntime {
   constructor(options: PresetRuntimeOptions) {
     this.name = options.name;
     this.specs = options.specs;
+    this.extensions = options.extensions;
     this.directory = options.directory;
     this.scenesDir = options.scenesDir;
     this.ctx = options.ctx;
@@ -497,35 +576,18 @@ export class PresetRuntime {
       finish: createFinish(),
     };
 
-    // 扩展包的加法：一个包对这一个实例叫一次。只在装配点问，实例活着期间不再问——包的判断是
-    // 实例级的，没有按调用变化的输入，所以它拿到的坐标是常量，工具也不需要上下文参数。
-    const addedTexts: string[] = [];
     const domain: InstanceDomain = cross
       ? { form: "cross", accounts: Object.entries(claims).map(([sid, claim]) => ({ sid, claim })) }
       : { form: "channel", platform: address.platform, selfId: address.selfId, channelId };
-    const coords: ExtensionCoords = { ctx: this.ctx, domain, directory };
-    for (const pkg of spec.extends) {
-      const service = this.ctx.get(`ishiki.ext.${pkg}`) as { extend?: ExtensionProvider } | undefined;
-      if (service === undefined || service.extend === undefined) {
-        // 只登记引擎变体的包没有这个成员。记一条，好把「包选错了」与「成员名拼错了」分开。
-        this.logger.debug(`[${spec.profile}/${spec.name}] extension "${pkg}" exposes no extend()`);
-        continue;
-      }
-      const added = service.extend(coords);
-      // 返回 undefined 是包的正常回答（这个实例用不上我），不是失败：每频道的过滤归包自己。
-      if (added === undefined) continue;
-      for (const [name, value] of Object.entries(added.tools ?? {})) {
-        if (name in baseTools) throw new Error(`tool "${name}" from extension "${pkg}" is already provided`);
-        baseTools[name] = value;
-      }
-      if (added.instructions !== undefined && added.instructions.length > 0) addedTexts.push(added.instructions);
-    }
 
-    const base = spec.innerThoughts ? withInnerThoughts(baseTools, this.logger) : baseTools;
-    // 代码模式只改工具面：宿主工具一件不动，模型目录收窄成只剩沙箱那一件。
-    // 收窄与沙箱工具是同一次装配的两半——表里点名的进沙箱，没点名的留在目录。
-    const sandbox = spec.codemode.enable ? createCodemode(spec.codemode, base) : undefined;
-    const tools: ToolSet = sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool };
+    // 扩展包按 preset 配置里的书写顺序挂到这一个实例上。取不到服务只有一种可能：这条 fiber 已经
+    // 把它声明为依赖，装配次序错了，或服务卸载后旧引用还在用。抛错，不静默跳过。
+    const extensions = Object.entries(this.extensions).map(([pkg, config]) => {
+      const service = extensionServiceName(pkg);
+      const handler = (this.ctx.get(service) as ExtensionService | undefined)?.handler;
+      if (handler === undefined) throw new Error(`extension service "${service}" is not available`);
+      return { handler, config };
+    });
 
     // 引擎在这里从各自的 provider 诞生，随本实例同生共死：provider 只管造，运行状态都在运行体里，
     // 上下文引擎记着本实例的 agent 与压缩水位，唤醒引擎的账本只看本视窗的事实流，不跨实例共享。
@@ -551,8 +613,6 @@ export class PresetRuntime {
         ].join("\n"),
       );
     }
-    instructionTexts.push(...addedTexts);
-
     const scene = new AgentRuntime({
       label: cross ? `${spec.profile}/${spec.name}` : `${spec.profile}/${spec.name}/${channelId}`,
       channelId,
@@ -561,6 +621,8 @@ export class PresetRuntime {
       // 聚合形态把可达地址清单拼进 instructions：坐标不进工具 schema（每个工具都挂一份会让工具目录膨胀），
       // 模型的出发点只有系统提示与事实行上的寻址头。非聚合形态照旧不带地址簿。
       instructions: instructionTexts.filter((text) => text.length > 0).join("\n\n"),
+      ctx: this.ctx,
+      domain,
       context: engineProvider<ContextEngine>(this.ctx, contextEngineServiceName(spec.context.engine)).create(engineParams<ContextEngines>(spec.context), {
         logger: this.logger,
         gateway: this.gateway,
@@ -569,8 +631,10 @@ export class PresetRuntime {
         // 多频道视窗一块吃下多个频道，事实行不带坐标就分不清谁说的；单频道即无寻址头。
         domain,
       }),
-      tools,
-      ...(sandbox === undefined ? {} : { toolCallers: sandbox.callers }),
+      tools: baseTools,
+      extensions,
+      innerThoughts: spec.innerThoughts,
+      codemode: spec.codemode,
       wakeup: engineProvider<WakeupEngine>(this.ctx, wakeupEngineServiceName(spec.wakeup.engine)).create(engineParams<WakeupEngines>(spec.wakeup), {
         logger: this.logger,
       }),
@@ -592,22 +656,23 @@ function readSnippet(file: string): string | undefined {
  * 依赖决定这条 fiber 何时激活：服务缺席时停在非激活态，来了自动装载。
  */
 export interface PresetLoad extends ResolvedPreset {
-  /** 依赖的服务名：各 spec `extends` 选中的扩展包，加上各 spec 最终用到的三个引擎变体。 */
+  /** 依赖的服务名：启用的扩展包，加上各 spec 最终用到的三个引擎变体。 */
   services: string[];
 }
 
 /**
- * 算一个 preset 依赖的服务：扩展包（`ishiki.ext.<包名>`）与每个最终 spec 的三个引擎变体。
- * 从展开后的 spec 扫描而不是读 preset 原始配置——scene 覆盖出来的引擎也算这个 preset 的依赖。
+ * 算一个 preset 依赖的服务：启用的扩展包与每个最终 spec 的三个引擎变体。
+ * 引擎从展开后的 spec 扫描而不是读 preset 原始配置——scene 覆盖出来的引擎也算这个 preset 的依赖。
+ * 扩展包在展开时已滤掉 `enable: false` 的项，剩下的逐个都是必需依赖：没有可选包这条线。
  */
-function presetServices(specs: readonly SceneSpec[]): string[] {
+function presetServices(preset: ResolvedPreset): string[] {
+  const specs = preset.specs;
   const names = specs.flatMap((spec) => [
-    ...spec.extends.map((pkg) => `ishiki.ext.${pkg}`),
     contextEngineServiceName(spec.context.engine),
     wakeupEngineServiceName(spec.wakeup.engine),
     toolcallEngineServiceName(spec.toolcall.engine),
   ]);
-  return [...new Set(names)];
+  return [...new Set([...Object.keys(preset.extensions).map(extensionServiceName), ...names])];
 }
 
 /** 一份装载就绪的 profile：preset 分组已展开，尚未实例化——每个 preset 等自己依赖的服务就位。 */
@@ -642,7 +707,8 @@ export function loadProfiles(root: string, logger: Logger): ProfileLoad[] {
         presets: resolved.presets.map((preset) => ({
           name: preset.name,
           specs: preset.specs,
-          services: presetServices(preset.specs),
+          extensions: preset.extensions,
+          services: presetServices(preset),
         })),
       });
     } catch (error) {

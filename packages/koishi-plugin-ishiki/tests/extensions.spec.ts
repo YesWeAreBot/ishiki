@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { createCustomMessage, MockLanguageModelV4 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import { Context, Logger, Service, sleep } from "koishi";
+import { Context, Logger, sleep } from "koishi";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ContextEngine, contextEngineServiceName, type ContextEngineInstance } from "../src/context/engine.js";
@@ -80,12 +80,11 @@ class PlainContextEngine extends ContextEngine<"rolling"> {
  */
 function extensionPackage(plugin: RollingPluginConfig = { endpoint: "provider-value" }) {
   return function nekoTools(ctx: Context) {
-    class NekoTools extends Service {
-      constructor(c: Context) {
-        super(c, "ishiki.ext.neko-tools");
-      }
-    }
-    new NekoTools(ctx);
+    // 这个包没有 `extends` 加法，只有引擎 provider：服务上挂一个什么都不做的 handler。
+    ctx.on(
+      "dispose",
+      ctx.ishiki.provide("neko-tools", () => undefined),
+    );
     new RollingContextEngine(ctx, plugin);
     new PlainContextEngine(ctx, plugin);
   };
@@ -127,15 +126,11 @@ function message(channelId: string, id: string) {
 interface ProfileOptions {
   /** 该 preset 使用的上下文引擎；缺省即内置的 standard。 */
   context?: string;
-  /** 写进 profile 的扩展包清单。 */
-  extendsPackages?: string[];
-  /** 兄弟 preset：只用内置引擎，用来验错误隔离。 */
-  sibling?: boolean;
 }
 
 /** 写一份 profile：preset 用一个（可能是社区包提供的）上下文引擎变体。 */
 function writeProfile(root: string, directory: string, id: string, options: ProfileOptions = {}): void {
-  const { context = "standard", extendsPackages = [], sibling = false } = options;
+  const { context = "standard" } = options;
   mkdirSync(path.join(root, directory), { recursive: true });
   writeFileSync(
     path.join(root, directory, "profile.yml"),
@@ -144,13 +139,11 @@ function writeProfile(root: string, directory: string, id: string, options: Prof
       "presets:",
       "  chat:",
       "    model: test:model",
-      ...(extendsPackages.length === 0 ? [] : [`    extends: [${extendsPackages.join(", ")}]`]),
       `    context: { engine: "${context}" }`,
       "    scenes:",
       "      dms:",
       "        sid: onebot:1",
       "        whitelist: ['private:*']",
-      ...(sibling ? ["  plain:", "    model: test:model", "    scenes:", "      rooms:", "        sid: onebot:1", "        whitelist: ['group:*']"] : []),
     ].join("\n"),
   );
 }

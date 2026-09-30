@@ -1,44 +1,42 @@
-import type { ToolSet } from "@yesimagent/core";
-import type { Context } from "koishi";
+import { Service, type Context } from "koishi";
 
-import type { InstanceDomain } from "./domain.js";
+import type { AgentRuntime } from "./runtime.js";
 
-/**
- * 扩展包：一个 Koishi 插件，以 `ishiki.ext.<包名>` 提供服务，由 preset 的 `extends` 选中。
- *
- * 一个包对内核只有两件事可说：给自己的引擎变体建一个 provider 服务（见各 `engine.ts` 的 provider 基类），
- * 以及对一个 AgentRuntime 做加法（本文件）。两件事互不依赖，包可以只做其中一件。
- */
-
-/** 一个 AgentRuntime 诞生时，内核交给扩展包的实例级常量。 */
-export interface ExtensionCoords {
-  /**
-   * 平台能力与其它 Koishi 服务的入口，例如 `ctx.bots`、`ctx.http`。
-   * 内核不另造一层能力面：插件是 Koishi 插件，手上本来就有 ctx；缺的只有实例坐标。
-   */
-  ctx: Context;
-  /** 这个实例的可见域。 */
-  domain: InstanceDomain;
-  /** 本实例的数据目录；包自己的文件放在自己的子目录里，随实例生灭。 */
-  directory: string;
+/** 扩展包对应的服务名；与引擎族同一写法，可用性只由这个名字对应的服务是否存在决定。 */
+export function extensionServiceName(name: string): string {
+  return `ishiki.ext.${name}`;
 }
 
-/**
- * 扩展包对某一个实例做的加法。只有加，没有决策。
- *
- * 上下文管线的改写段（`onAppend` / `transformEntries` / `transformMessages`）与唯一的收尾、
- * 停轮判定都不在这里：前者同一条线上只能有一个引擎，后者没有共同正确的合成语义，
- * 社区面一拿到就是 `priority` 抢权的复辟（03 号文被否定前提 4）。
- *
- * 包的成员写成 `extend(coords: ExtensionCoords): Extension | undefined`，
- * 返回 `undefined` 表示这个实例用不上它（每频道的过滤归包自己）。
- */
-export interface Extension {
-  /** 并入本实例的工具面；与内核工具或先装配的包撞名在装配点抛错。 */
-  tools?: ToolSet;
-  /** 追加到本实例系统提示词的最后一段。 */
-  instructions?: string;
-}
+/** 拆卸函数：可以不返回，也可以返回一个 promise。 */
+export type Disposer = () => void | Promise<void>;
 
-/** 扩展包在服务上暴露的成员：内核在装配点对每个实例叫一次。缺这个成员表示这个包只提供引擎变体。 */
-export type ExtensionProvider = (coords: ExtensionCoords) => Extension | undefined;
+/**
+ * 扩展包的挂载函数，由 `ctx.ishiki.provide(name, handler)` 登记。
+ *
+ * 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次，同步。实例已初始化基础字段、
+ * 尚未创建 `Agent`：加法只能经 `addTools` / `addInstructions`，坐标在 `ctx` / `domain` / `directory` 上。
+ * 这个实例用不上这个包，就什么都不调。
+ *
+ * 返回值是这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词本身不撤销——它们随实例一起消失，
+ * 工具面在实例生命周期内固定，逐项回删没有使用者。
+ * 包若在返回拆卸函数之前打开了外部资源，失败路径的清理由包自己负责：内核只拆已经拿到拆卸函数的那几次挂载。
+ */
+export type ExtensionHandler = (presetConfig: unknown, runtime: AgentRuntime) => void | Disposer;
+
+/**
+ * 扩展包在服务上挂的东西：一个 handler。仅此而已。
+ *
+ * 服务本身是扩展可用性的唯一事实来源：`ishiki.ext.<包名>` 在，依赖它的 preset 才激活。
+ * 生命周期归调用方——`ctx.ishiki.provide()` 建的这条 fiber 挂在调用方那条上，
+ * 因此 `ctx.on("dispose", disposer)` 是归属声明，不是可选的卫生习惯。
+ * 不从包入口导出：扩展作者拿到的是 `provide()` 返回的注册 disposer 与这里的 handler 签名。
+ */
+export class ExtensionService extends Service {
+  constructor(
+    ctx: Context,
+    name: string,
+    public readonly handler: ExtensionHandler,
+  ) {
+    super(ctx, extensionServiceName(name));
+  }
+}

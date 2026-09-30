@@ -12,18 +12,28 @@
 
 社区面除了注册引擎变体，还有一件加法：包对某一个 AgentRuntime 提供工具与提示词。
 
-**注册**：不走注册动词，也不新开注册表。工具不从配置按名查找，配置只写 `extends: [包名]`，服务名 `ishiki.ext.<包名>` 已经是准入门；服务本身就是登记处。包在服务上暴露一个成员：
+**注册**：不走注册动词，也不新开注册表。工具不从配置按名查找，配置只写 `extends` 的包名，服务名 `ishiki.ext.<包名>` 已经是准入门；服务本身就是登记处。包在服务上暴露一个成员：
 
 ```ts
-extend(coords: ExtensionCoords): Extension | undefined
+class NekoTools extends ExtensionProvider {
+  constructor(ctx: Context, pluginConfig: PluginConfig) {
+    super(ctx, "neko-tools");
+  }
+
+  provide(presetConfig: unknown, runtime: AgentRuntime): () => void {
+    runtime.addTools(createTools(presetConfig, runtime.domain));
+    runtime.addInstructions("...");
+    return () => client.close();
+  }
+}
 ```
 
-- 内核在装配点（`ensure()`）对每个生效单位叫一次，**同步**；异步准备在包的 apply 期做完。
-- 成员缺席表示这个包只提供引擎变体：跳过，记一条 debug（好把「包选错了」与「成员名拼错了」分开）。
-- 返回 `undefined` 是包的正常回答（这个实例用不上我），不是失败。每频道的过滤归包自己。
-- 实例活着期间不再问：包的判断是实例级的，没有按调用变化的输入，所以工具不带上下文参数。
+- 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次，**同步**；异步准备在包的 apply 期做完。
+- `provide` 拿到的是已初始化基础字段、尚未创建 `Agent` 的实例。`agent` 本身碰不到，加法只能经 `addTools` / `addInstructions`；两者只在装配期可用，之后工具面固定，Agent 诞生后再调抛错。
+- 每频道的过滤归包自己：包看着 `runtime.domain` 决定这档要不要加，不加就什么都不调。
+- 返回值是这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们随实例一起消失。
 
-**坐标**（`ExtensionCoords`）只有三样：`{ ctx, domain, directory }`。
+**坐标**从实例上直接取：`runtime.ctx`、`runtime.domain`、`runtime.directory`。
 
 - `ctx`：平台能力与其它 Koishi 服务的入口。内核不另造能力面——插件是 Koishi 插件，手上本来就有 `ctx`，缺的只有实例坐标。
 - `domain`：本实例的可见域，形态进判别式。单频道形态给 `{ form: "channel", platform, selfId, channelId }`（取自路由已知的事件寻址）；聚合形态给 `{ form: "cross", accounts: [{ sid, claim }] }`，`sid` 就是配置面 `claims` 的键本身。从 sid 反推 platform 与 selfId 是 00 号文第 6 条禁止的那件事，所以两种形态各给自己手上那份。
@@ -37,7 +47,7 @@ extend(coords: ExtensionCoords): Extension | undefined
 
 **出站**：包有 `ctx`，要发消息就能发，内核不铺路也不设闸；但停轮判定只认内核的 `finish` 与 `send_message`，包的工具落在「其他工具 → 续轮」，包自己发的消息不结束轮次。
 
-**代价**：贡献物的错误只能在实例诞生时暴露（重名、`extend` 抛错）。引擎的准入在装载期查得出来（名字带前缀），贡献物查不出来，因为它依赖实例坐标——这是「实例按需诞生」的必然。
+**代价**：贡献物的错误只能在实例诞生时暴露（重名、`provide()` 抛错）。引擎变体的准入在装载期只看服务在不在，贡献物查不出来，因为它依赖实例坐标——这是「实例按需诞生」的必然。
 
 ## 被否定的前提
 
@@ -94,7 +104,8 @@ Runtime  运行层   AgentRuntime 实例（原 SceneRuntime 更名），按 spec
 ```yaml
 presets:
   chat: # 心智基线
-    extends: [neko-tools] # 缺省 []：只用内核机制
+    extends: # 缺省不写：只用内核机制
+      neko-tools: # 只写包名即启用
     model: gpt-4o
     context: { engine: standard }
     scenes: # 挂靠：归属由结构声明
@@ -108,7 +119,12 @@ presets:
 
   fused: # cross preset：自身即生效单位
     cross: true
-    extends: [neko-tools]
+    extends:
+      neko-tools:
+        config: # 原样递给 provide()，字段含义由包自己解释
+          maxResults: 20
+      vision-pack:
+        enable: false # 认识但这一档不要：不依赖、不等待、不调用
     model: gpt-4o
     claims:
       "onebot:111": { whitelist: ["group:111_ops", "group:111_chat"] }
@@ -123,7 +139,7 @@ presets:
 - `cross: true` 且写了 `scenes` → 报错（互斥）；缺 `claims` → 报错。
 - 普通 scene 缺 `sid` / `whitelist` → 报错（现状规则平移）。
 - 频道认领冲突（scene matchlist 与 cross claims 交叉、兄弟 scene 交叉）→ 报错（沿用「同一频道只归一个 scene」）。
-- `extends` 引用未安装的包、引擎变体名拼错、变体所属包未选中 → 报错。
+- `extends` 引用未安装的包（记 error，preset 停在等待态，服务到了自动激活）→ 报错；`enable: false` 的包既不依赖也不校验。引擎变体名拼错 → 报错。
 
 已知代价（接受）：scene 标识从 `profile/scene` 变为 `profile/preset/scene`（目录名仍可用 scene 名，profile 内唯一性由树位置保证；日志 label 用全路径）。配置文件不进 WebUI，四层嵌套不构成编辑体验问题。
 

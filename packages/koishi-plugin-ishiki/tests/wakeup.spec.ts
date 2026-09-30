@@ -220,9 +220,14 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
         directory,
         model,
         instructions: "",
+        // 这个用例只送事实行，平台能力用不上：给一个空壳，装配期没有扩展包会碰它。
+        ctx: {} as Context,
+        domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
         context,
-
         tools: {},
+        extensions: [],
+        innerThoughts: false,
+        codemode: { enable: false, direct: [], timeoutMs: 30_000 },
         wakeup,
         logger,
       });

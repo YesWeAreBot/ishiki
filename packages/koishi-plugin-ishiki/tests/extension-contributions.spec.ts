@@ -14,59 +14,60 @@ import {
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import { Context, Service, sleep, type Logger } from "koishi";
+import { Context, sleep, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { Extension, ExtensionCoords } from "../src/extension.js";
+import type { ExtensionHandler } from "../src/extension.js";
 import Ishiki from "../src/index.js";
-import { activateProfiles, loadProfiles, type ProfileRuntime } from "../src/runtime.js";
+import { activateProfiles, loadProfiles, type AgentRuntime, type ProfileRuntime } from "../src/runtime.js";
 
 // ── 社区扩展包 ──
 
-/** 内核实际交出去的坐标：断言落在装配点给出的事实上。 */
-const calls: ExtensionCoords[] = [];
-/** 这个包这次怎么回答：加东西，还是说这个实例用不上我。 */
-let answering: "add" | "decline" = "add";
-/** 贡献的工具名；撞名用例把它改成内核工具名。 */
+/** 每次 `provide()` 收到的坐标与配置：内核实际交出去的东西，断言只落在这些事实上。 */
+const calls: Array<{ domain: AgentRuntime["domain"]; directory: string; config: unknown; ctx: Context }> = [];
+/** 这个包这次交回来的工具名；撞名用例把它改成内核工具名。 */
 let probeName = "neko_probe";
+/** 包手上那个半构造的实例：装配结束后再动它，看内核是否守住工具面固定这条线。 */
+let mounted: AgentRuntime | undefined;
+
+/** 拆卸记录：实例停止时按逆序执行，每个包一条。 */
+const disposed: string[] = [];
 
 /**
- * 一个只做加法的扩展包：在 `ishiki.ext.neko-tools` 服务上暴露 `extend`。
- * 每次调用生成新的插件对象——cordis 对同一个插件对象重复 apply 会判重。
+ * 一个只做加法的扩展包：`ctx.ishiki.provide()` 登记 `ishiki.ext.neko-tools`，handler 在每个实例诞生时
+ * 被叫一次。包自己解释 `config`，内核只负责原样递过来。
  */
-function extensionPackage() {
+function extensionPackage(pkg = "neko-tools") {
   return function nekoTools(ctx: Context) {
-    class NekoTools extends Service {
-      constructor(c: Context) {
-        super(c, "ishiki.ext.neko-tools");
-      }
-
-      extend(coords: ExtensionCoords): Extension | undefined {
-        calls.push(coords);
-        if (answering === "decline") return undefined;
-        return {
-          tools: {
-            [probeName]: tool({
-              description: "探测",
-              inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
-              execute: async () => "ok",
-            }),
-          },
-          instructions: "本实例启用了 neko-tools。",
-        };
-      }
-    }
-    new NekoTools(ctx);
+    const handler: ExtensionHandler = (presetConfig, runtime) => {
+      calls.push({ domain: runtime.domain, directory: runtime.directory, config: presetConfig, ctx: runtime.ctx });
+      mounted = runtime;
+      const { label = pkg } = (presetConfig ?? {}) as { label?: string };
+      runtime.addTools({
+        [probeName]: tool({
+          description: "探测",
+          inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
+          execute: async () => "ok",
+        }),
+      });
+      runtime.addInstructions(`本实例启用了 ${label}。`);
+      return () => {
+        disposed.push(label);
+      };
+    };
+    // 归属声明：服务随这条 fiber 走。漏绑的话服务会活到 ishiki 自己 dispose。
+    ctx.on("dispose", ctx.ishiki.provide(pkg, handler));
   };
 }
 
 // ── 测试装配台 ──
 
+const logs: string[] = [];
 const logger = {
   info: () => undefined,
   debug: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
+  warn: (message: string) => logs.push(`warn ${message}`),
+  error: (message: string) => logs.push(`error ${message}`),
 } as unknown as Logger;
 
 const USAGE = {
@@ -120,28 +121,20 @@ function message(channelId: string, id: string, selfId = "1") {
   });
 }
 
-/** 普通 preset：一频道一实例，认领一个私聊。 */
-function writePlain(root: string, directory: string, id: string, withPackage: boolean): void {
+const SCENES = ["    scenes:", "      dms:", "        sid: onebot:1", "        whitelist: ['private:9']"];
+const WAKEUP = "    wakeup: { engine: standard, standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } }";
+
+/** 普通 preset：一频道一实例，认领一个私聊。`extends` 按 YAML 片段原样写进 preset 下。 */
+function writePlain(root: string, directory: string, id: string, extendsYaml: readonly string[] = []): void {
   mkdirSync(path.join(root, directory), { recursive: true });
   writeFileSync(
     path.join(root, directory, "profile.yml"),
-    [
-      `id: ${id}`,
-      "presets:",
-      "  chat:",
-      "    model: test:model",
-      ...(withPackage ? ["    extends: [neko-tools]"] : []),
-      "    wakeup: { engine: standard, standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } }",
-      "    scenes:",
-      "      dms:",
-      "        sid: onebot:1",
-      "        whitelist: ['private:9']",
-    ].join("\n"),
+    [`id: ${id}`, "presets:", "  chat:", "    model: test:model", ...extendsYaml, WAKEUP, ...SCENES].join("\n"),
   );
 }
 
 /** 聚合 preset：preset 自身即生效单位，claims 认领两个账号下的频道。 */
-function writeCross(root: string, directory: string, id: string, withPackage: boolean): void {
+function writeCross(root: string, directory: string, id: string, extendsYaml: readonly string[] = []): void {
   mkdirSync(path.join(root, directory), { recursive: true });
   writeFileSync(
     path.join(root, directory, "profile.yml"),
@@ -151,7 +144,7 @@ function writeCross(root: string, directory: string, id: string, withPackage: bo
       "  lounge:",
       "    model: test:model",
       "    cross: true",
-      ...(withPackage ? ["    extends: [neko-tools]"] : []),
+      ...extendsYaml,
       "    wakeup: { engine: standard, standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } }",
       "    claims:",
       '      "onebot:1": { whitelist: ["private:9", "group:2"] }',
@@ -175,7 +168,7 @@ async function close(rig: Stand, dir: string): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
 }
 
-describe("扩展包的贡献物：装配点、形态与准入", () => {
+describe("扩展包的挂载：provide、拆卸与准入", () => {
   let dataDir: string;
   let root: Context;
 
@@ -193,7 +186,7 @@ describe("扩展包的贡献物：装配点、形态与准入", () => {
   });
 
   /** 一份装配台：装好扩展包、装载 profile、备好记录提示词的模型。 */
-  async function stand(dir: string, withPackage: boolean): Promise<Stand> {
+  async function stand(dir: string, withPackage = true): Promise<Stand> {
     const fork = withPackage ? root.plugin(extensionPackage()) : undefined;
     await sleep(20);
     const prompts: string[] = [];
@@ -204,17 +197,21 @@ describe("扩展包的贡献物：装配点、形态与准入", () => {
     return { prompts, profiles, dispose: () => fork?.dispose() };
   }
 
-  it("选中的包把工具与提示词加进实例，单频道形态给的是那个具体频道", async () => {
+  it("provide 收到 preset 的 config 与实例坐标，加的工具与提示词一并进模型", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-plain-"));
-    writePlain(dir, "neko", "neko", true);
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:", "        config:", "          label: plain-pack"]);
     calls.length = 0;
-    answering = "add";
     probeName = "neko_probe";
-    const rig = await stand(dir, true);
+    const rig = await stand(dir);
     try {
       expect(rig.profiles).toHaveLength(1);
       const scene = rig.profiles[0]!.route(message("private:9", "hi"))!;
-      expect(calls.map((coords) => coords.domain)).toEqual([{ form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" }]);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.config).toEqual({ label: "plain-pack" });
+      expect(calls[0]!.domain).toEqual({ form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" });
+      expect(calls[0]!.ctx).toBe(root);
+      // 目录是本实例的：包自己的文件放这儿，随实例生灭。
+      expect(calls[0]!.directory).toBe(scene.directory);
 
       await scene.deliver(message("private:9", "hi"));
       await scene.idle();
@@ -222,7 +219,7 @@ describe("扩展包的贡献物：装配点、形态与准入", () => {
       // 模型看到的东西：包的工具在目录里、内核自己的工具没被挤掉、包那段文字在系统提示里。
       expect(toolCatalog(rig.prompts)).toContain("neko_probe");
       expect(toolCatalog(rig.prompts)).toContain("send_message");
-      expect(promptText(rig.prompts)).toContain("本实例启用了 neko-tools。");
+      expect(promptText(rig.prompts)).toContain("本实例启用了 plain-pack。");
     } finally {
       await close(rig, dir);
     }
@@ -230,12 +227,10 @@ describe("扩展包的贡献物：装配点、形态与准入", () => {
 
   it("聚合形态把认领的账号交给包，同一个实例只问一次", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-cross-"));
-    writeCross(dir, "lounge", "lounge", true);
+    writeCross(dir, "lounge", "lounge", ["    extends:", "      neko-tools:"]);
     calls.length = 0;
-    answering = "add";
-    const rig = await stand(dir, true);
+    const rig = await stand(dir);
     try {
-      expect(rig.profiles).toHaveLength(1);
       const profile = rig.profiles[0]!;
       const scene = profile.route(message("private:9", "hi"))!;
 
@@ -254,50 +249,247 @@ describe("扩展包的贡献物：装配点、形态与准入", () => {
     }
   });
 
-  it("包说用不上、或没被选中时，模型看到的工具面相同", async () => {
-    const declinedDir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-declined-"));
-    const absentDir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-absent-"));
-    writePlain(declinedDir, "neko", "neko", true);
-    writePlain(absentDir, "plain", "plain", false);
+  it("同一个包服务两个 preset：配置各归各的，一个停不影响另一个", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-shared-"));
+    mkdirSync(path.join(dir, "pair"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "pair", "profile.yml"),
+      [
+        "id: pair",
+        "presets:",
+        "  chat:",
+        "    model: test:model",
+        "    extends:",
+        "      neko-tools: { config: { label: chat-pack } }",
+        WAKEUP,
+        ...SCENES,
+        "  roleplay:",
+        "    model: test:model",
+        "    extends:",
+        "      neko-tools: { config: { label: roleplay-pack } }",
+        WAKEUP,
+        "    scenes:",
+        "      rooms:",
+        "        sid: onebot:1",
+        "        whitelist: ['private:5']",
+      ].join("\n"),
+    );
     calls.length = 0;
-    answering = "decline";
-    probeName = "neko_probe";
-    const declined = await stand(declinedDir, true);
-    const absent = await stand(absentDir, false);
+    const rig = await stand(dir);
     try {
-      expect(declined.profiles).toHaveLength(1);
-      expect(absent.profiles).toHaveLength(1);
+      const profile = rig.profiles[0]!;
+      const chat = profile.route(message("private:9", "hi"))!;
+      const roleplay = profile.route(message("private:5", "hi"))!;
+      expect(chat).not.toBe(roleplay);
+      expect(calls.map((call) => call.config)).toEqual([{ label: "chat-pack" }, { label: "roleplay-pack" }]);
 
-      const turned = declined.profiles[0]!.route(message("private:9", "hi"))!;
-      await turned.deliver(message("private:9", "hi"));
-      await turned.idle();
-      const plain = absent.profiles[0]!.route(message("private:9", "hi"))!;
-      await plain.deliver(message("private:9", "hi"));
-      await plain.idle();
-
-      expect(declined.prompts).toHaveLength(1);
-      expect(absent.prompts).toHaveLength(1);
-      expect(toolCatalog(declined.prompts)).not.toContain("neko_probe");
-      expect(promptText(declined.prompts)).not.toContain("本实例启用了 neko-tools。");
-      expect(toolCatalog(absent.prompts)).toEqual(toolCatalog(declined.prompts));
+      // 两个实例的挂载互不相干：停掉一个，另一个照常跑。
+      await chat.stop();
+      await roleplay.deliver(message("private:5", "still"));
+      await roleplay.idle();
+      expect(promptText(rig.prompts)).toContain("本实例启用了 roleplay-pack。");
     } finally {
-      await close(declined, declinedDir);
-      await close(absent, absentDir);
+      await close(rig, dir);
     }
   });
 
   it("与内核工具撞名：装配点直接抛错", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-clash-"));
-    writePlain(dir, "neko", "neko", true);
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
     calls.length = 0;
-    answering = "add";
     probeName = "send_message";
-    const rig = await stand(dir, true);
+    const rig = await stand(dir);
     try {
       expect(rig.profiles).toHaveLength(1);
       expect(() => rig.profiles[0]!.route(message("private:9", "hi"))).toThrow(/already provided/);
     } finally {
       probeName = "neko_probe";
+      await close(rig, dir);
+    }
+  });
+
+  it("Agent 诞生后工具面固定：再 addTools 直接抛错", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-late-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
+    calls.length = 0;
+    mounted = undefined;
+    const rig = await stand(dir);
+    try {
+      rig.profiles[0]!.route(message("private:9", "hi"));
+      const late = {
+        neko_late: tool({ description: "迟到", inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }) }),
+      };
+      expect(() => mounted!.addTools(late)).toThrow(/fixed once the agent exists/);
+      expect(() => mounted!.addInstructions("迟到")).toThrow(/fixed once the agent exists/);
+    } finally {
+      await close(rig, dir);
+    }
+  });
+
+  it("enable: false：不依赖、不等待、不调用，缺包也不报错", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-off-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      never-installed:", "        enable: false"]);
+    calls.length = 0;
+    logs.length = 0;
+    // 这个 preset 要的包根本没装：不装包也应当照常激活。
+    const rig = await stand(dir, false);
+    try {
+      expect(rig.profiles[0]!.route(message("private:9", "hi"))).toBeDefined();
+      expect(calls).toHaveLength(0);
+      expect(logs.some((line) => line.includes("missing required service"))).toBe(false);
+      expect(logs.some((line) => line.includes("never-installed"))).toBe(false);
+    } finally {
+      await close(rig, dir);
+    }
+  });
+
+  it("缺包时 preset 等待；包就位自动激活，卸载则停止并拆卸，重载再重建", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-cycle-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
+    calls.length = 0;
+    disposed.length = 0;
+    logs.length = 0;
+
+    const prompts: string[] = [];
+    const gateway = { languageModel: () => scripted(prompts), groups: () => [] } as unknown as Gateway;
+    const profiles: ProfileRuntime[] = [];
+    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, logger });
+    await sleep(20);
+    expect(profiles.map((profile) => profile.id)).toEqual(["neko"]);
+    expect(profiles[0]!.route(message("private:9", "hi"))).toBeUndefined();
+    expect(logs.some((line) => line.includes("missing required service") && line.includes('"ishiki.ext.neko-tools"'))).toBe(true);
+
+    const pkg = root.plugin(extensionPackage());
+    await sleep(20);
+    expect(profiles[0]!.route(message("private:9", "hi"))).toBeDefined();
+    expect(calls).toHaveLength(1);
+
+    // 卸载：该 preset 的 fiber 复位，实例停止并逆序拆掉包的挂载
+    pkg.dispose();
+    await sleep(20);
+    expect(profiles[0]!.route(message("private:9", "hi"))).toBeUndefined();
+    expect(disposed).toEqual(["neko-tools"]);
+
+    const again = root.plugin(extensionPackage());
+    await sleep(20);
+    expect(profiles[0]!.route(message("private:9", "hi"))).toBeDefined();
+    expect(calls).toHaveLength(2);
+
+    await profiles[0]?.stop();
+    again.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("注册拆卸函数移除本包的服务；重复调用无害，也不牵连别的包", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-unregister-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      first:", "      second:"]);
+    disposed.length = 0;
+    const holds: { unregister?: () => void | Promise<void> } = {};
+
+    // 两条服务各归各的拆卸函数：拆掉 first 不该带走 second。
+    const holder = root.plugin((ctx: Context) => {
+      holds.unregister = ctx.ishiki.provide("first", () => undefined);
+      ctx.on(
+        "dispose",
+        ctx.ishiki.provide("second", () => undefined),
+      );
+    });
+    await sleep(20);
+
+    const profiles: ProfileRuntime[] = [];
+    const prompts: string[] = [];
+    const gateway = { languageModel: () => scripted(prompts), groups: () => [] } as unknown as Gateway;
+    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, logger });
+    await sleep(20);
+    // 两个包都在位，preset 照常激活。
+    expect(profiles[0]!.route(message("private:9", "hi"))).toBeDefined();
+
+    expect(root.get("ishiki.ext.first")).toBeDefined();
+    holds.unregister!();
+    holds.unregister!();
+    await sleep(20);
+
+    expect(root.get("ishiki.ext.first")).toBeUndefined();
+    expect(root.get("ishiki.ext.second")).toBeDefined();
+    // first 缺席，依赖它的 preset 复位：同一个频道不再有归属。
+    expect(profiles[0]!.route(message("private:9", "hi"))).toBeUndefined();
+
+    await profiles[0]?.stop();
+    holder.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("handler 中途抛错：已收到的拆卸函数逆序回滚，实例不落表", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-rollback-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      first:", "      second:", "      third:"]);
+    disposed.length = 0;
+
+    const packs = root.plugin((ctx: Context) => {
+      ctx.on(
+        "dispose",
+        ctx.ishiki.provide("first", () => () => {
+          disposed.push("first");
+        }),
+      );
+      ctx.on(
+        "dispose",
+        ctx.ishiki.provide("second", () => () => {
+          disposed.push("second");
+        }),
+      );
+      ctx.on(
+        "dispose",
+        ctx.ishiki.provide("third", () => {
+          throw new Error("这个包装不上");
+        }),
+      );
+    });
+    await sleep(20);
+
+    const profiles: ProfileRuntime[] = [];
+    const gateway = { languageModel: () => scripted([]), groups: () => [] } as unknown as Gateway;
+    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, logger });
+    await sleep(20);
+
+    expect(() => profiles[0]!.route(message("private:9", "hi"))).toThrow(/这个包装不上/);
+    // 先挂的后拆：second 在 first 之前。
+    expect(disposed).toEqual(["second", "first"]);
+    // 装配失败不该留下能路由的实例：同一个频道再来一次还是抛。
+    expect(() => profiles[0]!.route(message("private:9", "again"))).toThrow(/这个包装不上/);
+
+    await profiles[0]?.stop();
+    packs.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("重复 stop 不重复拆卸：拆卸函数随实例走一次", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-restop-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
+    disposed.length = 0;
+    const rig = await stand(dir);
+    try {
+      const scene = rig.profiles[0]!.route(message("private:9", "hi"))!;
+      await scene.stop();
+      await scene.stop();
+      expect(disposed).toEqual(["neko-tools"]);
+    } finally {
+      await close(rig, dir);
+    }
+  });
+
+  it("只登记扩展、不提供引擎：两套 Service 互不要求", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-enginefree-"));
+    // 这个 preset 用内置引擎，一个社区引擎服务都不依赖。
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
+    calls.length = 0;
+    const rig = await stand(dir);
+    try {
+      const scene = rig.profiles[0]!.route(message("private:9", "hi"))!;
+      await scene.deliver(message("private:9", "hi"));
+      await scene.idle();
+      expect(toolCatalog(rig.prompts)).toContain("neko_probe");
+      expect(calls).toHaveLength(1);
+    } finally {
       await close(rig, dir);
     }
   });

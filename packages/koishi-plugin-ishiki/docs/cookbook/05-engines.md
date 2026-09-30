@@ -126,9 +126,9 @@ failover:
 
 引擎是「选一个」，贡献物是「加一些」：包对某一个 AgentRuntime 提供工具与提示词，不抢决策。
 
-1. 建一个 Koishi 插件，以 `ishiki.ext.<包名>` 提供服务（`new Service(ctx, "ishiki.ext.<包名>")`）。
-2. 在服务上写 `extend(coords)`：内核在装配点对每个实例叫一次的就是这个成员。它拿到本实例的坐标（单频道形态是一个具体频道，聚合形态是认领的账号），返回 `{ tools, instructions }`；这个实例用不上它就返回 `undefined`。
-3. 在 preset 的 `extends` 里写上包名。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名在装配点抛错。
+1. 建一个 Koishi 插件，继承 `ExtensionProvider`：`super(ctx, "<包名>")` 登记 `ishiki.ext.<包名>` 服务。
+2. 实现 `provide(presetConfig, runtime)`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，加法只能经 `runtime.addTools()` / `runtime.addInstructions()`；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。返回拆卸函数，实例停止时逆序执行。这个实例用不上这个包就什么都不调。
+3. 在 preset 的 `extends` 里写上包名；需要参数就写 `config:`，字段含义由包自己解释。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名在装配点抛错。`enable: false` 表示这一档不要：不依赖、不等待、不调用。
 4. 归位由内核定：工具并入内核工具之后、`innerThoughts` 之前、代码模式收窄之前；提示词接在内核那一段之后，按 `extends` 的顺序。
 
 坐标里没有的东西不要从别处推：`channel.type` 要用自己从 Koishi 取；包自己发的消息不结束轮次（停轮只认 `finish` 与 `send_message`）。完整契约与刻意的缺失项见 [03-community-extension-mechanism.md](../03-community-extension-mechanism.md)。

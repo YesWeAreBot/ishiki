@@ -575,6 +575,8 @@ describe("jev wakeup: 接进场景", () => {
         directory,
         model,
         instructions: "",
+        ctx,
+        domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
         context,
         tools: {
           send_message: createSendMessage({
@@ -585,6 +587,9 @@ describe("jev wakeup: 接进场景", () => {
             typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
           }),
         },
+        extensions: [],
+        innerThoughts: false,
+        codemode: { enable: false, direct: [], timeoutMs: 30_000 },
         wakeup,
         logger,
       });

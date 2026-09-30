@@ -18,7 +18,7 @@ import { StandardContextEngine, StandardContextInstance } from "../src/context/s
 import { resolveProfile } from "../src/profile.js";
 import { AgentRuntime, ProfileRuntime } from "../src/runtime.js";
 import { NativeToolcallEngine } from "../src/toolcall/index.js";
-import { CODE_MODE, createCodemode, loadCodemode } from "../src/tools/codemode.js";
+import { CODE_MODE, loadCodemode } from "../src/tools/codemode.js";
 import { createFinish } from "../src/tools/finish.js";
 import { createSendMessage } from "../src/tools/send-message.js";
 import { StandardWakeupEngine, StandardWakeupInstance } from "../src/wakeup/index.js";
@@ -132,7 +132,6 @@ describe("code mode", () => {
 
   /** 造一个开着代码模式的场景：工具面按配置收窄，收尾工具留在外。 */
   function openScene(): AgentRuntime {
-    const sandbox = createCodemode(config, baseTools);
     const model = new MockLanguageModelV4({
       doStream: async (request) => {
         toolNames.push((request.tools ?? []).map((tool) => tool.name));
@@ -145,9 +144,14 @@ describe("code mode", () => {
       directory,
       model,
       instructions: "",
+      ctx,
+      domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" },
       context: new StandardContextInstance({ maxChars: 10_000 }, { logger }),
-      tools: { ...baseTools, [CODE_MODE]: sandbox.tool },
-      toolCallers: sandbox.callers,
+      tools: baseTools,
+      extensions: [],
+      innerThoughts: false,
+      // 收窄由 AgentRuntime 在装配期做：它得先看见全部宿主工具，才算得出谁能调谁。
+      codemode: config,
       // 唤醒引擎不参与这个用例的断言：直接送事实行，起轮次靠的是引擎存在即可。
       wakeup: new StandardWakeupInstance({ direct: true, atSelf: false, quoteSelf: false, keywords: [] }),
       logger,

@@ -50,9 +50,16 @@ presets:
       charPerSecond: 5
       minDelay: 800
       maxDelay: 4000
-    # 扩展包准入：选中 <包名> 后，该包注册的引擎变体（名字写成 "包名/名字"）才对本 preset 可用；
-    # 未列出的不生效。包内的细分（阈值多少等）去包自己的配置里写。
-    # extends: [neko-tools]
+    # 扩展包：键是包名，值是这个 preset 给它的东西。选中的包对本 preset 全部生效：
+    # 它注册的引擎变体（名字写成 "包名/名字"）可用，provide() 也会在每个实例诞生时被叫一次。
+    # 只写包名即启用；config 原样递给包，字段含义由包自己解释；
+    # enable: false 表示这一档不要，不建立依赖也不等待。
+    # extends:
+    #   neko-tools:
+    #     config:
+    #       maxResults: 20
+    #   vision-pack:
+    #     enable: false
 
     scenes:
       # 一个 scene 绑定一个账号，认领该账号名下一组频道；
@@ -189,7 +196,7 @@ presets:
 
     scenes:
       # 引擎配置在 scene 层可就地覆盖（context / wakeup / toolcall），未写的键沿用 preset；
-      # 变体准入仍受本 preset 的 extends 约束。引擎实例随每个频道实例各造一份。
+      # extends 不可在 scene 层覆写（那是 preset 级的承诺）。引擎实例随每个频道实例各造一份。
       groups:
         sid: onebot:10000
         whitelist: ["group:*"]

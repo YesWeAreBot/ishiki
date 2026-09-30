@@ -158,6 +158,39 @@ export const ChannelClaim: Schema<ChannelClaim> = Schema.object({
 });
 
 /**
+ * ### 扩展包
+ *
+ * `extends` 是一张包名到配置的映射：键即包名，值是这个 preset 给它的东西。
+ * 核心只解释三件事——包叫什么、要不要启用、`config` 归谁；`config` 里的字段含义、默认值与
+ * 业务校验全归包自己，装载期原样递到 `provide()` 手里。
+ *
+ * 写 `enable: false` 是「这个包我认识，但这一档不要」：不建立依赖、不等待、不调用、不报错。
+ * 写了却没装上，仍是必需依赖——preset 停在等待态，服务到了自动激活。
+ *
+ * Example:
+ * ```yaml
+ * extends:
+ *   community-tools: # 只写包名即启用
+ *   memory-pack:
+ *     config: # 原样递到 provide()，字段含义由包自己解释
+ *       backend: sqlite
+ *   vision-pack:
+ *     enable: false # 认识但这一档不启用：不依赖、不等待
+ * ```
+ */
+export interface PresetExtensionConfig {
+  /** 是否启用；缺省即启用。`false` 时本 preset 不依赖这个包，也不调用它。 */
+  enable?: boolean;
+  /** 原样递给 provider 的 `provide()`；字段含义由包自己解释，核心不校验。 */
+  config?: unknown;
+}
+
+export const PresetExtensionConfig: Schema<PresetExtensionConfig> = Schema.object({
+  enable: Schema.boolean().description("是否启用；缺省即启用。false 表示不依赖、不等待、不调用该包"),
+  config: Schema.any().description("原样递给扩展包，包自己解释字段与默认值"),
+});
+
+/**
  * ### Scene
  *
  * Scene 挂在 preset 下，是一份针对某组频道的扩展：语义是「在这个心智里，对这些频道再补一层」，
@@ -281,11 +314,11 @@ export interface PresetConfig {
   description?: string;
   model: string;
   /**
-   * 选中的扩展包名：本 preset 依赖这些包的 `ishiki.ext.<包名>` 服务，并在装配每个实例时收下它们
-   * 的 `extend()` 加法。引擎变体不经这里准入——一个变体是否可用只看它对应的引擎服务在不在。
-   * 包内细分（阈值多少等）归包自己的配置。空数组等于不选任何扩展，与不写等价。
+   * 选中的扩展包：包名到配置的映射，本 preset 依赖启用项的 `ishiki.ext.<包名>` 服务，
+   * 装配每个实例时把它们逐个 `provide()`。引擎变体不经这里准入——一个变体是否可用只看
+   * 它对应的引擎服务在不在。空映射等于不选任何扩展，与不写等价。
    */
-  extends?: string[];
+  extends?: Record<string, PresetExtensionConfig>;
   failover?: Partial<FailoverConfig>;
   /** 上下文引擎。缺省补成 `standard`；实例随 AgentRuntime 各造一份。 */
   context?: ContextConfig;
@@ -308,7 +341,7 @@ export interface PresetConfig {
 export const PresetConfig: Schema<PresetConfig> = Schema.object({
   description: Schema.string(),
   model: Schema.string().required(),
-  extends: Schema.array(Schema.string()).description("选中的扩展包名；选中后该包的引擎变体才对本 preset 可用"),
+  extends: Schema.dict(PresetExtensionConfig).description("选中的扩展包：包名到 { enable, config } 的映射，config 原样递给包"),
   failover: FailoverConfig,
   context: ContextConfig,
   wakeup: WakeupConfig,
@@ -401,8 +434,6 @@ export interface SceneSpec {
   claims?: Record<string, ChannelClaim>;
   /** 该生效单位是否为 cross preset 自身（跨频道合流，共享一块视窗）。 */
   cross: boolean;
-  /** 该 preset 选中的扩展包名；装配实例时收它们的 `extend()` 加法的顺序，随 preset 继承。 */
-  extends: string[];
   description?: string;
   model: string;
   /** 降级与重试，Preset 与 Scene 的扩展已在此合并。 */
@@ -500,6 +531,12 @@ export interface ResolvedPreset {
   name: string;
   /** 该 preset 的生效单位清单；引擎配置已随三层合并落进各 spec。 */
   specs: SceneSpec[];
+  /**
+   * 启用的扩展包，键是包名、值是 `config` 的原样内容，按配置里的书写顺序。
+   * 准入是 preset 级承诺，不随 scene 逐个覆写，因此挂在 preset 上而不是 spec 上。
+   * `enable: false` 的包不进这里。
+   */
+  extensions: Record<string, unknown>;
 }
 
 /** 被跳过的 preset：名字与它出错的原因。 */
@@ -556,7 +593,12 @@ function resolvePreset(presetName: string, raw: unknown, id: string): ResolvedPr
   // 形态开关与两处名单不是心智基线：不剥掉会随 preset 层并进每个 spec。
   // 引擎块随 baseline 进三层合并——实例按 spec 逐个诞生，配置没有理由留在别处。
   const { scenes: _scenes, claims: presetClaims, cross: _cross, extends: presetExtends, ...baseline } = preset;
-  const selected = presetExtends ?? [];
+  // 只留启用的包：`enable: false` 是「这一档不要」，不建立依赖也不调用。config 原样带走，字段由包自己解释。
+  const extensions: Record<string, unknown> = {};
+  for (const [pkg, conf] of Object.entries(presetExtends ?? {})) {
+    if (conf.enable === false) continue;
+    extensions[pkg] = conf.config;
+  }
 
   // 形态互斥与空心智是一组判断：认不出这个 preset 以什么形态生效，就没法装配。
   if (preset.cross === true) {
@@ -582,7 +624,6 @@ function resolvePreset(presetName: string, raw: unknown, id: string): ResolvedPr
       name,
       preset: presetName,
       cross: false,
-      extends: selected,
       sid,
       whitelist: scene.whitelist,
       blacklist: scene.blacklist ?? [],
@@ -599,7 +640,6 @@ function resolvePreset(presetName: string, raw: unknown, id: string): ResolvedPr
       name: presetName,
       preset: presetName,
       cross: true,
-      extends: selected,
       // 无单一账号：路由按 claims 逐 sid 判，sid 留空串表示此处不适用。
       sid: "",
       claims,
@@ -610,7 +650,7 @@ function resolvePreset(presetName: string, raw: unknown, id: string): ResolvedPr
 
   // 同一 preset 内的认领冲突：这个 preset 无法安全路由，错误由调用方收成跳过记录。
   assertNoOverlap(specs, id);
-  return { name: presetName, specs };
+  return { name: presetName, specs, extensions };
 }
 
 /**

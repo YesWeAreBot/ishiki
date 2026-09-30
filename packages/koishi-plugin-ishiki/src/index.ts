@@ -7,6 +7,7 @@ import { parse } from "yaml";
 
 import { ClassicContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
+import { ExtensionService, type Disposer, type ExtensionHandler } from "./extension.js";
 import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -118,6 +119,27 @@ class Ishiki extends Service<Ishiki.Config> {
       return;
     }
   }
+
+  /**
+   * 登记一个扩展包，启用 `ishiki.ext.<name>` 服务。
+   *
+   * `handler` 在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步；它的返回值是
+   * 这次挂载的拆卸函数，实例停止时逆序执行。加法只能经 `runtime.addTools()` / `runtime.addInstructions()`，
+   * 坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。这个实例用不上就什么都不调。
+   *
+   * 返回值是**注册**拆卸函数，移除这个包的服务——与 `handler` 的返回是两件事，别混。
+   * 服务挂在这条 fiber 上，归属由调用方声明：`ctx.on("dispose", dispose)`。漏绑不会立刻泄漏，
+   * 但服务会跟着 Ishiki 走完，不随调用方那条 fiber 消失。
+   */
+  public provide(name: string, handler: ExtensionHandler): Disposer {
+    const fiber = this.ctx.plugin((ctx: Context) => {
+      new ExtensionService(ctx, name, handler);
+    });
+    // `dispose()` 返回的是这条 fiber 状态是否变了，调用方不关心：它要的是「这个包的服务没了」。
+    return () => {
+      fiber.dispose();
+    };
+  }
 }
 
 namespace Ishiki {
@@ -139,11 +161,12 @@ declare module "koishi" {
   }
 }
 
-// 社区包需要的东西：继承用的 provider 基类与运行体契约、服务名函数，以及 `declare module`
-// 增强用的参数表接口。接入方式是给自己的变体建一个 Koishi 服务，服务名由 serviceName 函数给出。
+// 社区包需要的东西：扩展挂载面、运行体契约、服务名函数，以及 `declare module` 增强用的参数表接口。
+// 扩展走 `ctx.ishiki.provide(name, handler)`；引擎走继承 provider 基类，服务名由 serviceName 函数给出。
 export { ContextEngine, contextEngineServiceName, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
 export type { ClaimedAccount, InstanceDomain } from "./domain.js";
-export type { Extension, ExtensionCoords, ExtensionProvider } from "./extension.js";
+export { extensionServiceName, type Disposer, type ExtensionHandler } from "./extension.js";
+export type { AgentRuntime } from "./runtime.js";
 export { ToolcallEngine, toolcallEngineServiceName, type ToolcallEngineInstance, type ToolcallEngines } from "./toolcall/index.js";
 export {
   WakeupEngine,
