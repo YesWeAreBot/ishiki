@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { ProfileConfig, resolveProfile, type SceneSpec } from "../src/profile.js";
+import type { ContextEngines } from "../src/context/index.js";
+import { engineParams, resolveProfile, type SceneSpec } from "../src/profile.js";
 
 /** 展开一份树，断言只看首个 spec —— 三层合并（内置缺省 ← preset ← scene）的全部字段。 */
 function makeSpec(preset: Record<string, unknown>, scene: Record<string, unknown> = {}): SceneSpec {
   return resolveProfile(
-    ProfileConfig({
+    {
       id: "neko",
       presets: { base: { model: "test:model", ...preset, scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"], ...scene } } } },
-    }),
+    },
     "neko",
-  ).specs[0]!;
+  ).presets[0]!.specs[0]!;
 }
 
 describe("engine config precedence", () => {
@@ -46,8 +47,8 @@ describe("engine config precedence", () => {
   });
 
   it("cross preset 的 spec 带上引擎配置，没有 scene 层", () => {
-    const { specs } = resolveProfile(
-      ProfileConfig({
+    const [preset] = resolveProfile(
+      {
         id: "neko",
         presets: {
           lounge: {
@@ -57,35 +58,25 @@ describe("engine config precedence", () => {
             claims: { "onebot:1": { whitelist: ["group:*"] } },
           },
         },
-      }),
+      },
       "neko",
-    );
-    expect(specs[0]!.cross).toBe(true);
-    expect(specs[0]!.context).toEqual({ engine: "standard", standard: { maxChars: 40_000 } });
+    ).presets;
+
+    expect(preset!.specs[0]!.cross).toBe(true);
+    expect(preset!.specs[0]!.context).toEqual({ engine: "standard", standard: { maxChars: 40_000 } });
   });
 
-  it("带包前缀的引擎变体不在 extends 里时装载报错", () => {
-    expect(() =>
-      resolveProfile(
-        ProfileConfig({
-          id: "neko",
-          presets: { base: { model: "test:model", wakeup: { engine: "ext/wakeup" as never }, scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } } },
-        }),
-        "neko",
-      ),
-    ).toThrow(`wakeup engine "ext/wakeup" of spec "dms" comes from an extension package not listed in "extends"`);
+  it("引擎变体的名字不参与准入：带不带 `/` 都只是普通名字，preset 照常展开", () => {
+    // 可用性由引擎服务决定（见 extensions.spec.ts），装载期不再拦「名字像扩展包」的变体。
+    expect(makeSpec({ wakeup: { engine: "ext/wakeup" } }).wakeup.engine).toBe("ext/wakeup");
+    expect(makeSpec({}, { context: { engine: "ext/ctx" } }).context.engine).toBe("ext/ctx");
+    expect(makeSpec({}, { context: { engine: "plain" } }).context.engine).toBe("plain");
   });
 
-  it("scene 覆写的引擎变体同样受 preset 的 extends 约束", () => {
-    expect(() =>
-      resolveProfile(
-        ProfileConfig({
-          id: "neko",
-          presets: { base: { model: "test:model", scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"], context: { engine: "ext/ctx" as never } } } } },
-        }),
-        "neko",
-      ),
-    ).toThrow(`context engine "ext/ctx" of spec "dms" comes from an extension package not listed in "extends"`);
+  it("引擎参数按引擎名分键取用，未写即空", () => {
+    const spec = makeSpec({ context: { engine: "classic", classic: { maxMessages: 7 } } });
+    expect(engineParams<ContextEngines>(spec.context)).toEqual({ maxMessages: 7 });
+    expect(engineParams<ContextEngines>(makeSpec({}).context)).toEqual({});
   });
 
   it("toolcall 的覆盖：没写时沿用 preset，显式写回默认引擎时不退回", () => {

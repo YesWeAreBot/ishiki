@@ -1,9 +1,9 @@
 import type { Agent, AgentEntry, AgentMessage } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import type { Context, Logger } from "koishi";
 
 import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../types.js";
-import { WakeupEngine, atSelf, registerWakeupEngine, type WakeupDecision, type WakeupEngineDeps } from "./engine.js";
-import { StandardWakeupEngine, type StandardWakeupConfig } from "./standard.engine.js";
+import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngineInstance } from "./engine.js";
+import { StandardWakeupInstance, type StandardWakeupConfig } from "./standard.engine.js";
 
 /**
  * jev 唤醒引擎：模型判定为主，规则只兜底。
@@ -254,18 +254,20 @@ function clip(text: string): string {
   return text.length > MAX_TEXT_CHARS ? `${text.slice(0, MAX_TEXT_CHARS)}…` : text;
 }
 
-export class JevWakeupEngine extends WakeupEngine<"jev"> {
+export class JevWakeupInstance implements WakeupEngineInstance {
+  public readonly config: JevWakeupConfig;
+
   private readonly logger?: Logger;
-  private readonly rules: StandardWakeupEngine;
+  private readonly rules: StandardWakeupInstance;
   /** 一个频道一块窗口：键是事实流里每条消息自带的 channelId，聚合与单频道走同一份代码。 */
   private readonly channels = new Map<string, ChannelState>();
   /** 装载历史的进行中：`decide` 等它落地，免得重启后第一条判定看不见前情。 */
   private readonly seeding = new Set<Promise<void>>();
 
   constructor(config: Partial<JevWakeupConfig> = {}, deps: WakeupEngineDeps) {
-    super("jev", normalize(config));
+    this.config = normalize(config);
     this.logger = deps.logger;
-    this.rules = new StandardWakeupEngine(this.config.rules);
+    this.rules = new StandardWakeupInstance(this.config.rules);
   }
 
   /**
@@ -514,4 +516,13 @@ declare module "./engine.js" {
   }
 }
 
-registerWakeupEngine("jev", (config, deps) => new JevWakeupEngine(config, deps));
+/** jev 的 provider：没有插件级配置（apiKey 是 profile 配置或环境变量），只把参数与运行态依赖交给运行体。 */
+export class JevWakeupEngine extends WakeupEngine<"jev"> {
+  constructor(ctx: Context) {
+    super(ctx, "jev");
+  }
+
+  create(config: Partial<JevWakeupConfig>, deps: WakeupEngineDeps): WakeupEngineInstance {
+    return new JevWakeupInstance(config, deps);
+  }
+}

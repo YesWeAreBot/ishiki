@@ -1,4 +1,6 @@
-import { ToolcallEngine, registerToolcallEngine } from "./engine.js";
+import type { Context } from "koishi";
+
+import { ToolcallEngine, ToolcallEngineInstance } from "./engine.js";
 
 declare module "./engine.js" {
   interface ToolcallEngines {
@@ -7,12 +9,17 @@ declare module "./engine.js" {
 }
 
 /** 模型原生 function call：不包任何中间件，工具目录走提供商自己的 tools 通道。 */
-class NativeToolcallEngine extends ToolcallEngine<"native"> {
-  constructor(config: Record<never, never>) {
-    super("native", config);
-  }
-
+export class NativeToolcallInstance extends ToolcallEngineInstance {
   protected middleware = (): undefined => undefined;
 }
 
-registerToolcallEngine("native", (config) => new NativeToolcallEngine(config));
+/** native 的 provider：没有插件级配置，只把 profile/scene 的参数交给运行体。 */
+export class NativeToolcallEngine extends ToolcallEngine<"native"> {
+  constructor(ctx: Context) {
+    super(ctx, "native");
+  }
+
+  create(): ToolcallEngineInstance {
+    return new NativeToolcallInstance();
+  }
+}

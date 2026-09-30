@@ -6,7 +6,7 @@ import type { InstanceDomain } from "./domain.js";
 /**
  * 扩展包：一个 Koishi 插件，以 `ishiki.ext.<包名>` 提供服务，由 preset 的 `extends` 选中。
  *
- * 一个包对内核只有两件事可说：给引擎族登记变体（见各 `engine.ts` 的注册面），
+ * 一个包对内核只有两件事可说：给自己的引擎变体建一个 provider 服务（见各 `engine.ts` 的 provider 基类），
  * 以及对一个 AgentRuntime 做加法（本文件）。两件事互不依赖，包可以只做其中一件。
  */
 

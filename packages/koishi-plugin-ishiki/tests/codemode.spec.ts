@@ -11,16 +11,17 @@ import {
   type LanguageModelV4StreamPart,
   type ToolSet,
 } from "@yesimagent/core";
-import type { Context, Logger } from "koishi";
+import { Context, type Logger } from "koishi";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { StandardContextEngine } from "../src/context/standard.engine.js";
-import { ProfileConfig, resolveProfile } from "../src/profile.js";
+import { StandardContextEngine, StandardContextInstance } from "../src/context/standard.engine.js";
+import { resolveProfile } from "../src/profile.js";
 import { AgentRuntime, ProfileRuntime } from "../src/runtime.js";
+import { NativeToolcallEngine } from "../src/toolcall/index.js";
 import { CODE_MODE, createCodemode, loadCodemode } from "../src/tools/codemode.js";
 import { createFinish } from "../src/tools/finish.js";
 import { createSendMessage } from "../src/tools/send-message.js";
-import { createWakeupEngine } from "../src/wakeup/index.js";
+import { StandardWakeupEngine, StandardWakeupInstance } from "../src/wakeup/index.js";
 
 const USAGE = {
   inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
@@ -144,11 +145,11 @@ describe("code mode", () => {
       directory,
       model,
       instructions: "",
-      context: new StandardContextEngine({ logger }, { maxChars: 10_000 }),
+      context: new StandardContextInstance({ maxChars: 10_000 }, { logger }),
       tools: { ...baseTools, [CODE_MODE]: sandbox.tool },
       toolCallers: sandbox.callers,
       // 唤醒引擎不参与这个用例的断言：直接送事实行，起轮次靠的是引擎存在即可。
-      wakeup: createWakeupEngine({ engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } }, {}),
+      wakeup: new StandardWakeupInstance({ direct: true, atSelf: false, quoteSelf: false, keywords: [] }),
       logger,
     });
     return scene;
@@ -209,7 +210,7 @@ describe("code mode", () => {
 describe("codemode config", () => {
   it("defaults to off, and scene overrides field by field", () => {
     const spec = resolveProfile(
-      ProfileConfig({
+      {
         id: "neko",
         presets: {
           base: {
@@ -219,16 +220,14 @@ describe("codemode config", () => {
             scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"], codemode: { direct: ["b"], timeoutMs: 2000 } } },
           },
         },
-      }),
+      },
       "neko",
-    ).specs[0]!;
+    ).presets[0]!.specs[0]!;
 
     expect(spec.codemode).toEqual({ enable: true, direct: ["b"], timeoutMs: 2000 });
     expect(
-      resolveProfile(
-        ProfileConfig({ id: "neko", presets: { base: { model: "test:model", scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } } } }),
-        "neko",
-      ).specs[0]!.codemode,
+      resolveProfile({ id: "neko", presets: { base: { model: "test:model", scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } } } }, "neko")
+        .presets[0]!.specs[0]!.codemode,
     ).toEqual({ enable: false, direct: [], timeoutMs: 30_000 });
   });
 
@@ -248,7 +247,7 @@ describe("codemode config", () => {
         return { stream: simulateReadableStream({ chunks }) };
       },
     });
-    const config = ProfileConfig({
+    const config = {
       id: "neko",
       presets: {
         base: {
@@ -260,16 +259,16 @@ describe("codemode config", () => {
           scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
         },
       },
-    });
+    };
     const gateway = { languageModel: () => model, groups: () => [] } as never;
-    const runtime = new ProfileRuntime({
-      id: "neko",
-      directory,
-      resolved: resolveProfile(config, "neko"),
-      ctx: { bots: {} } as unknown as Context,
-      gateway,
-      logger,
-    });
+    // 引擎 provider 立在这台真 ctx 上：运行时只按服务名取用；provider 在 ready 时登记，先启动。
+    const ctx = new Context();
+    new StandardContextEngine(ctx);
+    new StandardWakeupEngine(ctx);
+    new NativeToolcallEngine(ctx);
+    await ctx.start();
+    const runtime = new ProfileRuntime({ id: "neko", directory, ctx, gateway, logger });
+    for (const preset of resolveProfile(config, "neko").presets) runtime.activate(preset);
 
     try {
       await runtime.route(event("e"))!.deliver(event("e"));

@@ -1,4 +1,6 @@
-import { ToolcallEngine, registerToolcallEngine } from "./engine.js";
+import type { Context } from "koishi";
+
+import { ToolcallEngine, ToolcallEngineInstance } from "./engine.js";
 import { parser } from "./parser.js";
 
 declare module "./engine.js" {
@@ -8,11 +10,7 @@ declare module "./engine.js" {
 }
 
 /** yaml-xml 协议：工具调用写成 XML 元素，参数体是 YAML。 */
-class YamlXmlToolcallEngine extends ToolcallEngine<"yaml-xml"> {
-  constructor(config: Record<never, never>) {
-    super("yaml-xml", config);
-  }
-
+export class YamlXmlToolcallInstance extends ToolcallEngineInstance {
   protected middleware = () => {
     const { createToolMiddleware, formatToolResponseAsYaml, yamlXmlProtocol, yamlXmlSystemPromptTemplate } = parser();
     return createToolMiddleware({
@@ -23,4 +21,13 @@ class YamlXmlToolcallEngine extends ToolcallEngine<"yaml-xml"> {
   };
 }
 
-registerToolcallEngine("yaml-xml", (config) => new YamlXmlToolcallEngine(config));
+/** yaml-xml 的 provider：没有插件级配置，只把 profile/scene 的参数交给运行体。 */
+export class YamlXmlToolcallEngine extends ToolcallEngine<"yaml-xml"> {
+  constructor(ctx: Context) {
+    super(ctx, "yaml-xml");
+  }
+
+  create(): ToolcallEngineInstance {
+    return new YamlXmlToolcallInstance();
+  }
+}

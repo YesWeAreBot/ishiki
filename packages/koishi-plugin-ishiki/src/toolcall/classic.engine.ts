@@ -1,6 +1,7 @@
 import type { LanguageModelV4Content, LanguageModelV4FunctionTool, LanguageModelV4StreamPart, LanguageModelV4ToolCall, ToolResultPart } from "@yesimagent/core";
+import type { Context } from "koishi";
 
-import { ToolcallEngine, registerToolcallEngine } from "./engine.js";
+import { ToolcallEngine, ToolcallEngineInstance } from "./engine.js";
 import { JsonParser } from "./json-parser.js";
 import { parser, type TCMProtocol, type ToolResponsePromptTemplateResult } from "./parser.js";
 
@@ -295,12 +296,8 @@ declare module "./engine.js" {
   }
 }
 
-/** classic 引擎：契约与工具目录由它注入，幕后流由输出契约保证。 */
-class ClassicToolcallEngine extends ToolcallEngine<"classic"> {
-  constructor(config: Record<never, never>) {
-    super("classic", config);
-  }
-
+/** classic 协议：契约与工具目录由它注入，幕后流由输出契约保证。 */
+export class ClassicToolcallInstance extends ToolcallEngineInstance {
   protected middleware = () => {
     const { createToolMiddleware } = parser();
     return createToolMiddleware({
@@ -311,4 +308,13 @@ class ClassicToolcallEngine extends ToolcallEngine<"classic"> {
   };
 }
 
-registerToolcallEngine("classic", (config) => new ClassicToolcallEngine(config));
+/** classic 的 provider：没有插件级配置，只把 profile/scene 的参数交给运行体。 */
+export class ClassicToolcallEngine extends ToolcallEngine<"classic"> {
+  constructor(ctx: Context) {
+    super(ctx, "classic");
+  }
+
+  create(): ToolcallEngineInstance {
+    return new ClassicToolcallInstance();
+  }
+}

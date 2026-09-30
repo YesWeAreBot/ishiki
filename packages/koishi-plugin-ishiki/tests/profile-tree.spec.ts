@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { ProfileConfig, matchSceneSpec, resolveProfile, type SceneSpec } from "../src/profile.js";
+import { matchSceneSpec, resolveProfile, type SceneSpec } from "../src/profile.js";
 
 /**
- * 展开一份树形配置；`raw` 原样喂给 Schema，`id` 是调用方定好的 profile 标识。
+ * 展开一份树形配置并拍平各 preset 的 spec；`raw` 是原始配置对象，`id` 是目录名兜底。
  *
  * 入参刻意放宽：Schema 的输入面比解析结果宽——`context` / `wakeup` 解析后必然是个对象，
  * 但 YAML 里可以整块不写，内置缺省会补上。这些用例只关心树的结构，不逐个声明引擎块。
  */
-function resolve(raw: { id?: string; presets: Record<string, Record<string, unknown>> }, id = "neko"): SceneSpec[] {
-  return resolveProfile(ProfileConfig(raw as never), id).specs;
+function resolve(raw: Record<string, unknown>, id = "neko"): SceneSpec[] {
+  return resolveProfile(raw, id).presets.flatMap((preset) => preset.specs);
 }
 
 describe("preset tree shape", () => {
@@ -110,17 +110,53 @@ describe("preset tree shape", () => {
 });
 
 describe("preset tree validation", () => {
-  it("preset 既无 scenes 又非 cross：报空心智", () => {
-    expect(() => resolve({ presets: { empty: { model: "gpt" } } })).toThrow(`Preset "empty" of profile "neko" has no scenes and is not cross`);
+  it("坏 preset 只跳过自己：兄弟 preset 照常展开，原因留在 skipped 里", () => {
+    const result = resolveProfile(
+      {
+        presets: {
+          empty: { model: "gpt" },
+          chat: { model: "gpt", scenes: { dms: { sid: "onebot:111", whitelist: ["private:*"] } } },
+        },
+      },
+      "neko",
+    );
+
+    expect(result.presets.map((preset) => preset.name)).toEqual(["chat"]);
+    expect(result.presets[0]!.specs.map((spec) => spec.name)).toEqual(["dms"]);
+    expect(result.skipped).toEqual([{ preset: "empty", message: `Preset "empty" of profile "neko" has no scenes and is not cross` }]);
+  });
+
+  it("preset 的 Schema 错误同样只跳过自己", () => {
+    const result = resolveProfile(
+      {
+        presets: {
+          bad: { model: 42 },
+          chat: { model: "gpt", scenes: { dms: { sid: "onebot:111", whitelist: [] } } },
+        },
+      },
+      "neko",
+    );
+
+    expect(result.presets.map((preset) => preset.name)).toEqual(["chat"]);
+    expect(result.skipped.map((skip) => skip.preset)).toEqual(["bad"]);
+  });
+
+  it("Profile 根结构错误：整个 profile 失败，没有可展开的 preset", () => {
+    expect(() => resolveProfile({}, "neko")).toThrow(/presets/);
+    expect(() => resolveProfile({ presets: [] }, "neko")).toThrow(/presets/);
+    expect(() => resolveProfile({ id: 42, presets: {} }, "neko")).toThrow(/id/);
   });
 
   it("scenes 写成空块与整个不写同罪：认不出形态", () => {
-    expect(() => resolve({ presets: { empty: { model: "gpt", scenes: {} } } })).toThrow("has no scenes and is not cross");
+    const result = resolveProfile({ presets: { empty: { model: "gpt", scenes: {} } } }, "neko");
+
+    expect(result.presets).toEqual([]);
+    expect(result.skipped[0]!.message).toContain("has no scenes and is not cross");
   });
 
   it("cross: true 且写了 scenes：报互斥", () => {
-    expect(() =>
-      resolve({
+    const result = resolveProfile(
+      {
         presets: {
           fused: {
             model: "gpt",
@@ -129,91 +165,118 @@ describe("preset tree validation", () => {
             claims: { "onebot:111": { whitelist: ["group:1"] } },
           },
         },
-      }),
-    ).toThrow(`Cross preset "fused" of profile "neko" must not have scenes`);
+      },
+      "neko",
+    );
+
+    expect(result.skipped[0]!.message).toBe(`Cross preset "fused" of profile "neko" must not have scenes`);
   });
 
   it("cross: true 缺 claims：报错", () => {
-    expect(() => resolve({ presets: { fused: { model: "gpt", cross: true } } })).toThrow(`Cross preset "fused" of profile "neko" needs "claims"`);
+    const result = resolveProfile({ presets: { fused: { model: "gpt", cross: true } } }, "neko");
+
+    expect(result.skipped[0]!.message).toBe(`Cross preset "fused" of profile "neko" needs "claims"`);
   });
 
   it("scene 缺 sid：报错并指出它在树里的位置", () => {
-    expect(() => resolve({ presets: { chat: { model: "gpt", scenes: { dms: { whitelist: ["private:*"] } } } } })).toThrow(
-      `Scene "chat/dms" of profile "neko" needs a "sid"`,
-    );
+    const result = resolveProfile({ presets: { chat: { model: "gpt", scenes: { dms: { whitelist: ["private:*"] } } } } }, "neko");
+
+    expect(result.skipped[0]!.message).toBe(`Scene "chat/dms" of profile "neko" needs a "sid"`);
   });
 
   it("scene 缺 whitelist：报错；whitelist: [] 不算缺", () => {
-    expect(() => resolve({ presets: { chat: { model: "gpt", scenes: { dms: { sid: "onebot:111" } } } } })).toThrow(
-      `Scene "chat/dms" of profile "neko" needs a "whitelist"`,
-    );
-    expect(() => resolve({ presets: { chat: { model: "gpt", scenes: { dms: { sid: "onebot:111", whitelist: [] } } } } })).not.toThrow();
+    const missing = resolveProfile({ presets: { chat: { model: "gpt", scenes: { dms: { sid: "onebot:111" } } } } }, "neko");
+    expect(missing.skipped[0]!.message).toBe(`Scene "chat/dms" of profile "neko" needs a "whitelist"`);
+
+    const empty = resolveProfile({ presets: { chat: { model: "gpt", scenes: { dms: { sid: "onebot:111", whitelist: [] } } } } }, "neko");
+    expect(empty.presets[0]!.specs).toHaveLength(1);
   });
 
-  it("同 sid 下 `*` 与具体 pattern 重叠：报认领冲突", () => {
-    expect(() =>
-      resolve({
+  it("同 sid 下 `*` 与具体 pattern 重叠：该 preset 被跳过", () => {
+    const result = resolveProfile(
+      {
         presets: { chat: { model: "gpt", scenes: { all: { sid: "onebot:111", whitelist: ["*"] }, ops: { sid: "onebot:111", whitelist: ["group:1"] } } } },
-      }),
-    ).toThrow(`Scene "all" and scene "ops" of profile "neko" both claim channels of "onebot:111"`);
+      },
+      "neko",
+    );
+
+    expect(result.presets).toEqual([]);
+    expect(result.skipped[0]!.message).toBe(`Scene "chat/all" and scene "chat/ops" of profile "neko" both claim channels of "onebot:111"`);
   });
 
-  it("同 sid 下前缀模式与具体值重叠：报认领冲突", () => {
-    expect(() =>
-      resolve({
+  it("同 sid 下前缀模式与具体值重叠：该 preset 被跳过", () => {
+    const result = resolveProfile(
+      {
         presets: { chat: { model: "gpt", scenes: { all: { sid: "onebot:111", whitelist: ["group:*"] }, ops: { sid: "onebot:111", whitelist: ["group:1"] } } } },
-      }),
-    ).toThrow("both claim channels");
+      },
+      "neko",
+    );
+
+    expect(result.skipped[0]!.message).toContain("both claim channels");
   });
 
   it("不同 sid 认领同名频道不算冲突：频道 id 空间按账号分开", () => {
-    expect(() =>
-      resolve({
+    const result = resolveProfile(
+      {
         presets: {
           chat: {
             model: "gpt",
             scenes: { a: { sid: "onebot:111", whitelist: ["group:1"] }, b: { sid: "onebot:222", whitelist: ["group:1"] } },
           },
         },
-      }),
-    ).not.toThrow();
+      },
+      "neko",
+    );
+
+    expect(result.skipped).toEqual([]);
+    expect(result.presets[0]!.specs).toHaveLength(2);
   });
 
   it("不同前缀各认各的：不算冲突", () => {
-    expect(() =>
-      resolve({
+    const result = resolveProfile(
+      {
         presets: {
           chat: {
             model: "gpt",
             scenes: { groups: { sid: "onebot:111", whitelist: ["group:*"] }, dms: { sid: "onebot:111", whitelist: ["private:*"] } },
           },
         },
-      }),
-    ).not.toThrow();
+      },
+      "neko",
+    );
+
+    expect(result.skipped).toEqual([]);
+    expect(result.presets[0]!.specs).toHaveLength(2);
   });
 
-  it("scene 与 cross claims 交叉：同一份判定，不因形态而例外", () => {
+  it("preset 之间认领同一频道：整个 profile 无法装载", () => {
     expect(() =>
-      resolve({
-        presets: {
-          chat: { model: "gpt", scenes: { ops: { sid: "onebot:111", whitelist: ["group:111_ops"] } } },
-          fused: { model: "gpt", cross: true, claims: { "onebot:111": { whitelist: ["group:111_ops"] } } },
+      resolveProfile(
+        {
+          presets: {
+            chat: { model: "gpt", scenes: { ops: { sid: "onebot:111", whitelist: ["group:111_ops"] } } },
+            fused: { model: "gpt", cross: true, claims: { "onebot:111": { whitelist: ["group:111_ops"] } } },
+          },
         },
-      }),
-    ).toThrow(`Scene "ops" and scene "fused" of profile "neko" both claim channels of "onebot:111"`);
+        "neko",
+      ),
+    ).toThrow(`Scene "chat/ops" and scene "fused/fused" of profile "neko" both claim channels of "onebot:111"`);
   });
 
   it("blacklist 排除后交集为空：仍按白名单相交报冲突（保守判定）", () => {
-    expect(() =>
-      resolve({
+    const result = resolveProfile(
+      {
         presets: {
           chat: {
             model: "gpt",
             scenes: { all: { sid: "onebot:111", whitelist: ["group:*"], blacklist: ["group:1"] }, ops: { sid: "onebot:111", whitelist: ["group:1"] } },
           },
         },
-      }),
-    ).toThrow("both claim channels");
+      },
+      "neko",
+    );
+
+    expect(result.skipped[0]!.message).toContain("both claim channels");
   });
 });
 

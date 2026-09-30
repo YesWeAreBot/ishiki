@@ -1,7 +1,8 @@
 import type { Agent } from "@yesimagent/core";
+import type { Context } from "koishi";
 
 import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../types.js";
-import { WakeupEngine, atSelf, registerWakeupEngine, type WakeupDecision } from "./engine.js";
+import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance } from "./engine.js";
 
 /**
  * classic 唤醒引擎：YesImBot v3 的响应意愿（Willingness）。
@@ -111,11 +112,13 @@ interface ChannelWillingness {
   updatedAt: number;
 }
 
-export class ClassicWakeupEngine extends WakeupEngine<"classic"> {
+export class ClassicWakeupInstance implements WakeupEngineInstance {
+  public readonly config: ClassicWakeupConfig;
+
   private readonly channels = new Map<string, ChannelWillingness>();
 
   constructor(config: Partial<ClassicWakeupConfig> = {}) {
-    super("classic", normalize({ ...DEFAULT_CLASSIC_WAKEUP, ...config }));
+    this.config = normalize({ ...DEFAULT_CLASSIC_WAKEUP, ...config });
   }
 
   /**
@@ -206,4 +209,13 @@ declare module "./engine.js" {
   }
 }
 
-registerWakeupEngine("classic", (config) => new ClassicWakeupEngine(config));
+/** classic 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
+export class ClassicWakeupEngine extends WakeupEngine<"classic"> {
+  constructor(ctx: Context) {
+    super(ctx, "classic");
+  }
+
+  create(config: Partial<ClassicWakeupConfig>): WakeupEngineInstance {
+    return new ClassicWakeupInstance(config);
+  }
+}

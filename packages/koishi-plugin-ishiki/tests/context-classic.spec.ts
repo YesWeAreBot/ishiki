@@ -7,7 +7,7 @@ import { createAssistantMessage, createCustomMessage, createEntry, createToolMes
 import type { Logger } from "koishi";
 import { describe, expect, it } from "vitest";
 
-import { ClassicContextEngine, type ClassicContextConfig } from "../src/context/classic.engine.js";
+import { ClassicContextInstance, type ClassicContextConfig } from "../src/context/classic.engine.js";
 import type { ContextEngineOptions } from "../src/context/engine.js";
 import type { IshikiMessageCreated } from "../src/types.js";
 
@@ -17,8 +17,8 @@ const logger = { debug: () => undefined, warn: () => undefined, error: () => und
 /** 一个不存在的目录：多数用例不需要记忆块，读不到就是空。 */
 const NOWHERE = path.join(tmpdir(), "ishiki-classic-absent");
 
-function engineWith(config: Partial<ClassicContextConfig> = {}, options: Partial<ContextEngineOptions> = {}): ClassicContextEngine {
-  return new ClassicContextEngine({ logger, resources: RESOURCES, directory: NOWHERE, ...options }, config);
+function engineWith(config: Partial<ClassicContextConfig> = {}, options: Partial<ContextEngineOptions> = {}): ClassicContextInstance {
+  return new ClassicContextInstance(config, { logger, resources: RESOURCES, directory: NOWHERE, ...options });
 }
 
 /** 一条频道消息：进事件流、不带轮次号。 */
@@ -56,7 +56,7 @@ function turn(turnId: string): AgentEntry[] {
 }
 
 /** 跑到模型能看到的那条 user 消息为止。 */
-function renderWorld(engine: ClassicContextEngine, entries: readonly AgentEntry[]): string {
+function renderWorld(engine: ClassicContextInstance, entries: readonly AgentEntry[]): string {
   const windowed = engine.transformEntries(entries);
   const messages = windowed.filter((entry) => entry.type === "message").map((entry) => entry.data);
   const rendered = engine.transformMessages([...messages]);
@@ -204,7 +204,7 @@ describe("classic context: 核心记忆块", () => {
 
 describe("classic context: 装配前提", () => {
   it("缺目录或资源路径时直接抛错，不静默降级", () => {
-    expect(() => new ClassicContextEngine({ logger })).toThrow(/needs ContextEngineOptions/);
-    expect(() => new ClassicContextEngine({ logger, resources: RESOURCES })).toThrow(/needs ContextEngineOptions/);
+    expect(() => new ClassicContextInstance({}, { logger })).toThrow(/needs ContextEngineOptions/);
+    expect(() => new ClassicContextInstance({}, { logger, resources: RESOURCES })).toThrow(/needs ContextEngineOptions/);
   });
 });

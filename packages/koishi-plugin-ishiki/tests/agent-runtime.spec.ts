@@ -4,12 +4,15 @@ import path from "node:path";
 
 import { APICallError, MockLanguageModelV4, createCustomMessage, type LanguageModelV4StreamPart, type ProviderV4 } from "@yesimagent/core";
 import { createGateway, type Gateway } from "@yesimagent/gateway";
-import { sleep, type Context, type Logger, type Session } from "koishi";
+import { Context, sleep, type Logger, type Session } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { ProfileConfig, resolveProfile } from "../src/profile.js";
+import { StandardContextEngine } from "../src/context/standard.engine.js";
+import { resolveProfile } from "../src/profile.js";
 import { ProfileRuntime, loadProfiles, type AgentRuntime } from "../src/runtime.js";
 import { StandardHandler } from "../src/session-handler.js";
+import { NativeToolcallEngine } from "../src/toolcall/native.engine.js";
+import { StandardWakeupEngine } from "../src/wakeup/standard.engine.js";
 
 const logs: string[] = [];
 const logger = {
@@ -27,16 +30,28 @@ const model = new MockLanguageModelV4({
   },
 });
 const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
-const ctx = { bots: { "onebot:1": { platform: "onebot", selfId: "1" } } } as unknown as Context;
+// 引擎 provider 立在这台 ctx 上：运行时只按服务名取用，用例给的就是真服务。
+// toolcall 用 preset 的缺省（native），所以它也在这里。
+const ctx = new Context();
+new StandardContextEngine(ctx);
+new StandardWakeupEngine(ctx);
+new NativeToolcallEngine(ctx);
 
-/** 装载并实例化：测试直连生产里 fiber 的两步——解析出可装载项，再构造运行实例。 */
+// provider 在 ready 时登记：先启动，运行时的按名取用才有东西可取。
+beforeAll(async () => {
+  await ctx.start();
+});
+
+/** 装载并实例化：测试直连生产里的「宿主 + 逐个 preset fiber」两步——解析出可装载项，再逐个激活。 */
 function load(root: string): ProfileRuntime[] {
-  return loadProfiles(root, logger).map(
-    (item) => new ProfileRuntime({ id: item.id, directory: item.directory, resolved: item.resolved, ctx, gateway, logger }),
-  );
+  return loadProfiles(root, logger).map((item) => {
+    const profile = new ProfileRuntime({ id: item.id, directory: item.directory, ctx, gateway, logger });
+    for (const preset of item.presets) profile.activate(preset);
+    return profile;
+  });
 }
 
-const config = ProfileConfig({
+const config = {
   id: "neko",
   presets: {
     base: {
@@ -50,7 +65,7 @@ const config = ProfileConfig({
       },
     },
   },
-});
+};
 
 function message(kind: "direct" | "group", channelId: string, id: string, selfId = "1") {
   return createCustomMessage("ishiki.message.created", {
@@ -71,7 +86,8 @@ describe("profile runtime", () => {
 
   beforeAll(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "ishiki-runtime-"));
-    runtime = new ProfileRuntime({ id: "neko", directory: root, resolved: resolveProfile(config, "neko"), ctx, gateway, logger });
+    runtime = new ProfileRuntime({ id: "neko", directory: root, ctx, gateway, logger });
+    for (const preset of resolveProfile(config, "neko").presets) runtime.activate(preset);
   });
 
   afterAll(async () => {
@@ -186,12 +202,14 @@ describe("profile loading", () => {
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
   it("loads a profile from its directory, using the directory name as a fallback id", () => {
-    const profiles = load(root);
+    const items = loadProfiles(root, logger);
+    const neko = items.find((item) => item.id === "neko")!;
 
-    expect(profiles.map((profile) => profile.id)).toEqual(["neko"]);
-    expect(profiles[0].specs.map((spec) => spec.name)).toEqual(["dms"]);
-    expect(profiles[0].specs[0].sid).toBe("onebot:1");
-    // 坏掉的目录只跳过它自己：YAML 读不动、没有 profile.yml、preset 既无 scenes 也非 cross，各记一条，其余 profile 照常
+    expect(neko.presets.flatMap((preset) => preset.specs).map((spec) => spec.name)).toEqual(["dms"]);
+    expect(neko.presets[0]!.specs[0]!.sid).toBe("onebot:1");
+    // 坏 preset 只跳过自己：dangling 还带着有效的 base 加载，orphan 各记一条
+    expect(items.find((item) => item.id === "dangling")!.presets.map((preset) => preset.name)).toEqual(["base"]);
+    // 坏掉的目录只跳过它自己：YAML 读不动、没有 profile.yml，各记一条，其余 profile 照常
     expect(logs.some((line) => line.includes("broken"))).toBe(true);
     expect(logs.some((line) => line.includes("empty"))).toBe(true);
     expect(logs.some((line) => line.includes("is not cross"))).toBe(true);
@@ -205,9 +223,11 @@ describe("profile loading", () => {
       ["presets:", "  base:", "    model: test:model", "    scenes:", "      dms:", "        sid: onebot:1", "        whitelist: []"].join("\n"),
     );
 
+    const [item] = loadProfiles(none, logger);
+    expect(item!.presets.flatMap((preset) => preset.specs)).toHaveLength(1);
+
     const profiles = load(none);
-    expect(profiles[0].specs).toHaveLength(1);
-    expect(profiles[0].route(message("direct", "private:9", "a"))).toBeUndefined();
+    expect(profiles[0]!.route(message("direct", "private:9", "a"))).toBeUndefined();
 
     rmSync(none, { recursive: true, force: true });
   });
@@ -248,7 +268,7 @@ describe("profile loading", () => {
 /** 按给定配置展开出 spec 的 typing，用来验算预设与覆写的优先级。 */
 function resolveTyping(typing?: Record<string, number>, sceneTyping?: Record<string, number>) {
   return resolveProfile(
-    ProfileConfig({
+    {
       presets: {
         base: {
           model: "m",
@@ -256,9 +276,9 @@ function resolveTyping(typing?: Record<string, number>, sceneTyping?: Record<str
           scenes: { s: { sid: "onebot:1", whitelist: ["private:*"], ...(sceneTyping === undefined ? {} : { typing: sceneTyping }) } },
         },
       },
-    } as never),
+    },
     "p",
-  ).specs[0].typing;
+  ).presets[0]!.specs[0]!.typing;
 }
 
 describe("typing config", () => {
@@ -282,7 +302,7 @@ describe("typing config", () => {
 /** 按给定配置展开出 spec 的 failover，用来验算预设与覆写的优先级。 */
 function resolveFailover(failover?: Record<string, unknown>, sceneFailover?: Record<string, unknown>) {
   return resolveProfile(
-    ProfileConfig({
+    {
       presets: {
         base: {
           model: "m",
@@ -290,9 +310,9 @@ function resolveFailover(failover?: Record<string, unknown>, sceneFailover?: Rec
           scenes: { s: { sid: "onebot:1", whitelist: ["private:*"], ...(sceneFailover === undefined ? {} : { failover: sceneFailover }) } },
         },
       },
-    } as never),
+    },
     "p",
-  ).specs[0].failover;
+  ).presets[0]!.specs[0]!.failover;
 }
 
 describe("failover config", () => {
@@ -384,7 +404,7 @@ function makeGateway(first: MockLanguageModelV4, second: MockLanguageModelV4): G
 /** 一份最小 profile：私聊能唤醒，模型与降级配置由参数给。 */
 function makeRuntime(directory: string, model: string, gateway: Gateway, failover?: Record<string, unknown>): ProfileRuntime {
   const resolved = resolveProfile(
-    ProfileConfig({
+    {
       id: "failover",
       presets: {
         base: {
@@ -395,10 +415,12 @@ function makeRuntime(directory: string, model: string, gateway: Gateway, failove
           scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
         },
       },
-    }),
+    },
     "failover",
   );
-  return new ProfileRuntime({ id: "failover", directory, resolved, ctx, gateway, logger });
+  const runtime = new ProfileRuntime({ id: "failover", directory, ctx, gateway, logger });
+  for (const preset of resolved.presets) runtime.activate(preset);
+  return runtime;
 }
 
 describe("failover wiring", () => {

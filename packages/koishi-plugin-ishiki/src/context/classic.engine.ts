@@ -3,12 +3,12 @@ import path from "node:path";
 
 import { Template } from "@huggingface/jinja";
 import { type AgentEntry, type AgentMessage, createUserMessage } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
 import { actionBlock, observationBlock } from "../toolcall/classic.engine.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, registerContextEngine, type ContextEngineOptions } from "./engine.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions } from "./engine.js";
 
 /**
  * classic 上下文引擎：YesImBot v3 的 WorldState 投影。
@@ -188,7 +188,9 @@ function readMemoryBlocks(directory: string): MemoryBlock[] {
   return blocks;
 }
 
-export class ClassicContextEngine extends ContextEngine<"classic"> {
+export class ClassicContextInstance implements ContextEngineInstance {
+  public readonly config: ClassicContextConfig;
+
   private readonly logger: Logger;
   private readonly directory: string;
   private readonly resources: string;
@@ -196,12 +198,12 @@ export class ClassicContextEngine extends ContextEngine<"classic"> {
   private worldTemplate?: Template;
   private instructionTemplate?: Template;
 
-  constructor(options: ContextEngineOptions, config: Partial<ClassicContextConfig> = {}) {
-    super("classic", {
+  constructor(config: Partial<ClassicContextConfig>, options: ContextEngineOptions) {
+    this.config = {
       maxMessages: atLeast(config.maxMessages, 1, DEFAULT_MAX_MESSAGES),
       keepFullTurnCount: atLeast(config.keepFullTurnCount, 0, DEFAULT_KEEP_FULL_TURNS),
       memoryBlocks: config.memoryBlocks ?? true,
-    });
+    };
 
     const { directory, resources } = options;
     if (directory === undefined || resources === undefined) {
@@ -330,4 +332,13 @@ declare module "./engine.js" {
   }
 }
 
-registerContextEngine("classic", (config, options) => new ClassicContextEngine(options, config));
+/** classic 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
+export class ClassicContextEngine extends ContextEngine<"classic"> {
+  constructor(ctx: Context) {
+    super(ctx, "classic");
+  }
+
+  create(config: Partial<ClassicContextConfig>, options: ContextEngineOptions): ContextEngineInstance {
+    return new ClassicContextInstance(config, options);
+  }
+}

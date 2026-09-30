@@ -14,15 +14,17 @@ import {
   type AgentMessage,
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
-import type { Context, Logger } from "koishi";
+import { Context, type Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { StandardContextEngine } from "../src/context/standard.engine.js";
+import { StandardContextInstance } from "../src/context/standard.engine.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { createSendMessage } from "../src/tools/send-message.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../src/types.js";
-import { createWakeupEngine } from "../src/wakeup/index.js";
-import { JevWakeupEngine, type JevWakeupConfig } from "../src/wakeup/jev.engine.js";
+import { JevWakeupEngine, JevWakeupInstance, type JevWakeupConfig } from "../src/wakeup/jev.engine.js";
+
+/** provider 只需要一个 Koishi Context，不需要 start；只有 `ctx.get(服务名)` 才要求 start。 */
+const app = new Context();
 
 const logs: string[] = [];
 const warnings: string[] = [];
@@ -112,7 +114,7 @@ function stubAgent(stored: readonly AgentEntry[] = []) {
 /** 一个挂到打桩 agent 上的引擎。 */
 function attached(config: JevParams = {}, stored: readonly AgentEntry[] = []) {
   const stub = stubAgent(stored);
-  const engine = new JevWakeupEngine({ apiKey: "k", ...config }, { logger });
+  const engine = new JevWakeupInstance({ apiKey: "k", ...config }, { logger });
   const dispose = engine.attach(stub.agent);
   return { engine, dispose, ...stub };
 }
@@ -274,7 +276,7 @@ describe("jev wakeup: 窗口", () => {
       },
       id: "broken",
     } as unknown as Agent;
-    const engine = new JevWakeupEngine({ apiKey: "k" }, { logger });
+    const engine = new JevWakeupInstance({ apiKey: "k" }, { logger });
     engine.attach(broken);
 
     expect(await engine.decide(message())).toBe("trigger");
@@ -500,7 +502,7 @@ describe("jev wakeup: 决策日志", () => {
     const now = Date.now();
     const stored = [createEntry("message", message({ content: "下午的会定了吗", timestamp: now - 1_000 }), { timestamp: now - 1_000 })];
     const stub = stubAgent(stored);
-    const engine = new JevWakeupEngine({ apiKey: "k" }, { logger });
+    const engine = new JevWakeupInstance({ apiKey: "k" }, { logger });
 
     const dispose = engine.attach(stub.agent);
     expect(logs).toContainEqual(expect.stringMatching(/^debug wakeup jev \[stub\] attached$/));
@@ -515,23 +517,22 @@ describe("jev wakeup: 决策日志", () => {
 });
 
 describe("jev wakeup: 配置", () => {
-  it("按名从注册表建出引擎", () => {
+  it("provider 按 profile 配置造出运行体", () => {
     vi.stubEnv("TYPESAFE_API_KEY", "from-env");
-    const engine = createWakeupEngine({ engine: "jev", jev: { threshold: 0.8 } }, {});
+    const engine = new JevWakeupEngine(app).create({ threshold: 0.8 }, {});
 
-    expect(engine).toBeInstanceOf(JevWakeupEngine);
-    expect(engine.name).toBe("jev");
-    expect((engine as JevWakeupEngine).config.apiKey).toBe("from-env");
-    expect((engine as JevWakeupEngine).config.threshold).toBe(0.8);
+    expect(engine).toBeInstanceOf(JevWakeupInstance);
+    expect((engine as JevWakeupInstance).config.apiKey).toBe("from-env");
+    expect((engine as JevWakeupInstance).config.threshold).toBe(0.8);
   });
 
   it("缺 apiKey 时装配即抛错，不静默退化", () => {
     vi.stubEnv("TYPESAFE_API_KEY", "");
-    expect(() => new JevWakeupEngine({}, {})).toThrow(/apiKey/);
+    expect(() => new JevWakeupInstance({}, {})).toThrow(/apiKey/);
   });
 
   it("越界的数值回落到默认值", () => {
-    const engine = new JevWakeupEngine({ apiKey: "k", threshold: 2, cooldownMs: -1, timeoutMs: 1, historyMessages: 0 }, {});
+    const engine = new JevWakeupInstance({ apiKey: "k", threshold: 2, cooldownMs: -1, timeoutMs: 1, historyMessages: 0 }, {});
     expect(engine.config.threshold).toBe(1);
     expect(engine.config.cooldownMs).toBe(30_000);
     expect(engine.config.timeoutMs).toBe(1_500);
@@ -562,9 +563,9 @@ describe("jev wakeup: 接进场景", () => {
       doStream: async () => ({ stream: simulateReadableStream({ chunks: steps.shift() ?? textStep("嗯") }) }),
     });
 
-    const wakeup = new JevWakeupEngine({ apiKey: "k" }, { logger });
+    const wakeup = new JevWakeupInstance({ apiKey: "k" }, { logger });
     // 自定义消息要有人投影成模型消息，否则一轮的 prompt 是空的。
-    const context = new StandardContextEngine({ logger }, { maxChars: 10_000 });
+    const context = new StandardContextInstance({ maxChars: 10_000 }, { logger });
     const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-jev-"));
 
     try {

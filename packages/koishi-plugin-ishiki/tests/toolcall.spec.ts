@@ -1,9 +1,12 @@
 import type { LanguageModel, LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4GenerateResult } from "@yesimagent/core";
+import { Context } from "koishi";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { classicProtocol, classicSystemPromptTemplate, classicToolResponse } from "../src/toolcall/classic.engine.js";
-import { createToolcallEngine } from "../src/toolcall/index.js";
+import { ClassicToolcallEngine, HermesToolcallEngine, NativeToolcallEngine } from "../src/toolcall/index.js";
 import { loadParser } from "../src/toolcall/parser.js";
+
+const app = new Context();
 
 const TOOL = {
   type: "function" as const,
@@ -67,21 +70,19 @@ describe("toolcall engine", () => {
     await loadParser();
   });
 
-  it("native 不接管模型，未登记的引擎名抛错", () => {
+  it("native 不接管模型", () => {
     const { model } = stubModel("");
-    expect(createToolcallEngine({ engine: "native" }).name).toBe("native");
-    expect(createToolcallEngine({ engine: "native" }).wrap(model)).toBe(model);
-    expect(() => createToolcallEngine({ engine: "hermez" })).toThrow(/unknown toolcall engine/);
+    expect(new NativeToolcallEngine(app).create().wrap(model)).toBe(model);
   });
 
   it("非 v4 模型原样返回", () => {
     const v3 = { specificationVersion: "v3" } as unknown as LanguageModel;
-    expect(createToolcallEngine({ engine: "hermes" }).wrap(v3)).toBe(v3);
+    expect(new HermesToolcallEngine(app).create().wrap(v3)).toBe(v3);
   });
 
   it("classic 引擎注入契约与工具目录，并把 actions 解析成 tool-call", async () => {
     const { model, seen } = stubModel(answer('[{"function":"peek_channel_history","params":{"limit":5}}]'));
-    const wrapped = createToolcallEngine({ engine: "classic" }).wrap(model) as LanguageModelV4;
+    const wrapped = new ClassicToolcallEngine(app).create().wrap(model) as LanguageModelV4;
 
     const result = await wrapped.doGenerate(callOptions());
 
@@ -104,8 +105,8 @@ describe("toolcall engine", () => {
     const empty = stubModel(answer("[]"));
     const dropped = stubModel(answer('[{"function":"没这个工具","params":{}}]'));
 
-    const emptyResult = await (createToolcallEngine({ engine: "classic" }).wrap(empty.model) as LanguageModelV4).doGenerate(callOptions());
-    const droppedResult = await (createToolcallEngine({ engine: "classic" }).wrap(dropped.model) as LanguageModelV4).doGenerate(callOptions());
+    const emptyResult = await (new ClassicToolcallEngine(app).create().wrap(empty.model) as LanguageModelV4).doGenerate(callOptions());
+    const droppedResult = await (new ClassicToolcallEngine(app).create().wrap(dropped.model) as LanguageModelV4).doGenerate(callOptions());
 
     expect(emptyResult.content.filter((part) => part.type === "tool-call")).toHaveLength(0);
     expect(droppedResult.content.filter((part) => part.type === "tool-call")).toHaveLength(0);
@@ -120,8 +121,8 @@ describe("toolcall engine", () => {
   it("每个协议接的是自己的模板", async () => {
     const classic = stubModel("随便一段话");
     const hermes = stubModel("随便一段话");
-    await (createToolcallEngine({ engine: "classic" }).wrap(classic.model) as LanguageModelV4).doGenerate(callOptions());
-    await (createToolcallEngine({ engine: "hermes" }).wrap(hermes.model) as LanguageModelV4).doGenerate(callOptions());
+    await (new ClassicToolcallEngine(app).create().wrap(classic.model) as LanguageModelV4).doGenerate(callOptions());
+    await (new HermesToolcallEngine(app).create().wrap(hermes.model) as LanguageModelV4).doGenerate(callOptions());
 
     expect(systemText(classic.seen[0]!)).toContain(CONTRACT);
     expect(systemText(hermes.seen[0]!)).not.toContain(CONTRACT);

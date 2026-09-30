@@ -15,23 +15,26 @@ import {
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import { sleep, type Context, type Logger } from "koishi";
-import { afterEach, describe, expect, it } from "vitest";
+import { Context, sleep, type Logger } from "koishi";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { ProfileConfig, resolveProfile, type ResolvedProfile } from "../src/profile.js";
+import { StandardContextEngine } from "../src/context/standard.engine.js";
+import { resolveProfile, type ResolvedProfile } from "../src/profile.js";
 import { ProfileRuntime } from "../src/runtime.js";
+import { NativeToolcallEngine } from "../src/toolcall/native.engine.js";
 import type { IshikiEvent } from "../src/types.js";
-import { ClassicWakeupEngine } from "../src/wakeup/classic.engine.js";
-import { registerWakeupEngine, WakeupEngine, type WakeupDecision } from "../src/wakeup/index.js";
+import { ClassicWakeupInstance } from "../src/wakeup/classic.engine.js";
+import { WakeupEngine, type WakeupDecision, type WakeupEngineInstance } from "../src/wakeup/index.js";
+import { StandardWakeupEngine } from "../src/wakeup/standard.engine.js";
 
 /**
- * 一个只数「被造了几次」的唤醒引擎：preset 层造实例，频道只引用，同一套账因此跨频道可见。
- * 建了几次就是共享得对不对——账的内容各频道不同，看实例数才验得出来。
+ * 一个只数「被造了几次」的唤醒引擎：运行体随场景诞生，provider 只做工厂。
+ * 建了几次就是共享得对不对——账的内容各场景不同，看实例数才验得出来。
  */
 let built = 0;
-class CountingWakeupEngine extends WakeupEngine<"counting"> {
-  constructor(_config: Record<string, never>) {
-    super("counting", {});
+
+class CountingWakeupInstance implements WakeupEngineInstance {
+  constructor() {
     built += 1;
   }
 
@@ -46,7 +49,16 @@ declare module "../src/wakeup/engine.js" {
   }
 }
 
-registerWakeupEngine("counting", (config) => new CountingWakeupEngine(config));
+/** 用例自带的引擎 provider：一个变体一个服务，构造即登记。 */
+class CountingWakeupEngine extends WakeupEngine<"counting"> {
+  constructor(ctx: Context) {
+    super(ctx, "counting");
+  }
+
+  create(): WakeupEngineInstance {
+    return new CountingWakeupInstance();
+  }
+}
 
 /** 用例自选的唤醒规则：认领里没有私聊时改由 @ 起一轮。 */
 type Wakeup = { engine: "standard"; standard: { direct: boolean; atSelf: boolean; quoteSelf: boolean; keywords: string[] } };
@@ -64,26 +76,33 @@ const logger = {
 } as unknown as Logger;
 
 const sent: Array<{ sid: string; channelId: string; content: string }> = [];
-const ctx = {
-  bots: {
-    "onebot:1": {
-      platform: "onebot",
-      selfId: "1",
-      sendMessage: async (channelId: string, content: string) => {
-        sent.push({ sid: "onebot:1", channelId, content });
-        return [`id-${sent.length}`];
-      },
+
+/** 一台桩 bot：只实现发消息，用来验出站真的发到了哪个频道。 */
+function stubBot(sid: string) {
+  return {
+    platform: "onebot",
+    selfId: sid.slice("onebot:".length),
+    sendMessage: async (channelId: string, content: string) => {
+      sent.push({ sid, channelId, content });
+      return [`id-${sent.length}`];
     },
-    "onebot:2": {
-      platform: "onebot",
-      selfId: "2",
-      sendMessage: async (channelId: string, content: string) => {
-        sent.push({ sid: "onebot:2", channelId, content });
-        return [`id-${sent.length}`];
-      },
-    },
-  },
-} as unknown as Context;
+  };
+}
+
+// 引擎 provider 立在这台 ctx 上：运行时只按服务名取用，用例给的就是真服务；bot 换成桩。
+// toolcall 用 preset 的缺省（native），所以它也在这里。
+const ctx = new Context();
+new StandardContextEngine(ctx);
+new StandardWakeupEngine(ctx);
+new CountingWakeupEngine(ctx);
+new NativeToolcallEngine(ctx);
+
+beforeAll(async () => {
+  await ctx.start();
+  // 只为看出站内容，不跑 Bot 的生命周期：把注册表换成桩。真 Bot 要协议适配器，这里用不上。
+  const host = ctx as unknown as { bots: Record<string, unknown> };
+  host.bots = { "onebot:1": stubBot("onebot:1"), "onebot:2": stubBot("onebot:2") };
+});
 
 function textStep(text: string): LanguageModelV4StreamPart[] {
   return [
@@ -146,7 +165,8 @@ function rig(resolved: ResolvedProfile): Rig {
   const script: LanguageModelV4StreamPart[][] = [];
   const model = scripted(() => script, prompts);
   const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
-  const runtime = new ProfileRuntime({ id: "neko", directory: root, resolved, ctx, gateway, logger });
+  const runtime = new ProfileRuntime({ id: "neko", directory: root, ctx, gateway, logger });
+  for (const preset of resolved.presets) runtime.activate(preset);
   return { root, prompts, script, runtime, scenesDir: path.join(root, "scenes") };
 }
 
@@ -176,7 +196,7 @@ function crossSpecs(
   wakeup: Wakeup = { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
 ): ResolvedProfile {
   return resolveProfile(
-    ProfileConfig({
+    {
       id: "neko",
       presets: {
         lounge: {
@@ -188,7 +208,7 @@ function crossSpecs(
           typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
         },
       },
-    }),
+    },
     "neko",
   );
 }
@@ -196,7 +216,7 @@ function crossSpecs(
 /** 一份普通 preset：一频道一实例，逐频道认领。 */
 function plainSpecs(): ResolvedProfile {
   return resolveProfile(
-    ProfileConfig({
+    {
       id: "plain",
       presets: {
         base: {
@@ -210,13 +230,16 @@ function plainSpecs(): ResolvedProfile {
           },
         },
       },
-    }),
+    },
     "plain",
   );
 }
 
 describe("cross 聚合：claims 的频道共用一块视窗", () => {
-  const rigged = rig(crossSpecs());
+  let rigged: Rig;
+  beforeEach(() => {
+    rigged = rig(crossSpecs());
+  });
   afterEach(() => teardown(rigged));
 
   it("认领的频道全部汇进同一个实例，不逐频道各建一个", () => {
@@ -418,7 +441,10 @@ describe("cross 聚合：跨账号认领", () => {
 });
 
 describe("非 cross 零收缩", () => {
-  const rigged = rig(plainSpecs());
+  let rigged: Rig;
+  beforeEach(() => {
+    rigged = rig(plainSpecs());
+  });
   afterEach(() => teardown(rigged));
 
   it("仍是一频道一实例，目录仍按 sid 与频道命名", async () => {
@@ -467,7 +493,7 @@ describe("引擎随生效单位独立", () => {
   it("同一 preset 下的兄弟 scene 是两个实例，唤醒引擎各自一份", async () => {
     built = 0;
     const resolved = resolveProfile(
-      ProfileConfig({
+      {
         id: "plain",
         presets: {
           base: {
@@ -481,15 +507,15 @@ describe("引擎随生效单位独立", () => {
             },
           },
         },
-      }),
+      },
       "plain",
     );
-    expect(resolved.specs.map((spec) => spec.preset)).toEqual(["base", "base"]);
+    expect(resolved.presets.flatMap((preset) => preset.specs).map((spec) => spec.preset)).toEqual(["base", "base"]);
 
     const rigged = rig(resolved);
     const room = rigged.runtime.route(message("group:2", "a"));
     const dm = rigged.runtime.route(message("private:9", "c"));
-    // 两个 scene 是两个生效单位、两个 agent；引擎随实例各造一份，跨实例状态走 shared 池
+    // 两个 scene 是两个生效单位、两个 agent；引擎随实例各造一份，状态留在实例内
     expect(room).not.toBe(dm);
     expect(built).toBe(2);
 
@@ -533,7 +559,7 @@ function at(channelId: string) {
 
 describe("唤醒记账归谁", () => {
   it("聚合形态：一轮走完，视窗内各频道的意愿值都扣掉回复成本", () => {
-    const engine = new ClassicWakeupEngine();
+    const engine = new ClassicWakeupInstance();
     const { agent, append, turnDone } = stubAgent();
     // 整块视窗挂一次：视窗里出现过哪些频道由事实流自己说明，两个群的账共用一次开口
     engine.attach(agent);
@@ -553,7 +579,7 @@ describe("唤醒记账归谁", () => {
   });
 
   it("非聚合形态：各频道各记各的，一轮只扣它自己那个频道", () => {
-    const engine = new ClassicWakeupEngine();
+    const engine = new ClassicWakeupInstance();
     const first = stubAgent();
     const second = stubAgent();
     engine.attach(first.agent);
@@ -572,7 +598,7 @@ describe("唤醒记账归谁", () => {
   });
 
   it("拆卸之后这条视窗的账被丢掉，回执也不再落到它头上", () => {
-    const engine = new ClassicWakeupEngine();
+    const engine = new ClassicWakeupInstance();
     const { agent, append, turnDone } = stubAgent();
     const dispose = engine.attach(agent);
 

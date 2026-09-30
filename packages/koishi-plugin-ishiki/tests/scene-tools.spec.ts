@@ -4,13 +4,16 @@ import path from "node:path";
 
 import { MockLanguageModelV4, createCustomMessage, simulateReadableStream, type LanguageModelV4StreamPart, type Tool } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import type { Context, Logger } from "koishi";
+import { Context, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { ProfileConfig, resolveProfile } from "../src/profile.js";
+import { StandardContextEngine } from "../src/context/standard.engine.js";
+import { resolveProfile } from "../src/profile.js";
 import { ProfileRuntime } from "../src/runtime.js";
+import { NativeToolcallEngine } from "../src/toolcall/native.engine.js";
 import { createFinish } from "../src/tools/finish.js";
 import { createSendMessage } from "../src/tools/send-message.js";
+import { StandardWakeupEngine } from "../src/wakeup/standard.engine.js";
 
 const USAGE = {
   inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
@@ -168,7 +171,7 @@ describe("tools through a real agent", () => {
     return [`id-${platform.sent.length}`];
   };
 
-  const config = ProfileConfig({
+  const config = {
     id: "neko",
     presets: {
       base: {
@@ -184,12 +187,30 @@ describe("tools through a real agent", () => {
         },
       },
     },
-  });
+  };
 
-  beforeAll(() => {
+  // 引擎 provider 立在这台 ctx 上：运行时只按服务名取用，用例给的就是真服务；bot 换成桩。
+  const app = new Context();
+  new StandardContextEngine(app);
+  new StandardWakeupEngine(app);
+  new NativeToolcallEngine(app);
+
+  beforeAll(async () => {
     root = mkdtempSync(path.join(os.tmpdir(), "ishiki-tools-"));
     prompts = [];
     steps = [];
+    await app.start();
+    // 平台出站只验「发了什么」：把 bot 注册表换成桩，真 Bot 要协议适配器，这里用不上。
+    const bots = app as unknown as { bots: Record<string, unknown> };
+    bots.bots = {
+      "onebot:1": {
+        platform: "onebot",
+        selfId: "1",
+        // 解引用而不是取值：用例可以在运行中换掉发送行为来模拟平台失败。
+        sendMessage: (channelId: string, content: string) => deliverMessage(channelId, content),
+      },
+    };
+
     const model = new MockLanguageModelV4({
       doStream: async (request) => {
         prompts.push(JSON.stringify(request.prompt));
@@ -198,18 +219,8 @@ describe("tools through a real agent", () => {
       },
     });
     const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
-    const ctx = {
-      bots: {
-        "onebot:1": {
-          platform: "onebot",
-          selfId: "1",
-          // 解引用而不是取值：用例可以在运行中换掉发送行为来模拟平台失败。
-          sendMessage: (channelId: string, content: string) => deliverMessage(channelId, content),
-        },
-      },
-    } as unknown as Context;
-
-    runtime = new ProfileRuntime({ id: "neko", directory: root, resolved: resolveProfile(config, "neko"), ctx, gateway, logger });
+    runtime = new ProfileRuntime({ id: "neko", directory: root, ctx: app, gateway, logger });
+    for (const preset of resolveProfile(config, "neko").presets) runtime.activate(preset);
   });
 
   afterAll(async () => {

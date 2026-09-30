@@ -1,9 +1,9 @@
 import { createEntry, createUserMessage, generateText, type Agent, type AgentEntry, type AgentMessage } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import type { Context, Logger } from "koishi";
 
 import type { InstanceDomain } from "../domain.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, registerContextEngine, type ContextEngineOptions } from "./engine.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions } from "./engine.js";
 
 declare module "@yesimagent/core" {
   interface AgentCustomEntry {
@@ -194,7 +194,9 @@ function findCut(tail: readonly AgentEntry[], head: number, target: number, doma
  *
  * 除压缩成功时追加的那一条 compact 外，本引擎只读不写。
  */
-export class StandardContextEngine extends ContextEngine<"standard"> {
+export class StandardContextInstance implements ContextEngineInstance {
+  public readonly config: StandardContextConfig;
+
   private agent?: Agent;
   private readonly logger?: Logger;
   /** 本实例的可见域；缺省即单频道视窗，行不带坐标。 */
@@ -206,10 +208,10 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
   private compacting?: Promise<void>;
   private abort?: AbortController;
 
-  constructor(options: ContextEngineOptions, config: Partial<StandardContextConfig> = {}) {
+  constructor(config: Partial<StandardContextConfig>, options: ContextEngineOptions) {
     const maxChars = config.maxChars ?? DEFAULT_CONTEXT_CHARS;
     const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
-    super("standard", { maxChars, refillRatio });
+    this.config = { maxChars, refillRatio };
     this.logger = options.logger;
     this.domain = options.domain;
     this.ceiling = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : 0;
@@ -350,4 +352,13 @@ declare module "./engine.js" {
   }
 }
 
-registerContextEngine("standard", (config, options) => new StandardContextEngine(options, config));
+/** standard 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
+export class StandardContextEngine extends ContextEngine<"standard"> {
+  constructor(ctx: Context) {
+    super(ctx, "standard");
+  }
+
+  create(config: Partial<StandardContextConfig>, options: ContextEngineOptions): ContextEngineInstance {
+    return new StandardContextInstance(config, options);
+  }
+}

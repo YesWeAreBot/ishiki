@@ -3,14 +3,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { MockLanguageModelV4, createCustomMessage, simulateReadableStream, type LanguageModelV4StreamPart } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import { Context, type Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { StandardContextEngine } from "../src/context/standard.engine.js";
+import { StandardContextInstance } from "../src/context/standard.engine.js";
 import { AgentRuntime } from "../src/runtime.js";
 import type { IshikiMessageCreated } from "../src/types.js";
-import { ClassicWakeupEngine } from "../src/wakeup/classic.engine.js";
-import { createWakeupEngine } from "../src/wakeup/index.js";
+import { ClassicWakeupEngine, ClassicWakeupInstance } from "../src/wakeup/classic.engine.js";
+import { StandardWakeupEngine, StandardWakeupInstance } from "../src/wakeup/standard.engine.js";
+
+/** provider 只需要一个 Koishi Context，不需要 start；只有 `ctx.get(服务名)` 才要求 start。 */
+const app = new Context();
 
 const logs: string[] = [];
 const logger = {
@@ -36,15 +39,16 @@ function message(overrides: Partial<IshikiMessageCreated> = {}) {
 }
 
 /** 只看得到的意愿值：`decide` 的掷骰在测试里不参与断言。 */
-function engineWith(overrides: Partial<ConstructorParameters<typeof ClassicWakeupEngine>[0]> = {}): ClassicWakeupEngine {
-  return new ClassicWakeupEngine(overrides);
+function engineWith(overrides: Partial<ConstructorParameters<typeof ClassicWakeupInstance>[0]> = {}): ClassicWakeupInstance {
+  return new ClassicWakeupInstance(overrides);
 }
 
 describe("classic wakeup: 配置", () => {
-  it("按名从注册表建出引擎", () => {
-    expect(createWakeupEngine({ engine: "classic" }, {}).name).toBe("classic");
-    expect(createWakeupEngine({ engine: "standard" }, {}).name).toBe("standard");
-    expect(() => createWakeupEngine({ engine: "nope" }, {})).toThrow(/unknown wakeup engine/);
+  it("provider 按 profile 配置造出运行体", () => {
+    const classic = new ClassicWakeupEngine(app).create({ maxWillingness: 42 });
+    expect(classic).toBeInstanceOf(ClassicWakeupInstance);
+    expect((classic as ClassicWakeupInstance).config.maxWillingness).toBe(42);
+    expect(new StandardWakeupEngine(app).create({ direct: false })).toBeInstanceOf(StandardWakeupInstance);
   });
 
   it("越界的数值回落到默认值，不把 NaN 放进概率", () => {
@@ -204,9 +208,9 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
       { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: USAGE },
     ];
     const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: stream }) }) });
-    const wakeup = new ClassicWakeupEngine();
+    const wakeup = new ClassicWakeupInstance();
     // 自定义消息要有人投影成模型消息，否则一轮的 prompt 是空的。
-    const context = new StandardContextEngine({ logger }, { maxChars: 10_000 });
+    const context = new StandardContextInstance({ maxChars: 10_000 }, { logger });
     const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-"));
 
     try {

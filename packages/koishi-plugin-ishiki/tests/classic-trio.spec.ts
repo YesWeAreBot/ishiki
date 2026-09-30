@@ -12,15 +12,16 @@ import {
   tool,
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import { Context, type Logger } from "koishi";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { ClassicContextEngine } from "../src/context/classic.engine.js";
+import { ClassicContextInstance } from "../src/context/classic.engine.js";
 import { createAgentPlugin } from "../src/runtime.js";
-import { createToolcallEngine } from "../src/toolcall/index.js";
+import { ClassicToolcallEngine } from "../src/toolcall/classic.engine.js";
 import { loadParser } from "../src/toolcall/parser.js";
 import type { IshikiMessageCreated } from "../src/types.js";
 
+const app = new Context();
 const RESOURCES = fileURLToPath(new URL("../resources", import.meta.url));
 const logger = { debug: () => undefined, warn: () => undefined, error: () => undefined } as unknown as Logger;
 const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
@@ -91,10 +92,10 @@ describe("classic 三件套跑一轮真实轮次", () => {
       }),
     };
 
-    const context = new ClassicContextEngine({ logger, resources: RESOURCES, directory: path.join(tmpdir(), "ishiki-classic-absent") });
+    const context = new ClassicContextInstance({}, { logger, resources: RESOURCES, directory: path.join(tmpdir(), "ishiki-classic-absent") });
     const agent = createAgent({
       id: "classic-trio",
-      model: createToolcallEngine({ engine: "classic" }).wrap(model),
+      model: new ClassicToolcallEngine(app).create().wrap(model),
       instructions: "You are Ishiki.",
       storage: createMemoryStorage(),
       plugins: [createAgentPlugin({ context })],

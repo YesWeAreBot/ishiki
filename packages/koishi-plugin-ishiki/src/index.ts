@@ -5,14 +5,21 @@ import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gat
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
 
-import * as contextEngines from "./context/index.js";
+import { ClassicContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
-import * as toolcallEngines from "./toolcall/index.js";
+import {
+  ClassicToolcallEngine,
+  HermesToolcallEngine,
+  MorphXmlToolcallEngine,
+  NativeToolcallEngine,
+  Qwen3CoderToolcallEngine,
+  YamlXmlToolcallEngine,
+} from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import { loadCodemode } from "./tools/codemode.js";
-import * as wakeupEngines from "./wakeup/index.js";
+import { ClassicWakeupEngine, JevWakeupEngine, StandardWakeupEngine } from "./wakeup/index.js";
 
 class Ishiki extends Service<Ishiki.Config> {
   static name = "ishiki";
@@ -43,6 +50,21 @@ class Ishiki extends Service<Ishiki.Config> {
       config: modelConfig,
       fetch: this.config.dumpRequests ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataRoot, "requests") }) : undefined,
     });
+
+    // 内置引擎变体：一个变体一个 provider Service，构造即登记，服务名即准入。
+    // 必须排在 ready 监听之前：provider 的登记也挂在 ready 上，先挂的先跑，profile 装载时
+    // 才看得到这些服务，preset 的引擎依赖不会先落进等待态。
+    new StandardContextEngine(ctx);
+    new ClassicContextEngine(ctx);
+    new StandardWakeupEngine(ctx);
+    new ClassicWakeupEngine(ctx);
+    new JevWakeupEngine(ctx);
+    new NativeToolcallEngine(ctx);
+    new ClassicToolcallEngine(ctx);
+    new HermesToolcallEngine(ctx);
+    new Qwen3CoderToolcallEngine(ctx);
+    new MorphXmlToolcallEngine(ctx);
+    new YamlXmlToolcallEngine(ctx);
 
     ctx.on("ready", () => void this.load());
     ctx.on("internal/session", (session) => void this.onSession(session));
@@ -75,36 +97,6 @@ class Ishiki extends Service<Ishiki.Config> {
     } catch (error) {
       this.logger.error(`profile loading failed, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-
-  /**
-   * 注册面：社区扩展在 apply 期同步登记自己的引擎变体。社区变体的名字写成 `包名/名字`，
-   * 只有 `extends` 选中该包的 preset 用得上（无前缀的名字是内建变体，不受此门控）；
-   * 注册随调用方的插件生命周期撤销——cordis 把这里的 `this.ctx` 绑在调用方作用域上，
-   * 包卸载时变体一并消失，不会留下悬空的注册。
-   *
-   * 走服务命名空间而不是根导出：包外若把本包装成普通依赖会出现第二份模块实例，写进另一张
-   * 注册表并静默失效；绑定运行中的服务实例没有这个问题。
-   */
-  public registerContextEngine<K extends keyof contextEngines.ContextEngines>(
-    name: K,
-    create: (config: contextEngines.ContextEngines[K], options: contextEngines.ContextEngineOptions) => contextEngines.ContextEngine<K>,
-  ): void {
-    this.ctx.effect(() => contextEngines.registerContextEngine(name, create));
-  }
-
-  public registerWakeupEngine<K extends keyof wakeupEngines.WakeupEngines>(
-    name: K,
-    create: (config: wakeupEngines.WakeupEngines[K], deps: wakeupEngines.WakeupEngineDeps) => wakeupEngines.WakeupEngine<K>,
-  ): void {
-    this.ctx.effect(() => wakeupEngines.registerWakeupEngine(name, create));
-  }
-
-  public registerToolcallEngine<K extends keyof toolcallEngines.ToolcallEngines>(
-    name: K,
-    create: (config: toolcallEngines.ToolcallEngines[K]) => toolcallEngines.ToolcallEngine<K>,
-  ): void {
-    this.ctx.effect(() => toolcallEngines.registerToolcallEngine(name, create));
   }
 
   /** 平台事件进门：自家回声丢掉，其余交给它归属的那个场景。 */
@@ -147,12 +139,19 @@ declare module "koishi" {
   }
 }
 
-// 社区包需要的东西：继承用的基类与 `declare module` 增强用的参数表接口。
-// 注册动词不走根导出——服务命名空间才是入口，见 `Ishiki.registerContextEngine` 的注释。
-export { ContextEngine, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
+// 社区包需要的东西：继承用的 provider 基类与运行体契约、服务名函数，以及 `declare module`
+// 增强用的参数表接口。接入方式是给自己的变体建一个 Koishi 服务，服务名由 serviceName 函数给出。
+export { ContextEngine, contextEngineServiceName, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
 export type { ClaimedAccount, InstanceDomain } from "./domain.js";
 export type { Extension, ExtensionCoords, ExtensionProvider } from "./extension.js";
-export { ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
-export { WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngines } from "./wakeup/index.js";
+export { ToolcallEngine, toolcallEngineServiceName, type ToolcallEngineInstance, type ToolcallEngines } from "./toolcall/index.js";
+export {
+  WakeupEngine,
+  wakeupEngineServiceName,
+  type WakeupDecision,
+  type WakeupEngineDeps,
+  type WakeupEngineInstance,
+  type WakeupEngines,
+} from "./wakeup/index.js";
 
 export default Ishiki;
