@@ -5,11 +5,13 @@ import { Template } from "@huggingface/jinja";
 import {
   createAgent,
   createJsonlStorage,
+  ToolConflictError,
   type Agent,
   type AgentEvent,
   type AgentStorage,
   type LanguageModel,
   type LanguageModelUsage,
+  type ToolCallers,
   type ToolSet,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
@@ -18,7 +20,7 @@ import { parse } from "yaml";
 
 import { ContextEngine, type ContextEngineInstance, type ContextEngines } from "./context/index.js";
 import { claimLines, type InstanceDomain } from "./domain.js";
-import { extensionServiceName, type Disposer, type ExtensionHandler, type ExtensionService } from "./extension.js";
+import { type Extension, type ExtensionHandler } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { engineParams, matchSceneSpec, resolveProfile, sceneDirectoryName, type CodemodeConfig, type ResolvedPreset, type SceneSpec } from "./profile.js";
 import { ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
@@ -65,7 +67,7 @@ export interface AgentRuntimeConfig {
   /** 该频道的独立目录，存放 `events.jsonl` 及后续的附件。 */
   directory: string;
   model: LanguageModel;
-  /** 平台能力与其它 Koishi 服务的入口；扩展包经 {@link AgentRuntime.addTools} 一类的挂载面用到它。 */
+  /** 平台能力与其它 Koishi 服务的入口；扩展包挂载期间经它取用别的服务。 */
   ctx: Context;
   /** 本实例的可见域。 */
   domain: InstanceDomain;
@@ -74,16 +76,16 @@ export interface AgentRuntimeConfig {
   /** 基础提示词：内核那一段（身份与处境），聚合形态的地址簿跟在后面。扩展包的在它们之后。 */
   instructions: string;
   context: ContextEngineInstance;
-  /** 内核工具面（`send_message` 与 `finish`）。扩展包在构造期间往这里加，加完才算定。 */
+  /** 内核工具面（`send_message` 与 `finish`）。扩展包的增量每轮加在它之上。 */
   tools: ToolSet;
   /**
-   * 本实例启用的扩展包，按 preset 配置里的书写顺序。包名到 provider 的解析由所属生效单位完成，
-   * 这里只按顺序各叫一次 `provide()`。
+   * 本实例启用的扩展包，按 preset 配置里的书写顺序。包名到 handler 的解析由所属生效单位完成，
+   * 这里只按顺序各叫一次这个 handler。
    */
   extensions: Array<{ handler: ExtensionHandler; config: unknown }>;
   /** 是否给整份工具面前置 `inner_thoughts`；扩展包加的工具一并覆盖。 */
   innerThoughts: boolean;
-  /** 代码模式配置；收窄在扩展包加完工具之后进行，所以包的工具也进得了沙箱表。 */
+  /** 代码模式配置；收窄每轮在扩展增量之后进行，所以包这一轮给的工具照样进沙箱表。 */
   codemode: CodemodeConfig;
   /** 唤醒引擎运行体：本实例一份，账本只记本视窗的事实流。 */
   wakeup: WakeupEngineInstance;
@@ -130,10 +132,10 @@ export class AgentRuntime {
   private readonly wakeup: WakeupEngineInstance;
   private readonly context: ContextEngineInstance;
   private readonly agent: Agent;
-  /** 装配期的工具面：内核工具先落进来，扩展包逐个往上加，加完才交给 core。 */
-  private readonly tools: ToolSet;
+  /** 本实例挂上的扩展包：它们的钩子每轮现取，这里只留着贡献物本身。 */
+  private readonly extensions: Extension[] = [];
   /** 扩展包各自交回的拆卸函数，按挂载先后入队；停止时逆序执行，先挂的后拆。 */
-  private readonly disposers: Disposer[] = [];
+  private readonly disposers: Array<() => void> = [];
   /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
   private readonly toolStartedAt = new Map<string, number>();
   private readonly stepStartedAt = new Map<string, number>();
@@ -150,26 +152,26 @@ export class AgentRuntime {
     mkdirSync(this.directory, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.directory, "events.jsonl"));
 
-    // 扩展包在 Agent 诞生之前加法：工具面与提示词都还没定下来，撞名在这里抛，
-    // 代码模式的收窄表也还看得见包加的工具。往后这个口就关了——工具面在实例生命周期内固定。
-    this.tools = { ...config.tools };
+    // 扩展包在 Agent 诞生之前挂上：每个包交回一个有限的加法贡献物，这里只登记、不取用。
+    // 取用发生在 core 每轮第一步的那两个钩子里（见下面的 extendTools / extendInstructions）。
     for (const { handler, config: presetConfig } of config.extensions) {
       try {
-        const dispose = handler(presetConfig, this);
-        if (dispose !== undefined) this.disposers.push(dispose);
+        const extension = handler(presetConfig, this);
+        if (extension === undefined) continue;
+        this.extensions.push(extension);
+        const { dispose } = extension;
+        if (dispose !== undefined) this.disposers.push(() => dispose());
       } catch (error) {
-        // 装配失败就等于这个实例从未存在：已拿到拆卸函数的挂载按逆序拆掉，不给包留悬挂的引用。
-        // 包自己在返回拆卸函数之前开的资源由它自己负责——内核拿不到拆卸函数就拆不了。
+        // 装配失败就等于这个实例从未存在：已登记的挂载按逆序拆掉，不给包留悬挂的引用。
+        // 包自己在返回 Extension 之前开的资源由它自己负责——内核拿不到 Extension 就拆不了。
         for (const dispose of this.disposers.splice(0).reverse()) dispose();
         throw error;
       }
     }
 
-    const base = config.innerThoughts ? withInnerThoughts(this.tools, this.logger) : this.tools;
-
     // 代码模式只改工具面：宿主工具一件不动，模型目录收窄成只剩沙箱那一件。
-    // 收窄与沙箱工具是同一次装配的两半——表里点名的进沙箱，没点名的留在目录。
-    const sandbox = config.codemode.enable ? createCodemode(config.codemode, base) : undefined;
+    // 表与工具面同源，所以工具面每轮重算时表也重填，core 读的是这个对象的引用。
+    const toolCallers: ToolCallers = {};
 
     this.agent = createAgent({
       id: this.label,
@@ -190,13 +192,38 @@ export class AgentRuntime {
           // 上下文两段加工：一段段往下传。引擎缺席或返回 undefined 都表示这一步不改，原样放行。
           transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
           transformMessages: (messages, options) => this.context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
-          // 引擎给出的那一段提示词接在内核拼好的提示词之后。
+          // 提示词段每轮现算：内核那一段（聚合形态的地址簿在其中）→ 扩展增量（按 extends 顺序）
+          // → 上下文引擎那一段。空段不占位，免得拼出一串空行。
           extendInstructions: async () => {
+            const parts = [config.instructions];
+            for (const extension of this.extensions) {
+              const contributed = extension.extendInstructions?.();
+              if (contributed !== undefined && contributed.length > 0) parts.push(contributed);
+            }
             const extended = (await this.context.instructions?.()) ?? "";
-            return [config.instructions, extended].join("\n\n");
+            if (extended.length > 0) parts.push(extended);
+            return parts.filter((text) => text.length > 0).join("\n\n");
           },
+          // 工具面每轮现算：内核工具 → 扩展增量（按 extends 顺序，与内核工具或先装的包撞名抛错）
+          // → innerThoughts 前置 → 代码模式收窄。core 每轮第一步来取一次，这里不缓存；
+          // 跨轮稳定由包自己在钩子里保证。
           extendTools: () => {
-            return sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool };
+            const merged: ToolSet = { ...config.tools };
+            for (const extension of this.extensions) {
+              const contributed = extension.extendTools?.();
+              if (contributed === undefined) continue;
+              for (const [name, tool] of Object.entries(contributed)) {
+                if (name in merged) throw new ToolConflictError(name);
+                merged[name] = tool;
+              }
+            }
+            const base = config.innerThoughts ? withInnerThoughts(merged, this.logger) : merged;
+            if (!config.codemode.enable) return base;
+            const sandbox = createCodemode(config.codemode, base);
+            // 先清旧键：上一轮收窄过的工具不能永远留在表里。
+            for (const name of Object.keys(toolCallers)) delete toolCallers[name];
+            Object.assign(toolCallers, sandbox.callers);
+            return { ...base, [CODE_MODE]: sandbox.tool };
           },
           // 停轮：唯一决策点，读本步消息流。finish 出现即停；否则发言（send_message 直调且全部
           // continue!==true 且结果全成功）且本步没有别的实义工具时停；其余交 core 默认。
@@ -251,7 +278,8 @@ export class AgentRuntime {
         },
       ],
       // core 的配置字段叫 toolCallers；它转发给 streamText 时才改名为 experimental_toolCallers。
-      ...(sandbox === undefined ? {} : { toolCallers: sandbox.callers }),
+      // 传的是那个可变对象本身：表每轮被重填，core 读的是引用。
+      ...(config.codemode.enable ? { toolCallers } : {}),
     });
   }
 
@@ -485,9 +513,8 @@ export class PresetRuntime {
     // 扩展包按 preset 配置里的书写顺序挂到这一个实例上。取不到服务只有一种可能：这条 fiber 已经
     // 把它声明为依赖，装配次序错了，或服务卸载后旧引用还在用。抛错，不静默跳过。
     const extensions = Object.entries(this.extensions).map(([pkg, config]) => {
-      const service = extensionServiceName(pkg);
-      const handler = (this.ctx.get(service) as ExtensionService | undefined)?.handler;
-      if (handler === undefined) throw new Error(`extension service "${service}" is not available`);
+      const handler = this.ctx.ishiki.getExtension(pkg);
+      if (handler === undefined) throw new Error(`extension service "ishiki.ext.${pkg}" is not available`);
       return { handler, config };
     });
 
@@ -587,7 +614,7 @@ function presetServices(preset: ResolvedPreset): string[] {
     WakeupEngine.GetName(spec.wakeup.engine),
     ToolcallEngine.GetName(spec.toolcall.engine),
   ]);
-  return [...new Set([...Object.keys(preset.extensions).map(extensionServiceName), ...names])];
+  return [...new Set([...Object.keys(preset.extensions).map((pkg) => `ishiki.ext.${pkg}`), ...names])];
 }
 
 /** 一份装载就绪的 profile：preset 分组已展开，尚未实例化——每个 preset 等自己依赖的服务就位。 */

@@ -160,10 +160,10 @@ failover:
 引擎是「选一个」，贡献物是「加一些」：包对某一个 AgentRuntime 提供工具与提示词，不抢决策。
 
 1. 建一个 Koishi 插件（`static inject = ["ishiki"]`），在构造器里调 `ctx.ishiki.provide("<包名>", handler)`。它内部开一条 fiber 建 `ishiki.ext.<包名>` 服务，返回值就是那条 fiber 的 disposer——`ctx.on("dispose", disposer)` 把服务挂在自己这条 fiber 上，这是归属声明，不是可选的卫生习惯。
-2. 写 handler `(presetConfig, runtime) => void | (() => void)`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，加法只能经 `runtime.addTools()` / `runtime.addInstructions()`；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。返回拆卸函数，实例停止时逆序执行。这个实例用不上这个包就什么都不调。
-3. 在 preset 的 `extends` 里写上包名；需要参数就写 `config:`，字段含义由包自己解释。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名在装配点抛错。`enable: false` 表示这一档不要：不依赖、不等待、不调用。
-4. 归位由内核定：工具并入内核工具之后、`innerThoughts` 之前、代码模式收窄之前；提示词接在内核那一段之后，按 `extends` 的顺序。
+2. 写 handler `(presetConfig, runtime) => Extension | void`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，包交回一个 `Extension`——`extendTools` / `extendInstructions` 两个钩子，由 core 每轮第一步取一次；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。返回值里的 `dispose` 在实例停止时逆序执行。钩子里的错误落在轮次里。这个实例用不上这个包就返回 `undefined`。
+3. 在 preset 的 `extends` 里写上包名；需要参数就写 `config:`，字段含义由包自己解释。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名抛 `ToolConflictError`。`enable: false` 表示这一档不要：不依赖、不等待、不调用。
+4. 内核不缓存这两样：每一轮第一步现取现算，工具面的顺序是内核工具 + 各包增量（按 `extends` 的顺序），之后 `innerThoughts`，再之后代码模式收窄；提示词接在内核那一段之后。要跨轮稳定就由包自己在闭包里缓存。
 
-两个 disposer 是两件事，别混：`ctx.ishiki.provide()` 返回的那个移除的是**服务**（连同这条 fiber），由扩展插件自己绑在生命周期上；handler 返回的那个清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。
+两个 disposer 是两件事，别混：`ctx.ishiki.provide()` 返回的那个移除的是**服务**（连同这条 fiber），由扩展插件自己绑在生命周期上；返回值里的 `dispose` 清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。
 
 坐标里没有的东西不要从别处推：`channel.type` 要用自己从 Koishi 取；包自己发的消息不结束轮次（停轮只认 `finish` 与 `send_message`）。完整契约与刻意的缺失项见 [03-community-extension-mechanism.md](../03-community-extension-mechanism.md)。

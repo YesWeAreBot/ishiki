@@ -22,9 +22,11 @@ export class NekoTools extends Plugin {
       "dispose",
       ctx.ishiki.provide("neko-tools", (presetConfig, runtime) => {
         const options = parseConfig(presetConfig);
-        runtime.addTools(createTools(options, runtime.domain));
-        runtime.addInstructions(`检索上限 ${options.maxResults}。`);
-        return () => client.close();
+        return {
+          extendTools: () => createTools(options, runtime.domain),
+          extendInstructions: () => `检索上限 ${options.maxResults}。`,
+          dispose: () => client.close(),
+        };
       }),
     );
   }
@@ -32,11 +34,11 @@ export class NekoTools extends Plugin {
 ```
 
 - 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次 handler，**同步**；异步准备在包的构造期做完。
-- handler 拿到的是已初始化基础字段、尚未创建 `Agent` 的实例。`agent` 本身碰不到，加法只能经 `addTools` / `addInstructions`；两者只在装配期可用，之后工具面固定，Agent 诞生后再调抛错。
-- 每频道的过滤归包自己：包看着 `runtime.domain` 决定这档要不要加，不加就什么都不调。
-- handler 的返回值是这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们随实例一起消失。
+- handler 拿到的是已初始化基础字段、尚未创建 `Agent` 的实例。`agent` 本身碰不到，包只能交回一个 `Extension`：`extendTools` / `extendInstructions` 两个钩子，名字与合成规则都照抄 `AgentPlugin` 的同名钩子，区别是内核不缓存——core 每轮第一步取一次，工具面与提示词因此每轮现算。
+- 每频道的过滤归包自己：包看着 `runtime.domain` 决定这档要不要加，用不上就返回 `undefined`，一个字也不必加。
+- 返回值里的 `dispose` 是这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们每轮从钩子现取，随实例一起消失。
 
-**两个 disposer 是两件事**：`ctx.ishiki.provide()` 返回的那个拆掉的是**服务**（连同那条 fiber），必须由扩展插件绑在自己的生命周期上；handler 返回的那个清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。cordis 把服务绑在调用方那条 fiber 上，所以 `ctx.on("dispose", ...)` 是归属声明而不是可选的卫生习惯。
+**两个 disposer 是两件事**：`ctx.ishiki.provide()` 返回的那个拆掉的是**服务**（连同那条 fiber），必须由扩展插件绑在自己的生命周期上；返回值里的 `dispose` 清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。cordis 把服务绑在调用方那条 fiber 上，所以 `ctx.on("dispose", ...)` 是归属声明而不是可选的卫生习惯。
 
 **坐标**从实例上直接取：`runtime.ctx`、`runtime.domain`、`runtime.directory`。
 
@@ -48,11 +50,11 @@ export class NekoTools extends Plugin {
 
 刻意不给：`channel.type`（要用自己从 Koishi 取）、`logger`（`ctx.logger("包名")` 才是 tag 正确的那个）、`resources`（内核拿不到别的包的路径）、profile / preset / scene 名（要按 preset 行为是包配置的寻址问题，不靠坐标加名字）。
 
-**归位**：工具并入内核工具之后、`innerThoughts` 之前（整份工具面统一前置念头字段）、代码模式收窄之前（贡献的工具因此能进沙箱表）；提示词接在内核那一段之后，按 `extends` 的顺序。与内核工具或先装配的包撞名在装配点抛错，不静默覆盖。贡献物是纯加法：上下文管线的改写段与唯一的收尾、停轮判定都不进社区面。
+**归位与时机**：每一轮的第一步，core 向内核要一次工具面与提示词。工具面的拼法是内核工具 + 各包的增量（按 `extends` 的顺序），之后整份工具面统一前置 `innerThoughts`，再按收窄表进代码模式；提示词接在内核那一段之后。内核不缓存这两样，包每轮拿到的是这一轮的现取结果——要它跨轮不变，由包自己在闭包里缓存。与内核工具或先装配的包撞名抛 `ToolConflictError`，不静默覆盖；合并在轮次里进行，这个错误因此表现为那一轮失败，而不是实例起不来。贡献物是纯加法：上下文管线的改写段与唯一的收尾、停轮判定都不进社区面。
 
 **出站**：包有 `ctx`，要发消息就能发，内核不铺路也不设闸；但停轮判定只认内核的 `finish` 与 `send_message`，包的工具落在「其他工具 → 续轮」，包自己发的消息不结束轮次。
 
-**代价**：贡献物的错误只能在实例诞生时暴露（重名、handler 抛错）。引擎变体的准入在装载期只看服务在不在，贡献物查不出来，因为它依赖实例坐标——这是「实例按需诞生」的必然。handler 抛错时装配回滚：已拿到拆卸函数的挂载按逆序拆掉，不给包留悬挂的引用；包自己在返回拆卸函数之前开的资源拆不了，内核拿不到拆卸函数就拆不了。
+**代价**：handler 抛错只能在这一实例诞生时暴露；引擎变体的准入在装载期只看服务在不在，贡献物查不出来，因为它依赖实例坐标——这是「实例按需诞生」的必然。handler 抛错时装配回滚：已拿到 `Extension` 的挂载按逆序拆掉，不给包留悬挂的引用；包自己在返回之前开的资源拆不了，内核拿不到 `Extension` 就拆不了。钩子里的错误（含撞名）落在轮次里，由 core 记成轮次失败，实例本身不受影响。
 
 ## 被否定的前提
 
@@ -280,4 +282,4 @@ Service 化的只是生命周期容器，不是装配逻辑：装配器照旧是
 7. [x] preset fiber 化（ProfileRuntime 持久宿主 + 每 preset 一条 `ctx.inject` fiber + `PresetRuntime`；`ctx.inject` 按 `extends` 与最终 spec 的引擎服务门控；公共 API 收敛为 `ctx.ishiki.provide(name, handler)`）。
 8. [x] 端到端验证（`tests/extension-contributions.spec.ts` 12 例：缺席等待与重装重建、装载出的 preset 能路由起场景、注册 disposer 幂等、handler 中途抛错逆序回滚、同一包服务多个 preset 且配置隔离、Engine-only 与 Extension-only 独立）。
 
-9. [x] 贡献物落地（`src/domain.ts` 的可见域类型与 `src/extension.ts` 的加法契约、`AgentRuntime` 构造期的装配点、handler 返回 `undefined` 与抛错两条路径、撞名抛错）。
+9. [x] 贡献物落地（`src/domain.ts` 的可见域类型与 `src/extension.ts` 的加法契约、`AgentRuntime` 构造期登记 handler 返回的 `Extension`、handler 返回 `undefined` 与抛错两条路径、每轮现取工具面与提示词、撞名在轮次里抛错）。

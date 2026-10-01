@@ -7,7 +7,7 @@ import { parse } from "yaml";
 
 import { V3ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
-import { type Disposer, type ExtensionHandler } from "./extension.js";
+import { type Extension, type ExtensionHandler } from "./extension.js";
 import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -130,19 +130,24 @@ class Ishiki extends Service<Ishiki.Config> {
   /**
    * 登记一个扩展包，启用 `ishiki.ext.<name>` 服务。
    *
-   * `handler` 在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步；它的返回值是
-   * 这次挂载的拆卸函数，实例停止时逆序执行。加法只能经 `runtime.addTools()` / `runtime.addInstructions()`，
-   * 坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。这个实例用不上就什么都不调。
+   * `handler` 在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步；它返回这次挂载的
+   * `Extension`（工具与提示词两个加法钩子），实例停止时逆序执行它的 `dispose`。坐标在
+   * `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。这个实例用不上就返回 `undefined`。
+   *
+   * 服务本身就是那个 handler：`[Service.invoke]` 把它做成可调用的服务（`ctx.logger` 同款），
+   * `ctx.get()` 取出来直接调用，不再包一层 `{ handler }`。它依旧是货真价实的 Service——能被 `inject`
+   * 声明为依赖，fiber 停掉时服务随之消失。
    *
    * 返回值是**注册**拆卸函数，移除这个包的服务——与 `handler` 的返回是两件事，别混。
    * 服务挂在这条 fiber 上，归属由调用方声明：`ctx.on("dispose", dispose)`。漏绑不会立刻泄漏，
    * 但服务会跟着 Ishiki 走完，不随调用方那条 fiber 消失。
    */
-  public provide(name: string, handler: ExtensionHandler): Disposer {
+  public provide(name: string, handler: ExtensionHandler): () => void {
     const fiber = this.ctx.plugin(
       class extends Service {
-        get handler() {
-          return handler;
+        // 呼叫即转交给 handler：cordis 用 `[Service.invoke]` 把服务实例做成函数，`ctx.logger` 同款。
+        [Service.invoke](presetConfig: unknown, agentRuntime: runtime.AgentRuntime): Extension | void {
+          return handler(presetConfig, agentRuntime);
         }
         constructor(ctx: Context) {
           super(ctx, `ishiki.ext.${name}`, true);
@@ -153,6 +158,17 @@ class Ishiki extends Service<Ishiki.Config> {
     return () => {
       fiber.dispose();
     };
+  }
+
+  /**
+   * 取某个扩展包挂上来的 handler；`undefined` 表示这个包没挂上。
+   *
+   * 服务名只在这里拼一次，顺带把类型收窄成模板字面量：`ctx.get` 因此选中 cordis 那条类型化重载，
+   * 属性类型由 `extension.ts` 的模块增强给出，不必断言。
+   */
+  public getExtension(pkg: string): ExtensionHandler | undefined {
+    const service: `ishiki.ext.${string}` = `ishiki.ext.${pkg}`;
+    return this.ctx.get(service);
   }
 }
 
@@ -179,7 +195,7 @@ declare module "koishi" {
 // 扩展走 `ctx.ishiki.provide(name, handler)`；引擎走继承 provider 基类，服务名由基类的静态 `GetName` 给出。
 export { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
 export type { ClaimedAccount, InstanceDomain } from "./domain.js";
-export { extensionServiceName, type Disposer, type ExtensionHandler } from "./extension.js";
+export { type Extension, type ExtensionHandler } from "./extension.js";
 export type { AgentRuntime } from "./runtime.js";
 export { ToolcallEngine, type ToolcallEngineInstance, type ToolcallEngines } from "./toolcall/index.js";
 export { WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngineInstance, type WakeupEngines } from "./wakeup/index.js";

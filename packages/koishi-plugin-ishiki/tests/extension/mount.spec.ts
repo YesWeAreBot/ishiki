@@ -5,7 +5,9 @@ import path from "node:path";
 import {
   MockLanguageModelV4,
   createCustomMessage,
+  jsonSchema,
   simulateReadableStream,
+  tool,
   type LanguageModelV4CallOptions,
   type LanguageModelV4FunctionTool,
   type LanguageModelV4StreamPart,
@@ -15,7 +17,7 @@ import { Context, sleep, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "../../src/context/engine.js";
-import type { ExtensionHandler } from "../../src/extension.js";
+import type { Extension, ExtensionHandler } from "../../src/extension.js";
 import Ishiki from "../../src/index.js";
 import { activateProfiles, loadProfiles, type AgentRuntime, type ProfileRuntime } from "../../src/runtime.js";
 
@@ -34,16 +36,26 @@ const calls: Array<{ domain: AgentRuntime["domain"]; directory: string; config: 
 /** 拆卸记录：实例停止时按逆序执行，每个包一条。 */
 const disposed: string[] = [];
 
+/** 一件包贡献的工具：只用来证明它进了模型目录，不需要真的被调用。 */
+const lookup = tool({
+  description: "查一点东西。",
+  inputSchema: jsonSchema<{ keyword: string }>({ type: "object", properties: { keyword: { type: "string" } }, required: ["keyword"] }),
+  execute: async () => ({ hits: [] }),
+});
+
 /**
  * 一个只记账的扩展包：`ctx.ishiki.provide()` 登记 `ishiki.ext.neko-tools`，handler 在每个实例诞生时
  * 被叫一次。包自己解释 `config`，内核只负责原样递过来。
  */
-function extensionPackage(pkg = "neko-tools") {
+function extensionPackage(pkg = "neko-tools", contribute?: (runtime: AgentRuntime) => Extension) {
   function nekoTools(ctx: Context) {
     const handler: ExtensionHandler = (presetConfig, runtime) => {
       calls.push({ domain: runtime.domain, directory: runtime.directory, config: presetConfig, ctx: runtime.ctx });
-      return () => {
-        disposed.push(pkg);
+      return {
+        ...contribute?.(runtime),
+        dispose: () => {
+          disposed.push(pkg);
+        },
       };
     };
     // 归属声明：服务随这条 fiber 走。漏绑的话服务会活到 ishiki 自己 dispose。
@@ -357,7 +369,8 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     // 两个包都在位，preset 照常激活。
     expect(profiles[0]!.route(message("private:9", "hi"))).toBeDefined();
 
-    expect(root.get("ishiki.ext.first")).toBeDefined();
+    // 服务本身可调用：没有 `{ handler }` 包装，取出来直接就是 handler。
+    expect(typeof root.get("ishiki.ext.first")).toBe("function");
     holds.unregister!();
     holds.unregister!();
     await sleep(20);
@@ -382,15 +395,19 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
         (ctx: Context) => {
           ctx.on(
             "dispose",
-            ctx.ishiki.provide("first", () => () => {
-              disposed.push("first");
-            }),
+            ctx.ishiki.provide("first", () => ({
+              dispose: () => {
+                disposed.push("first");
+              },
+            })),
           );
           ctx.on(
             "dispose",
-            ctx.ishiki.provide("second", () => () => {
-              disposed.push("second");
-            }),
+            ctx.ishiki.provide("second", () => ({
+              dispose: () => {
+                disposed.push("second");
+              },
+            })),
           );
           ctx.on(
             "dispose",
@@ -486,6 +503,55 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
       }
     } finally {
       spy.dispose();
+    }
+  });
+
+  it("包的工具与提示词每轮现取：进工具目录、进提示词，内容跨轮可变", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-add-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
+    let round = 0;
+    const pack = root.plugin(
+      extensionPackage("neko-tools", () => ({
+        extendTools: () => ({ lookup }),
+        extendInstructions: () => `第 ${++round} 轮的临时规则`,
+      })),
+    );
+    await sleep(20);
+    // 这条用例自己装包，stand 不再装默认那一份。
+    const rig = await stand(dir, false);
+    try {
+      const scene = rig.profiles[0]!.route(message("private:9", "hi"))!;
+      await scene.deliver(message("private:9", "hi"));
+      await scene.idle();
+      expect(toolCatalog(rig.prompts)).toContain("lookup");
+      expect(rig.prompts.at(-1)).toContain("第 1 轮的临时规则");
+
+      // 内核不缓存钩子的结果：第二轮拿到的是包这一轮给的那份。
+      await scene.deliver(message("private:9", "again"));
+      await scene.idle();
+      expect(rig.prompts.at(-1)).toContain("第 2 轮的临时规则");
+    } finally {
+      await close(rig, dir);
+      pack.dispose();
+    }
+  });
+
+  it("与内核工具撞名：错误落在轮次里，不拦住实例诞生", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-clash-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
+    logs.length = 0;
+    const pack = root.plugin(extensionPackage("neko-tools", () => ({ extendTools: () => ({ send_message: lookup }) })));
+    await sleep(20);
+    const rig = await stand(dir, false);
+    try {
+      // 实例照常诞生：工具面在轮次里才合并，撞名不是装配失败。
+      const scene = rig.profiles[0]!.route(message("private:9", "hi"))!;
+      await scene.deliver(message("private:9", "hi"));
+      await scene.idle();
+      expect(logs.some((line) => line.includes("turn failed"))).toBe(true);
+    } finally {
+      await close(rig, dir);
+      pack.dispose();
     }
   });
 });
