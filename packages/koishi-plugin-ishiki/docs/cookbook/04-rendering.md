@@ -38,7 +38,7 @@
 
 未知事件类型采用 fail-closed：可以保存，但不进入模型上下文。
 
-`standard` 引擎把相邻的这些行合并成一条 user 消息（`collapse`），其余角色（user / assistant / tool）原样保留。`classic` 引擎不合并，而是把整个窗口渲染进一条 `<world_state>` 消息。
+`standard` 引擎把相邻的这些行合并成一条 user 消息（`collapse`），其余角色（user / assistant / tool）原样保留。`v3` 引擎不合并，而是把整个窗口渲染进一条 `<world_state>` 消息。
 
 ### 寻址头
 
@@ -80,7 +80,7 @@
 | 新工具           | 扩展包经 `ctx.ishiki.provide()` 挂到某个 preset，在 `AgentRuntime` 构造期经 `addTools()` 加进工具面                |
 | 一种新事件类型   | 在受体（`src/session-handler.ts`）里归一化，在渲染规则（`src/context/standard.engine.ts` 的 `renderLine`）里加一条 |
 
-事件渲染目前由上下文引擎自己做（`standard` 折行合并，`classic` 渲染成 `<world_state>`），没有独立的 renderer 服务，也不承诺这样一条注册机制。`ctx.ishiki` 不提供 `registerReceptor` / `registerTransform` 这类钩子：等第二种受体或第二种渲染策略真的出现时再说——现在加只会得到只有一个实现、无人实现的接口。
+事件渲染目前由上下文引擎自己做（`standard` 折行合并，`v3` 渲染成 `<world_state>`），没有独立的 renderer 服务，也不承诺这样一条注册机制。`ctx.ishiki` 不提供 `registerReceptor` / `registerTransform` 这类钩子：等第二种受体或第二种渲染策略真的出现时再说——现在加只会得到只有一个实现、无人实现的接口。
 
 ## 不做的
 

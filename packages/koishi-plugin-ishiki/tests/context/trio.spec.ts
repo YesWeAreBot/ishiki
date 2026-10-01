@@ -11,9 +11,9 @@ import {
 import { Context, type Logger } from "koishi";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { ClassicContextInstance } from "../../src/context/classic.engine.js";
-import { ClassicToolcallEngine } from "../../src/toolcall/classic.engine.js";
+import { V3ContextInstance } from "../../src/context/v3.engine.js";
 import { loadParser } from "../../src/toolcall/parser.js";
+import { V3ToolcallEngine } from "../../src/toolcall/v3.engine.js";
 import type { IshikiMessageCreated } from "../../src/types.js";
 import { contextOptions, contextPlugin } from "../context-stub.js";
 
@@ -62,12 +62,12 @@ function incoming(content: string) {
   return createCustomMessage("ishiki.message.created", data);
 }
 
-describe("classic 三件套跑一轮真实轮次", () => {
+describe("v3 三件套跑一轮真实轮次", () => {
   beforeAll(async () => {
     await loadParser();
   });
 
-  it("system 里是契约、工具目录与 classic 的世界观说明；world_state 每步重建", async () => {
+  it("system 里是契约、工具目录与 v3 的世界观说明；world_state 每步重建", async () => {
     const prompts: Array<Array<{ role: string; content: unknown }>> = [];
     const answers = [answer('[{"function":"peek_channel_history","params":{"limit":5}}]'), answer("[]")];
 
@@ -87,10 +87,10 @@ describe("classic 三件套跑一轮真实轮次", () => {
       }),
     };
 
-    const context = new ClassicContextInstance({}, contextOptions(logger));
+    const context = new V3ContextInstance({}, contextOptions(logger));
     const agent = createAgent({
-      id: "classic-trio",
-      model: new ClassicToolcallEngine(app).create().wrap(model),
+      id: "v3-trio",
+      model: new V3ToolcallEngine(app).create().wrap(model),
       instructions: "You are Ishiki.",
       storage: createMemoryStorage(),
       plugins: [contextPlugin(context)],
@@ -102,7 +102,7 @@ describe("classic 三件套跑一轮真实轮次", () => {
 
     expect(prompts).toHaveLength(2);
 
-    // 第一步：契约、v3 形状的工具目录、classic 的世界观说明都在 system 里
+    // 第一步：契约、v3 形状的工具目录、v3 的世界观说明都在 system 里
     const first = prompts[0]!;
     expect(readPrompt(first, "system")).toContain("You are Ishiki.");
     expect(readPrompt(first, "system")).toContain("# Reasoning: think–act cycle");

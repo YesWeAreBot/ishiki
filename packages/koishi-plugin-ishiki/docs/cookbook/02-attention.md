@@ -32,7 +32,7 @@ wakeup:
     keywords: [neko] # 消息里出现这些词
 ```
 
-### `classic`
+### `v3`
 
 YesImBot v3 的响应意愿：每个频道攒一个意愿值，有消息就按
 

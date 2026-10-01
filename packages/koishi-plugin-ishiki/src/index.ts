@@ -5,13 +5,13 @@ import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gat
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
 
-import { ClassicContextEngine, StandardContextEngine } from "./context/index.js";
+import { V3ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import { type Disposer, type ExtensionHandler } from "./extension.js";
 import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
-  ClassicToolcallEngine,
+  V3ToolcallEngine,
   HermesToolcallEngine,
   MorphXmlToolcallEngine,
   NativeToolcallEngine,
@@ -20,7 +20,7 @@ import {
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import { loadCodemode } from "./tools/codemode.js";
-import { ClassicWakeupEngine, JevWakeupEngine, StandardWakeupEngine } from "./wakeup/index.js";
+import { V3WakeupEngine, JevWakeupEngine, StandardWakeupEngine } from "./wakeup/index.js";
 
 class Ishiki extends Service<Ishiki.Config> {
   static name = "ishiki";
@@ -58,16 +58,16 @@ class Ishiki extends Service<Ishiki.Config> {
 
     // Context 引擎族
     ctx.plugin(StandardContextEngine);
-    ctx.plugin(ClassicContextEngine);
+    ctx.plugin(V3ContextEngine);
 
     // 唤醒引擎族
     ctx.plugin(StandardWakeupEngine);
-    ctx.plugin(ClassicWakeupEngine);
+    ctx.plugin(V3WakeupEngine);
     ctx.plugin(JevWakeupEngine);
 
     // 工具调用引擎族
     ctx.plugin(NativeToolcallEngine);
-    ctx.plugin(ClassicToolcallEngine);
+    ctx.plugin(V3ToolcallEngine);
     ctx.plugin(HermesToolcallEngine);
     ctx.plugin(Qwen3CoderToolcallEngine);
     ctx.plugin(MorphXmlToolcallEngine);

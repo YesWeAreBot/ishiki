@@ -5,7 +5,7 @@ import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../t
 import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance } from "./engine.js";
 
 /**
- * classic 唤醒引擎：YesImBot v3 的响应意愿（Willingness）。
+ * v3 唤醒引擎：响应意愿（Willingness，YesImBot v3 形状）。
  *
  * 每个频道攒一个意愿值：来一条消息就按「基础分 + 属性加成 × 兴趣系数 × 边际递减」加分，
  * 闲下来按半衰期衰减，分数越过阈值后以线性概率掷骰决定要不要说话，说过一轮就扣掉成本。
@@ -18,7 +18,7 @@ import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance } 
  */
 
 /** v3 `agent/config.ts:87-130` 的默认值。 */
-const DEFAULT_CLASSIC_WAKEUP: ClassicWakeupConfig = {
+const DEFAULT_V3_WAKEUP: V3WakeupConfig = {
   base: 12,
   atMention: 100,
   isQuote: 15,
@@ -33,7 +33,7 @@ const DEFAULT_CLASSIC_WAKEUP: ClassicWakeupConfig = {
   replyCost: 35,
 };
 
-export interface ClassicWakeupConfig {
+export interface V3WakeupConfig {
   /** 一条消息的基础分。 */
   base: number;
   /** 被 @ 时的加成；与引用、私聊可叠加。 */
@@ -64,14 +64,14 @@ function atLeast(value: number, floor: number, fallback: number): number {
 }
 
 /** 逐项收敛到 v3 Schema 的取值域：配置是手写 YAML，越界的值在这里挡掉，别让 NaN 流进概率。 */
-function normalize(config: ClassicWakeupConfig): ClassicWakeupConfig {
+function normalize(config: V3WakeupConfig): V3WakeupConfig {
   return {
     ...config,
-    maxWillingness: atLeast(config.maxWillingness, 1, DEFAULT_CLASSIC_WAKEUP.maxWillingness),
-    decayHalfLifeSeconds: atLeast(config.decayHalfLifeSeconds, 1, DEFAULT_CLASSIC_WAKEUP.decayHalfLifeSeconds),
-    probabilityThreshold: atLeast(config.probabilityThreshold, 0, DEFAULT_CLASSIC_WAKEUP.probabilityThreshold),
-    probabilityAmplifier: atLeast(config.probabilityAmplifier, 0, DEFAULT_CLASSIC_WAKEUP.probabilityAmplifier),
-    replyCost: atLeast(config.replyCost, 0, DEFAULT_CLASSIC_WAKEUP.replyCost),
+    maxWillingness: atLeast(config.maxWillingness, 1, DEFAULT_V3_WAKEUP.maxWillingness),
+    decayHalfLifeSeconds: atLeast(config.decayHalfLifeSeconds, 1, DEFAULT_V3_WAKEUP.decayHalfLifeSeconds),
+    probabilityThreshold: atLeast(config.probabilityThreshold, 0, DEFAULT_V3_WAKEUP.probabilityThreshold),
+    probabilityAmplifier: atLeast(config.probabilityAmplifier, 0, DEFAULT_V3_WAKEUP.probabilityAmplifier),
+    replyCost: atLeast(config.replyCost, 0, DEFAULT_V3_WAKEUP.replyCost),
   };
 }
 
@@ -81,7 +81,7 @@ function normalize(config: ClassicWakeupConfig): ClassicWakeupConfig {
  * 高于阈值时衰减强度减半，所以分两段：先按减半的强度逐秒走到阈值（这段最多几百次），
  * 剩下的用闭式幂一次算完。`score < 0.01` 归零，与 v3 一致。
  */
-function decay(score: number, elapsedMs: number, config: ClassicWakeupConfig): number {
+function decay(score: number, elapsedMs: number, config: V3WakeupConfig): number {
   if (score === 0) return 0;
 
   let seconds = Math.floor(elapsedMs / 1000);
@@ -112,13 +112,13 @@ interface ChannelWillingness {
   updatedAt: number;
 }
 
-export class ClassicWakeupInstance implements WakeupEngineInstance {
-  public readonly config: ClassicWakeupConfig;
+export class V3WakeupInstance implements WakeupEngineInstance {
+  public readonly config: V3WakeupConfig;
 
   private readonly channels = new Map<string, ChannelWillingness>();
 
-  constructor(config: Partial<ClassicWakeupConfig> = {}) {
-    this.config = normalize({ ...DEFAULT_CLASSIC_WAKEUP, ...config });
+  constructor(config: Partial<V3WakeupConfig> = {}) {
+    this.config = normalize({ ...DEFAULT_V3_WAKEUP, ...config });
   }
 
   /**
@@ -205,17 +205,17 @@ export class ClassicWakeupInstance implements WakeupEngineInstance {
 
 declare module "./engine.js" {
   interface WakeupEngines {
-    classic: ClassicWakeupConfig;
+    v3: V3WakeupConfig;
   }
 }
 
-/** classic 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
-export class ClassicWakeupEngine extends WakeupEngine<"classic"> {
+/** v3 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
+export class V3WakeupEngine extends WakeupEngine<"v3"> {
   constructor(ctx: Context) {
-    super(ctx, "classic");
+    super(ctx, "v3");
   }
 
-  create(config: Partial<ClassicWakeupConfig>): WakeupEngineInstance {
-    return new ClassicWakeupInstance(config);
+  create(config: Partial<V3WakeupConfig>): WakeupEngineInstance {
+    return new V3WakeupInstance(config);
   }
 }

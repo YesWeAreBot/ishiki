@@ -6,12 +6,12 @@ import { type AgentEntry, type AgentMessage, createUserMessage } from "@yesimage
 import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
-import { actionBlock, observationBlock } from "../toolcall/classic.engine.js";
+import { actionBlock, observationBlock } from "../toolcall/v3.engine.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
 import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions } from "./engine.js";
 
 /**
- * classic 上下文引擎：YesImBot v3 的 WorldState 投影。
+ * v3 上下文引擎：WorldState 投影（YesImBot v3 形状）。
  *
  * 每轮把窗口内的事件流渲染成一条 `<world_state>` user 消息：频道、成员、以及切成
  * `processed_events` / `new_events` 的工作记忆。切点是**最后一条 assistant 条目**
@@ -31,7 +31,7 @@ import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions } 
 const DEFAULT_MAX_MESSAGES = 50;
 const DEFAULT_KEEP_FULL_TURNS = 2;
 
-export interface ClassicContextConfig {
+export interface V3ContextConfig {
   /** 单轮窗口内的消息条数上限，至少 1；更旧的整条退出模型视野。 */
   maxMessages: number;
   /** 保留最近多少轮的完整思考/行动/观察；更早的轨迹只留消息。0 表示不降级。 */
@@ -188,8 +188,8 @@ function readMemoryBlocks(directory: string): MemoryBlock[] {
   return blocks;
 }
 
-export class ClassicContextInstance implements ContextEngineInstance {
-  public readonly config: ClassicContextConfig;
+export class V3ContextInstance implements ContextEngineInstance {
+  public readonly config: V3ContextConfig;
 
   private readonly logger: Logger;
   private readonly directory: string;
@@ -198,7 +198,7 @@ export class ClassicContextInstance implements ContextEngineInstance {
   private worldTemplate?: Template;
   private instructionTemplate?: Template;
 
-  constructor(config: Partial<ClassicContextConfig>, options: ContextEngineOptions) {
+  constructor(config: Partial<V3ContextConfig>, options: ContextEngineOptions) {
     this.config = {
       maxMessages: atLeast(config.maxMessages, 1, DEFAULT_MAX_MESSAGES),
       keepFullTurnCount: atLeast(config.keepFullTurnCount, 0, DEFAULT_KEEP_FULL_TURNS),
@@ -207,7 +207,7 @@ export class ClassicContextInstance implements ContextEngineInstance {
 
     const { directory, resources } = options;
     if (directory === undefined || resources === undefined) {
-      throw new Error('context engine "classic" needs ContextEngineOptions.directory and .resources');
+      throw new Error('context engine "v3" needs ContextEngineOptions.directory and .resources');
     }
     this.logger = options.logger;
     this.directory = directory;
@@ -317,11 +317,11 @@ export class ClassicContextInstance implements ContextEngineInstance {
   }
 
   private load(name: string): Template {
-    const file = path.join(this.resources, "templates", "classic", name);
+    const file = path.join(this.resources, "templates", "v3", name);
     try {
       return new Template(readFileSync(file, "utf8"));
     } catch (error) {
-      this.logger.error(`classic template "${name}" unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.error(`v3 template "${name}" unavailable: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
   }
@@ -329,17 +329,17 @@ export class ClassicContextInstance implements ContextEngineInstance {
 
 declare module "./engine.js" {
   interface ContextEngines {
-    classic: ClassicContextConfig;
+    v3: V3ContextConfig;
   }
 }
 
-/** classic 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
-export class ClassicContextEngine extends ContextEngine<"classic"> {
+/** v3 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
+export class V3ContextEngine extends ContextEngine<"v3"> {
   constructor(ctx: Context) {
-    super(ctx, "classic");
+    super(ctx, "v3");
   }
 
-  create(config: Partial<ClassicContextConfig>, options: ContextEngineOptions): ContextEngineInstance {
-    return new ClassicContextInstance(config, options);
+  create(config: Partial<V3ContextConfig>, options: ContextEngineOptions): ContextEngineInstance {
+    return new V3ContextInstance(config, options);
   }
 }

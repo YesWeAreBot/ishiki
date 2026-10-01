@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import { JsonParser } from "../../src/toolcall/json-parser.js";
 
 /** 契约形状：`thoughts` 三段 + `actions`；解析器本身与形状无关，用真实形状当夹具。 */
-interface ClassicOutput {
+interface V3Output {
   thoughts: { observe: string; analyze_infer: string; plan: string };
   actions: Array<{ function: string; params: Record<string, unknown> }>;
 }
 
-const parser = new JsonParser<ClassicOutput>();
+const parser = new JsonParser<V3Output>();
 const looseParser = new JsonParser<unknown>();
 
 /** 诊断里是否出现过某段判定；v3 的 logs 是给人看的，只断言关键措辞。 */

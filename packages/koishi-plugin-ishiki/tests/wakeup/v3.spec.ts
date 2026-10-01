@@ -10,9 +10,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StandardContextInstance } from "../../src/context/standard.engine.js";
 import { AgentRuntime } from "../../src/runtime.js";
 import type { IshikiMessageCreated } from "../../src/types.js";
-import { ClassicWakeupEngine, ClassicWakeupInstance } from "../../src/wakeup/classic.engine.js";
 import type { WakeupEngineInstance } from "../../src/wakeup/engine.js";
 import { StandardWakeupEngine, StandardWakeupInstance } from "../../src/wakeup/standard.engine.js";
+import { V3WakeupEngine, V3WakeupInstance } from "../../src/wakeup/v3.engine.js";
 import { contextOptions } from "../context-stub.js";
 
 /** provider 只需要一个 Koishi Context，不需要 start；只有 `ctx.get(服务名)` 才要求 start。 */
@@ -42,15 +42,15 @@ function message(overrides: Partial<IshikiMessageCreated> = {}) {
 }
 
 /** 只看得到的意愿值：`decide` 的掷骰在测试里不参与断言。 */
-function engineWith(overrides: Partial<ConstructorParameters<typeof ClassicWakeupInstance>[0]> = {}): ClassicWakeupInstance {
-  return new ClassicWakeupInstance(overrides);
+function engineWith(overrides: Partial<ConstructorParameters<typeof V3WakeupInstance>[0]> = {}): V3WakeupInstance {
+  return new V3WakeupInstance(overrides);
 }
 
-describe("classic wakeup: 配置", () => {
+describe("v3 wakeup: 配置", () => {
   it("provider 按 profile 配置造出运行体", () => {
-    const classic = new ClassicWakeupEngine(app).create({ maxWillingness: 42 });
-    expect(classic).toBeInstanceOf(ClassicWakeupInstance);
-    expect((classic as ClassicWakeupInstance).config.maxWillingness).toBe(42);
+    const v3 = new V3WakeupEngine(app).create({ maxWillingness: 42 });
+    expect(v3).toBeInstanceOf(V3WakeupInstance);
+    expect((v3 as V3WakeupInstance).config.maxWillingness).toBe(42);
     expect(new StandardWakeupEngine(app).create({ direct: false })).toBeInstanceOf(StandardWakeupInstance);
   });
 
@@ -63,7 +63,7 @@ describe("classic wakeup: 配置", () => {
   });
 });
 
-describe("classic wakeup: 增益", () => {
+describe("v3 wakeup: 增益", () => {
   it("单条普通消息只拿到基础分", () => {
     const engine = engineWith();
     engine.decide(message());
@@ -116,7 +116,7 @@ describe("classic wakeup: 增益", () => {
   });
 });
 
-describe("classic wakeup: 掷骰", () => {
+describe("v3 wakeup: 掷骰", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -157,7 +157,7 @@ describe("classic wakeup: 掷骰", () => {
   });
 });
 
-describe("classic wakeup: 衰减与回复成本", () => {
+describe("v3 wakeup: 衰减与回复成本", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -202,7 +202,7 @@ describe("classic wakeup: 衰减与回复成本", () => {
   });
 });
 
-describe("classic wakeup: 轮末回执由场景侧送进来", () => {
+describe("v3 wakeup: 轮末回执由场景侧送进来", () => {
   it("一轮走完后扣掉回复成本", async () => {
     const stream: LanguageModelV4StreamPart[] = [
       { type: "text-start", id: "t" },
@@ -211,7 +211,7 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
       { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: USAGE },
     ];
     const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: stream }) }) });
-    const wakeup = new ClassicWakeupInstance();
+    const wakeup = new V3WakeupInstance();
     const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-"));
 
     try {

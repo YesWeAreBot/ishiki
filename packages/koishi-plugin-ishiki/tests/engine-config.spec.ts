@@ -42,8 +42,8 @@ describe("engine config precedence", () => {
   });
 
   it("scene 可以整个换掉引擎变体", () => {
-    const spec = makeSpec({ wakeup: { engine: "standard" } }, { wakeup: { engine: "classic" } });
-    expect(spec.wakeup.engine).toBe("classic");
+    const spec = makeSpec({ wakeup: { engine: "standard" } }, { wakeup: { engine: "v3" } });
+    expect(spec.wakeup.engine).toBe("v3");
   });
 
   it("cross preset 的 spec 带上引擎配置，没有 scene 层", () => {
@@ -74,14 +74,14 @@ describe("engine config precedence", () => {
   });
 
   it("引擎参数按引擎名分键取用，未写即空", () => {
-    const spec = makeSpec({ context: { engine: "classic", classic: { maxMessages: 7 } } });
+    const spec = makeSpec({ context: { engine: "v3", v3: { maxMessages: 7 } } });
     expect(engineParams<ContextEngines>(spec.context)).toEqual({ maxMessages: 7 });
     expect(engineParams<ContextEngines>(makeSpec({}).context)).toEqual({});
   });
 
   it("toolcall 的覆盖：没写时沿用 preset，显式写回默认引擎时不退回", () => {
-    expect(makeSpec({ toolcall: { engine: "classic" } }).toolcall.engine).toBe("classic");
-    expect(makeSpec({ toolcall: { engine: "classic" } }, { toolcall: { engine: "native" } }).toolcall.engine).toBe("native");
+    expect(makeSpec({ toolcall: { engine: "v3" } }).toolcall.engine).toBe("v3");
+    expect(makeSpec({ toolcall: { engine: "v3" } }, { toolcall: { engine: "native" } }).toolcall.engine).toBe("native");
   });
 
   it("typing 逐字段合并：scene 只写一个字段，不动 preset 的其余字段", () => {

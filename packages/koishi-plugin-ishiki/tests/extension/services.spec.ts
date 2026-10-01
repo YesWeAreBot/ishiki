@@ -179,11 +179,11 @@ describe("内置引擎服务", () => {
 
   it("内置变体在 profile 装载前就位：一个变体一个服务，无需扩展包", () => {
     expect(root.get(ContextEngine.GetName("standard"))).toBeDefined();
-    expect(root.get(ContextEngine.GetName("classic"))).toBeDefined();
+    expect(root.get(ContextEngine.GetName("v3"))).toBeDefined();
     expect(root.get(WakeupEngine.GetName("standard"))).toBeDefined();
-    expect(root.get(WakeupEngine.GetName("classic"))).toBeDefined();
+    expect(root.get(WakeupEngine.GetName("v3"))).toBeDefined();
     expect(root.get(WakeupEngine.GetName("jev"))).toBeDefined();
-    for (const name of ["native", "classic", "hermes", "qwen3coder", "morph-xml", "yaml-xml"]) {
+    for (const name of ["native", "v3", "hermes", "qwen3coder", "morph-xml", "yaml-xml"]) {
       expect(root.get(ToolcallEngine.GetName(name))).toBeDefined();
     }
   });

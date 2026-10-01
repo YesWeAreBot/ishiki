@@ -23,23 +23,23 @@ context:
 
 `maxChars` 设为 0 或负数等于关掉预算与压缩，全部记录原样交给模型。
 
-## `classic`
+## `v3`
 
 YesImBot v3 的 WorldState 投影：每轮把窗口内的事件流渲染成一条 `<world_state>` user 消息。
 
 ```yaml
 context:
-  engine: classic
-  classic:
+  engine: v3
+  v3:
     maxMessages: 50 # 单轮窗口内的消息条数上限
     keepFullTurnCount: 2 # 保留最近几轮的完整思考/行动/观察，更早的只留消息；0 表示不降级
     memoryBlocks: true # 把 <profileDir>/memory/*.md 当核心记忆块注入 system
 ```
 
-- 频道、成员、以及切成 `processed_events` / `new_events` 两段的工作记忆（模板 `resources/templates/classic/world_state.jinja`）。
+- 频道、成员、以及切成 `processed_events` / `new_events` 两段的工作记忆（模板 `resources/templates/v3/world_state.jinja`）。
 - 两段的切点是**最后一条 assistant 条目**：它之后的观察与新消息都算「新到」，于是模型每一步都能在 `new_events` 里先看到上一步的工具结果。没有 assistant 轨迹时全部算新到。
 - **优雅降级**：只保留最近 `keepFullTurnCount` 轮的完整思考/行动/观察轨迹，更早轮次的轨迹整段剔除，消息全留。
-- **记忆块**：`<profileDir>/memory/*.md`（`.txt` 也收），文件开头用 `---` 围出 frontmatter，`label` 必填且必须是安全标签名（字母开头，只含字母数字下划线减号），`title` / `description` 可选，其余是正文。渲染成 `<label><title><description>正文</label>` 注入 system（模板 `resources/templates/classic/instructions.jinja`），标签重复时保留先读到的那个。
+- **记忆块**：`<profileDir>/memory/*.md`（`.txt` 也收），文件开头用 `---` 围出 frontmatter，`label` 必填且必须是安全标签名（字母开头，只含字母数字下划线减号），`title` / `description` 可选，其余是正文。渲染成 `<label><title><description>正文</label>` 注入 system（模板 `resources/templates/v3/instructions.jinja`），标签重复时保留先读到的那个。
 - 模板在包内只读，编译一次；记忆块是用户文件，每轮重读——改了立刻生效，不需要热重载。
 - 不调平台接口取频道名与成员资料，只用事件流里带的信息；只读事件流，不写存储、不起后台任务、不跨轮持有状态。
 

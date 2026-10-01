@@ -33,7 +33,7 @@
 
 ## 2. 事件投递用 tool frame 而非 user message（延迟；未落地）
 
-现状：外部事件仍是 user message（`standard` 把相邻行合并成一条 user 消息，`classic` 渲染成一条 `<world_state>` user 消息）。
+现状：外部事件仍是 user message（`standard` 把相邻行合并成一条 user 消息，`v3` 渲染成一条 `<world_state>` user 消息）。
 
 > 延迟理由：实际效果未知，不引入复杂度。
 
@@ -111,7 +111,7 @@
 
 ## 5. 事件的 `reaches` 逻辑外化为可配置规则（延迟；未落地）
 
-现状：可唤醒条件是唤醒引擎的内置规则（`standard` 的四个开关、`classic` 的意愿分、`jev` 的规则与模型判定），写在引擎里而不是 profile 里；profile 只能选引擎与参数。
+现状：可唤醒条件是唤醒引擎的内置规则（`standard` 的四个开关、`v3` 的意愿分、`jev` 的规则与模型判定），写在引擎里而不是 profile 里；profile 只能选引擎与参数。
 
 > 延迟，可以留到后面做。
 

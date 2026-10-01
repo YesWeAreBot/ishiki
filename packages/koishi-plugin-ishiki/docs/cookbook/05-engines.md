@@ -31,15 +31,15 @@ src/<族>/
 
 ## 现有的族
 
-| 族       | 变体                                                                         | 参数键            |
-| -------- | ---------------------------------------------------------------------------- | ----------------- |
-| 上下文   | `standard`（缺省）、`classic`                                                | `context.<name>`  |
-| 唤醒     | `standard`（缺省）、`classic`、`jev`                                         | `wakeup.<name>`   |
-| 工具调用 | `native`（缺省）、`classic`、`hermes`、`qwen3coder`、`morph-xml`、`yaml-xml` | `toolcall.<name>` |
+| 族       | 变体                                                                    | 参数键            |
+| -------- | ----------------------------------------------------------------------- | ----------------- |
+| 上下文   | `standard`（缺省）、`v3`                                                | `context.<name>`  |
+| 唤醒     | `standard`（缺省）、`v3`、`jev`                                         | `wakeup.<name>`   |
+| 工具调用 | `native`（缺省）、`v3`、`hermes`、`qwen3coder`、`morph-xml`、`yaml-xml` | `toolcall.<name>` |
 
 三个族的运行体都不实现 core 的 `AgentPlugin`：上下文族声明自己干预上下文哪几段，唤醒族只给一个判定加一个挂载时机，工具调用族作用于装配期的模型值。core 侧只挂一个插件（`runtime.ts` 的 `createAgentPlugin`），由它把上下文族转发到 core 的钩子上，工具调用族在装配点就地包裹模型。
 
-**没有记忆族。** 曾经的空壳（抽象基类加一个 Registry、两个没有实现的变体）在 2026-10-01 删除：没有调用方、没有配置项、`keyof` 参数表为空因而构造路径不可达，留着只会让人以为存在一个可用的公共能力。`context.classic` 的 `memoryBlocks` 读 `<profileDir>/memory/*.md` 注入 system，是上下文引擎的真实功能，与此无关。将来真有记忆需求，非互斥的能力作为 `extends` 包提供；出现明确的互斥策略再重新设计一个族。
+**没有记忆族。** 曾经的空壳（抽象基类加一个 Registry、两个没有实现的变体）在 2026-10-01 删除：没有调用方、没有配置项、`keyof` 参数表为空因而构造路径不可达，留着只会让人以为存在一个可用的公共能力。`context.v3` 的 `memoryBlocks` 读 `<profileDir>/memory/*.md` 注入 system，是上下文引擎的真实功能，与此无关。将来真有记忆需求，非互斥的能力作为 `extends` 包提供；出现明确的互斥策略再重新设计一个族。
 
 ## 引擎随 AgentRuntime 诞生
 
@@ -87,7 +87,7 @@ core 的钩子名（`init` / `transformEntries` / `transformMessages` / `extendI
 
 `native` 不接管模型（用模型原生的 function call）；其余变体用于不支持原生 function call 的模型，或需要固定输出形状的场景。模型不是 v4 规格（网关没解析出 v4 provider）时中间件不适用，模型原样返回。
 
-`classic` 是 YesImBot v3 的 JSON OUTPUT：`thoughts`（observe / analyze_infer / plan）+ `actions` 两块，空 `actions` 即结束本轮。它与 `context.classic` 共用同一份 `<action>` / `<observation>` 渲染（`src/toolcall/classic.engine.ts` 导出），协议钩子与上下文投影不会各写一份而漂移。
+`v3` 是 YesImBot v3 的 JSON OUTPUT：`thoughts`（observe / analyze_infer / plan）+ `actions` 两块，空 `actions` 即结束本轮。它与 `context.v3` 共用同一份 `<action>` / `<observation>` 渲染（`src/toolcall/v3.engine.ts` 导出），协议钩子与上下文投影不会各写一份而漂移。
 
 ## 停轮判定
 
@@ -100,7 +100,7 @@ core 的缺省是「本步出现了工具调用就再走一步」，靠 `maxStep
 
 两处细节值得记下：同一批里只要有一次 `send_message` 返回 `ok: false`（含发送中途失败），判为未完成、继续走，把失败交给模型决定重试还是改口；嵌套调用（程序里调的 `send_message`）结果不落 step messages，所以程序内的发言不结束轮次——这是刻意的，程序是编排者，轮次留给模型读它的返回值。
 
-工具名在这条判定里是字面量：`finish` 与 `send_message` 是内核机制的一部分（唯一通道与显式收尾），不由工具注册决定，与 `classic` 协议里空 `actions` 即结束同源。
+工具名在这条判定里是字面量：`finish` 与 `send_message` 是内核机制的一部分（唯一通道与显式收尾），不由工具注册决定，与 `v3` 协议里空 `actions` 即结束同源。
 
 ## 代码模式不在工具调用族里
 

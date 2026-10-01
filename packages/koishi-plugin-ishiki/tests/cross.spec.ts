@@ -23,9 +23,9 @@ import { resolveProfile, type ResolvedProfile } from "../src/profile.js";
 import { ProfileRuntime } from "../src/runtime.js";
 import { NativeToolcallEngine } from "../src/toolcall/native.engine.js";
 import type { IshikiEvent } from "../src/types.js";
-import { ClassicWakeupInstance } from "../src/wakeup/classic.engine.js";
 import { WakeupEngine, type WakeupDecision, type WakeupEngineInstance } from "../src/wakeup/index.js";
 import { StandardWakeupEngine } from "../src/wakeup/standard.engine.js";
+import { V3WakeupInstance } from "../src/wakeup/v3.engine.js";
 
 /**
  * 一个只数「被造了几次」的唤醒引擎：运行体随场景诞生，provider 只做工厂。
@@ -559,7 +559,7 @@ function at(channelId: string) {
 
 describe("唤醒记账归谁", () => {
   it("聚合形态：一轮走完，视窗内各频道的意愿值都扣掉回复成本", () => {
-    const engine = new ClassicWakeupInstance();
+    const engine = new V3WakeupInstance();
     const { agent, append, turnDone } = stubAgent();
     // 整块视窗挂一次：视窗里出现过哪些频道由事实流自己说明，两个群的账共用一次开口
     engine.attach(agent);
@@ -579,7 +579,7 @@ describe("唤醒记账归谁", () => {
   });
 
   it("非聚合形态：各频道各记各的，一轮只扣它自己那个频道", () => {
-    const engine = new ClassicWakeupInstance();
+    const engine = new V3WakeupInstance();
     const first = stubAgent();
     const second = stubAgent();
     engine.attach(first.agent);
@@ -598,7 +598,7 @@ describe("唤醒记账归谁", () => {
   });
 
   it("拆卸之后这条视窗的账被丢掉，回执也不再落到它头上", () => {
-    const engine = new ClassicWakeupInstance();
+    const engine = new V3WakeupInstance();
     const { agent, append, turnDone } = stubAgent();
     const dispose = engine.attach(agent);
 

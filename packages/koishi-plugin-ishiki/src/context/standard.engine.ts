@@ -34,7 +34,7 @@ const DEFAULT_REFILL_RATIO = 0.8;
 /** 两位补零。 */
 const pad = (value: number): string => value.toString().padStart(2, "0");
 
-/** 渲染行的时间部分，格式 `MM-DD HH:mm`；与 classic 引擎一致，跨日时日期是唯一线索。 */
+/** 渲染行的时间部分，格式 `MM-DD HH:mm`；与 v3 引擎一致，跨日时日期是唯一线索。 */
 function formatClock(timestamp: number): string {
   const date = new Date(timestamp);
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;

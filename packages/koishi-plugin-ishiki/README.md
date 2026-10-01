@@ -27,7 +27,7 @@ data/ishiki/
   profiles/<目录名>/
     profile.yml | profile.yaml                 # 心智定义
     persona.md                                 # 可选：人设正文，接在内置基础提示词之后
-    memory/*.md                                # 可选：核心记忆块，context.classic 的 memoryBlocks 读取
+    memory/*.md                                # 可选：核心记忆块，context.v3 的 memoryBlocks 读取
     scenes/<sid>_<channelId>/events.jsonl      # 该频道唯一的事实流
 ```
 

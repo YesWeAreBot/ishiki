@@ -6,15 +6,15 @@ import { createAssistantMessage, createCustomMessage, createEntry, createToolMes
 import type { Logger } from "koishi";
 import { describe, expect, it } from "vitest";
 
-import { ClassicContextInstance, type ClassicContextConfig } from "../../src/context/classic.engine.js";
 import type { ContextEngineOptions } from "../../src/context/engine.js";
+import { V3ContextInstance, type V3ContextConfig } from "../../src/context/v3.engine.js";
 import type { IshikiMessageCreated } from "../../src/types.js";
 import { contextOptions, contextOptionsMissing } from "../context-stub.js";
 
 const logger = { debug: () => undefined, warn: () => undefined, error: () => undefined } as unknown as Logger;
 
-function engineWith(config: Partial<ClassicContextConfig> = {}, options: Partial<ContextEngineOptions> = {}): ClassicContextInstance {
-  return new ClassicContextInstance(config, { ...contextOptions(logger), ...options });
+function engineWith(config: Partial<V3ContextConfig> = {}, options: Partial<ContextEngineOptions> = {}): V3ContextInstance {
+  return new V3ContextInstance(config, { ...contextOptions(logger), ...options });
 }
 
 /** 一条频道消息：进事件流、不带轮次号。 */
@@ -52,7 +52,7 @@ function turn(turnId: string): AgentEntry[] {
 }
 
 /** 跑到模型能看到的那条 user 消息为止。 */
-function renderWorld(engine: ClassicContextInstance, entries: readonly AgentEntry[]): string {
+function renderWorld(engine: V3ContextInstance, entries: readonly AgentEntry[]): string {
   const windowed = engine.prepareEntries(entries);
   const messages = windowed.filter((entry) => entry.type === "message").map((entry) => entry.data);
   const rendered = engine.renderMessages([...messages]);
@@ -68,13 +68,13 @@ function section(world: string, name: string): string {
 
 /** 造一个带记忆块文件的 profile 目录；调用方负责删掉它。 */
 function withMemory(files: Record<string, string>): string {
-  const directory = mkdtempSync(path.join(tmpdir(), "ishiki-classic-"));
+  const directory = mkdtempSync(path.join(tmpdir(), "ishiki-v3-"));
   mkdirSync(path.join(directory, "memory"));
   for (const [name, content] of Object.entries(files)) writeFileSync(path.join(directory, "memory", name), content);
   return directory;
 }
 
-describe("classic context: 工作记忆切分", () => {
+describe("v3 context: 工作记忆切分", () => {
   it("最后一条 assistant 之后算新到：工具结果与新消息都落在 new_events", () => {
     const entries = [createEntry("message", incoming("m1", "在吗")), ...turn("t1"), createEntry("message", incoming("m2", "还在吗"))];
 
@@ -113,7 +113,7 @@ describe("classic context: 工作记忆切分", () => {
   });
 });
 
-describe("classic context: 窗口与优雅降级", () => {
+describe("v3 context: 窗口与优雅降级", () => {
   it("只留窗口内的最后几条消息", () => {
     const entries = ["m1", "m2", "m3", "m4"].map((id) => createEntry("message", incoming(id, `内容 ${id}`)));
 
@@ -153,7 +153,7 @@ describe("classic context: 窗口与优雅降级", () => {
   });
 });
 
-describe("classic context: 核心记忆块", () => {
+describe("v3 context: 核心记忆块", () => {
   it("读到 frontmatter 并渲染进 system", () => {
     const directory = withMemory({ "persona.md": "---\nlabel: persona\ntitle: 核心人设\ndescription: 我是谁\n---\n\n你是 Neko。\n" });
     try {
@@ -198,9 +198,9 @@ describe("classic context: 核心记忆块", () => {
   });
 });
 
-describe("classic context: 装配前提", () => {
+describe("v3 context: 装配前提", () => {
   it("缺目录或资源路径时直接抛错，不静默降级", () => {
-    expect(() => new ClassicContextInstance({}, contextOptionsMissing(logger, "directory"))).toThrow(/needs ContextEngineOptions/);
-    expect(() => new ClassicContextInstance({}, contextOptionsMissing(logger, "resources"))).toThrow(/needs ContextEngineOptions/);
+    expect(() => new V3ContextInstance({}, contextOptionsMissing(logger, "directory"))).toThrow(/needs ContextEngineOptions/);
+    expect(() => new V3ContextInstance({}, contextOptionsMissing(logger, "resources"))).toThrow(/needs ContextEngineOptions/);
   });
 });

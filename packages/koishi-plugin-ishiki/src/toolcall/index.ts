@@ -4,4 +4,4 @@ export * from "./hermes.engine.js";
 export * from "./qwen3coder.engine.js";
 export * from "./morph-xml.engine.js";
 export * from "./yaml-xml.engine.js";
-export * from "./classic.engine.js";
+export * from "./v3.engine.js";
