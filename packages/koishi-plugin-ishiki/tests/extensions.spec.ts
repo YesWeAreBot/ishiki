@@ -38,7 +38,7 @@ class RollingContextInstance implements ContextEngineInstance {
     public readonly endpoint: string,
   ) {}
 
-  extendInstructions = (): string => `上下文由 rolling 引擎组装（${this.endpoint}/${this.config.timeout}）。`;
+  instructions = (): string => `上下文由 rolling 引擎组装（${this.endpoint}/${this.config.timeout}）。`;
 }
 
 /** 变体被实例化的次数：装配确实走到了社区包提供的 provider。 */

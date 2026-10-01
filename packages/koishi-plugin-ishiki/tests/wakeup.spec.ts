@@ -6,6 +6,7 @@ import { MockLanguageModelV4, createCustomMessage, simulateReadableStream, type 
 import { Context, type Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ContextEngine } from "../src/context/engine.js";
 import { StandardContextInstance } from "../src/context/standard.engine.js";
 import { AgentRuntime } from "../src/runtime.js";
 import type { IshikiMessageCreated } from "../src/types.js";
@@ -209,8 +210,6 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
     ];
     const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: stream }) }) });
     const wakeup = new ClassicWakeupInstance();
-    // 自定义消息要有人投影成模型消息，否则一轮的 prompt 是空的。
-    const context = new StandardContextInstance({ maxChars: 10_000 }, { logger });
     const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-"));
 
     try {
@@ -223,7 +222,9 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
         // 这个用例只送事实行，平台能力用不上：给一个空壳，装配期没有扩展包会碰它。
         ctx: {} as Context,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
-        context,
+        // 装配器要的是 provider：实例得等工具面与提示词定下来才造。
+        context: { create: () => new StandardContextInstance({}, { logger, tools: {}, instructions: "" }) } as unknown as ContextEngine,
+        contextParams: { maxChars: 10_000 },
         tools: {},
         extensions: [],
         innerThoughts: false,

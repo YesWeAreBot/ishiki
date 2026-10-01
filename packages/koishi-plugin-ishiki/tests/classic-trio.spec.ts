@@ -92,7 +92,10 @@ describe("classic 三件套跑一轮真实轮次", () => {
       }),
     };
 
-    const context = new ClassicContextInstance({}, { logger, resources: RESOURCES, directory: path.join(tmpdir(), "ishiki-classic-absent") });
+    const context = new ClassicContextInstance(
+      {},
+      { logger, resources: RESOURCES, directory: path.join(tmpdir(), "ishiki-classic-absent"), tools: {}, instructions: "" },
+    );
     const agent = createAgent({
       id: "classic-trio",
       model: new ClassicToolcallEngine(app).create().wrap(model),

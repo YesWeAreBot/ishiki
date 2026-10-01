@@ -81,10 +81,19 @@ export interface AgentRuntimeConfig {
   ctx: Context;
   /** 本实例的可见域。 */
   domain: InstanceDomain;
+  /** 平台能力之外的模型入口；上下文引擎要自己调模型时用它。 */
+  gateway?: Gateway;
   /** 基础提示词：内核那一段（身份与处境），聚合形态的地址簿跟在后面。扩展包的在它们之后。 */
   instructions: string;
-  /** 上下文引擎运行体：由所属生效单位从 provider 造好后传进来，一个 agent 一份。 */
-  context: ContextEngineInstance;
+  /**
+   * 上下文引擎的造法：由所属生效单位从 provider 取到，不在这里造实例。
+   *
+   * 推迟到 AgentRuntime 构造期，是因为引擎要看的工具面与提示词要到扩展包挂完才定。
+   * 提前造就等于让它拿着半份上下文开工。
+   */
+  context: ContextEngine;
+  /** 该引擎名下的参数块：profile 与 scene 合并后的结果，可能为空。 */
+  contextParams: Partial<ContextEngines[keyof ContextEngines]>;
   /** 内核工具面（`send_message` 与 `finish`）。扩展包在构造期间往这里加，加完才算定。 */
   tools: ToolSet;
   /**
@@ -125,27 +134,29 @@ function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
 /**
  * core 侧的插件：上下文引擎与停轮判定在这一点收拢成 core 见的唯一入口。
  *
- * 上下文引擎只声明自己干预管线上哪几段，钩子在这一点按固定顺序转发；停轮判定读本步消息流，
- * 不设跨步标志：嵌套调用（code mode 沙箱内）的结果不落 step messages，扫描天然看不见它们，
- * 于是程序内说过的、做过的都不结束轮次，轮次的收尾只由直调产生。
+ * 上下文引擎说自己干预上下文哪几段，方法名是它自己的；core 的钩子名只出现在这个函数里，
+ * 按固定顺序转发过去。停轮判定读本步消息流，不设跨步标志：嵌套调用（code mode 沙箱内）的
+ * 结果不落 step messages，扫描天然看不见它们，于是程序内说过的、做过的都不结束轮次，
+ * 轮次的收尾只由直调产生。
  */
 export function createAgentPlugin(parts: { context: ContextEngineInstance }): AgentPlugin {
   const { context } = parts;
+  const disposers: Array<() => void> = [];
   return {
     name: "ishiki",
     // 引擎要在 agent 上挂东西（订阅、压缩水位），收尾控制没有。
-    init: (agent) => context.init?.(agent),
-    stop: () => context.stop?.(),
-    // 事件流改写：一段段往下传。引擎缺席或返回 undefined 都表示这一步不改，原样放行。
-    onAppend: (entries) => context.onAppend?.(entries) ?? entries,
-    transformEntries: (entries, options) => context.transformEntries?.(entries, options) ?? entries,
-    transformMessages: (messages, options) => context.transformMessages?.(messages, options) ?? messages,
-    // 引擎给出的那一段提示词接在内核拼好的提示词之后。
-    extendInstructions: () => context.extendInstructions?.(),
-    // 收尾回执：引擎记账。判定无跨步状态，无需清理。
-    onTurnFinish: async (result) => {
-      await context.onTurnFinish?.(result);
+    init: (agent) => {
+      const disposer = context.attach?.(agent);
+      if (disposer) disposers.push(disposer);
     },
+    stop: async () => {
+      for (const dispose of disposers) dispose();
+    },
+    // 上下文两段加工：一段段往下传。引擎缺席或返回 undefined 都表示这一步不改，原样放行。
+    transformEntries: (entries, options) => context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
+    transformMessages: (messages, options) => context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
+    // 引擎给出的那一段提示词接在内核拼好的提示词之后。
+    extendInstructions: () => context.instructions?.(),
     // 停轮：唯一决策点，读本步消息流。finish 出现即停；否则发言（send_message 直调且全部
     // continue!==true 且结果全成功）且本步没有别的实义工具时停；其余交 core 默认。
     // 发言判定展开在这一点：只见本步消息，逐条找 send_message 的调用与结果——调用缺席判未发言，
@@ -260,6 +271,21 @@ export class AgentRuntime {
     }
 
     const base = config.innerThoughts ? withInnerThoughts(this.tools, this.logger) : this.tools;
+    const instructions = [config.instructions, ...this.addedTexts].filter((text) => text.length > 0).join("\n\n");
+
+    // 上下文引擎到这里才造：它的工具面与提示词两项依赖，此刻才算定。
+    // `base` 是模型目录收窄之前的那份——沙箱工具还没算进去，引擎看到的是本实例真实提供的工具，
+    // 不是代码模式改写后的投影。
+    const context = config.context.create(config.contextParams, {
+      logger: this.logger,
+      gateway: config.gateway,
+      directory: this.directory,
+      resources: resourcePath(),
+      domain: this.domain,
+      tools: base,
+      instructions,
+    });
+
     // 代码模式只改工具面：宿主工具一件不动，模型目录收窄成只剩沙箱那一件。
     // 收窄与沙箱工具是同一次装配的两半——表里点名的进沙箱，没点名的留在目录。
     const sandbox = config.codemode.enable ? createCodemode(config.codemode, base) : undefined;
@@ -267,10 +293,10 @@ export class AgentRuntime {
     this.agent = createAgent({
       id: this.label,
       model: config.model,
-      instructions: [config.instructions, ...this.addedTexts].filter((text) => text.length > 0).join("\n\n"),
+      instructions,
       storage: this.storage,
       // core 只见一个插件：上下文引擎与停轮判定在这一点收拢。
-      plugins: [createAgentPlugin({ context: config.context })],
+      plugins: [createAgentPlugin({ context })],
       tools: sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool },
       // core 的配置字段叫 toolCallers；它转发给 streamText 时才改名为 experimental_toolCallers。
       ...(sandbox === undefined ? {} : { toolCallers: sandbox.callers }),
@@ -623,14 +649,11 @@ export class PresetRuntime {
       instructions: instructionTexts.filter((text) => text.length > 0).join("\n\n"),
       ctx: this.ctx,
       domain,
-      context: engineProvider<ContextEngine>(this.ctx, contextEngineServiceName(spec.context.engine)).create(engineParams<ContextEngines>(spec.context), {
-        logger: this.logger,
-        gateway: this.gateway,
-        directory: this.directory,
-        resources: resourcePath(),
-        // 多频道视窗一块吃下多个频道，事实行不带坐标就分不清谁说的；单频道即无寻址头。
-        domain,
-      }),
+      gateway: this.gateway,
+      // 引擎实例在 AgentRuntime 构造期才造：它的工具面与提示词依赖，要到扩展包挂完才定。
+      // 这里只交出造法与参数。
+      context: engineProvider<ContextEngine>(this.ctx, contextEngineServiceName(spec.context.engine)),
+      contextParams: engineParams<ContextEngines>(spec.context),
       tools: baseTools,
       extensions,
       innerThoughts: spec.innerThoughts,

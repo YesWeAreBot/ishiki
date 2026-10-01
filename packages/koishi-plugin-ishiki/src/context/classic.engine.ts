@@ -215,16 +215,16 @@ export class ClassicContextInstance implements ContextEngineInstance {
   }
 
   /** v3 系统提示词里 ishiki 基础提示词没覆盖的部分：核心记忆块的用法与 `<working_memory>` 的读法。 */
-  extendInstructions = (): string => {
+  instructions = (): string => {
     const blocks = this.config.memoryBlocks ? readMemoryBlocks(this.directory) : [];
-    return this.instructions().render({ blocks }).trim();
+    return this.instructionTpl().render({ blocks }).trim();
   };
 
   /**
    * 前台窗口：按条数截尾，再对更早的轮次做优雅降级——v3 只保留最近几轮的完整
    * 思考/行动/观察，更早的只留消息，免得旧轨迹把上下文撑满。
    */
-  transformEntries = (entries: readonly AgentEntry[]): readonly AgentEntry[] => {
+  prepareEntries = (entries: readonly AgentEntry[]): readonly AgentEntry[] => {
     const messages = entries.filter((entry) => entry.type === "message");
     const windowed = new Set(messages.slice(-this.config.maxMessages));
     const kept = entries.filter((entry) => entry.type !== "message" || windowed.has(entry));
@@ -235,7 +235,7 @@ export class ClassicContextInstance implements ContextEngineInstance {
   };
 
   /** 把窗口渲染成单条 `<world_state>` user 消息：v3 每步都重建整份世界状态。 */
-  transformMessages = (messages: AgentMessage[]): AgentMessage[] => {
+  renderMessages = (messages: readonly AgentMessage[]): AgentMessage[] => {
     const lines = messages.map((message) => renderLine(message));
 
     // 切点：最后一条 assistant。它之后的观察与新消息都算「新到」。
@@ -310,7 +310,8 @@ export class ClassicContextInstance implements ContextEngineInstance {
     return this.worldTemplate;
   }
 
-  private instructions(): Template {
+  /** 指令模板。方法名与公开的 `instructions` 段隔开：后者是这段上下文，前者是它的来源。 */
+  private instructionTpl(): Template {
     this.instructionTemplate ??= this.load("instructions.jinja");
     return this.instructionTemplate;
   }

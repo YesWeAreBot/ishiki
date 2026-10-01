@@ -187,9 +187,9 @@ function findCut(tail: readonly AgentEntry[], head: number, target: number, doma
 /**
  * 线性增长 + 空闲压缩，两条轨道各自独立：
  *
- * - 前台 `transformEntries` 只做同步裁剪：预算内原样交给模型，超预算就把最旧的可见行切出模型视野。
+ * - 前台 `prepareEntries` 只做同步裁剪：预算内原样交给模型，超预算就把最旧的可见行切出模型视野。
  *   这一步不调模型，任何一轮的附加延迟都是零。
- * - 后台 `onTurnFinish` 在一轮结束之后，把上次切掉的那段并进摘要，水位以 `ishiki.compact`
+ * - 后台 `finishTurn` 在一轮结束之后，把上次切掉的那段并进摘要，水位以 `ishiki.compact`
  *   条目追加到流中。压缩成功前聊天照常进行；压缩失败不影响本轮，下一轮结束再试。
  *
  * 除压缩成功时追加的那一条 compact 外，本引擎只读不写。
@@ -219,18 +219,29 @@ export class StandardContextInstance implements ContextEngineInstance {
     if (this.ceiling === 0) this.logger?.warn("context budget disabled: maxChars is non-positive, compaction off");
   }
 
-  /** core 会摘取这些 hook 单独调用，因此必须绑定在实例上（箭头属性）。 */
-  init = (agent: Agent): void => {
+  /**
+   * 压缩要读流、写摘要、调模型，都得从这里拿。引擎不预先持有 storage 与 model：
+   * 两者都是 agent 自己的东西，早于 agent 造实例等于抄一份可能过期的引用。
+   * 顺带的收益是压缩读到的流与 core 读的是同一个 storage，不会读到副本。
+   *
+   * 压缩挂在轮次结束事件上，而不是 core 的轮次钩子：钩子的返回值会被 core  awaited，
+   * 压缩一旦慢了或失败，轮次收尾就跟着拖。事件通道对 listener 是 `Promise.all` 加 try/catch，
+   * 压不坏也等不起的东西本就不该进那条关键路径。
+   */
+  attach(agent: Agent): () => void {
     this.agent = agent;
-  };
-
-  /** agent 停止时收尾：压缩中的请求一并中止。 */
-  stop = (): void => {
-    this.abort?.abort();
-  };
+    const unsubscribe = agent.channel.subscribe("agent", (event) => {
+      if (event.type === "turn.done") this.finishTurn();
+    });
+    return () => {
+      this.abort?.abort();
+      this.agent = undefined;
+      unsubscribe();
+    };
+  }
 
   /** 前台：只裁窗口，不调模型。 */
-  transformEntries = async (entries: readonly AgentEntry[]): Promise<readonly AgentEntry[]> => {
+  prepareEntries = async (entries: readonly AgentEntry[]): Promise<readonly AgentEntry[]> => {
     if (this.ceiling === 0) return entries;
 
     const compact = lastCompact(entries);
@@ -259,15 +270,15 @@ export class StandardContextInstance implements ContextEngineInstance {
     return this.prepend(head, tail.slice(cut));
   };
 
-  transformMessages = (messages: AgentMessage[]): AgentMessage[] => collapse(messages, this.domain);
+  renderMessages = (messages: readonly AgentMessage[]): AgentMessage[] => collapse(messages, this.domain);
 
-  /** 后台：一轮结束后，若刚才是超预算装配的，把切掉的那段并进摘要。不阻塞轮次结束。 */
-  onTurnFinish = (): void => {
+  /** 一轮结束后，若刚才是超预算装配的，把切掉的那段并进摘要。不阻塞任何东西。 */
+  private finishTurn(): void {
     if (!this.over || this.compacting !== undefined) return;
     this.compacting = this.compact().finally(() => {
       this.compacting = undefined;
     });
-  };
+  }
 
   /** 等在做的那次压缩收尾。 */
   async settle(): Promise<void> {

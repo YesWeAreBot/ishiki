@@ -17,9 +17,17 @@ import type { Gateway } from "@yesimagent/gateway";
 import { Context, sleep, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "../src/context/engine.js";
 import type { ExtensionHandler } from "../src/extension.js";
 import Ishiki from "../src/index.js";
 import { activateProfiles, loadProfiles, type AgentRuntime, type ProfileRuntime } from "../src/runtime.js";
+
+/** 观察用引擎的参数表：它没有参数，声明出来是为了走通 `ContextEngine<"...">` 的约束。 */
+declare module "../src/context/engine.js" {
+  interface ContextEngines {
+    "neko-tools/spy": Record<string, never>;
+  }
+}
 
 // ── 社区扩展包 ──
 
@@ -491,6 +499,44 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
       expect(calls).toHaveLength(1);
     } finally {
       await close(rig, dir);
+    }
+  });
+
+  it("上下文引擎造出来时看到的是最终工具面与最终提示词", async () => {
+    const seen: ContextEngineOptions[] = [];
+    /** 只记下 options 的观察用引擎：它不参与渲染，只证明依赖传到位的时刻。 */
+    class SpyContextEngine extends ContextEngine<"neko-tools/spy"> {
+      constructor(c: Context) {
+        super(c, "neko-tools/spy");
+      }
+
+      create(_config: Partial<ContextEngines["neko-tools/spy"]>, options: ContextEngineOptions): ContextEngineInstance {
+        seen.push(options);
+        return {};
+      }
+    }
+    const spy = root.plugin((c: Context) => {
+      new SpyContextEngine(c);
+    });
+    await sleep(20);
+
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-ctxdeps-"));
+    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:", "    context:", '      engine: "neko-tools/spy"']);
+    try {
+      const rig = await stand(dir);
+      try {
+        rig.profiles[0]!.route(message("private:9", "hi"));
+        expect(seen).toHaveLength(1);
+        // 内核工具与扩展包的加法都在内。实例造在挂载之后就是为了这份清单，
+        // 早一步造就只能拿到半份。
+        expect(Object.keys(seen[0]!.tools).sort()).toEqual(["finish", "neko_probe", "send_message"]);
+        expect(seen[0]!.instructions).toContain("本实例启用了 neko-tools。");
+        expect(seen[0]!.domain).toEqual({ form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" });
+      } finally {
+        await close(rig, dir);
+      }
+    } finally {
+      spy.dispose();
     }
   });
 });

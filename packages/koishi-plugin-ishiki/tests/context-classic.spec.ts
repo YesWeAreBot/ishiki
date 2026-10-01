@@ -18,7 +18,7 @@ const logger = { debug: () => undefined, warn: () => undefined, error: () => und
 const NOWHERE = path.join(tmpdir(), "ishiki-classic-absent");
 
 function engineWith(config: Partial<ClassicContextConfig> = {}, options: Partial<ContextEngineOptions> = {}): ClassicContextInstance {
-  return new ClassicContextInstance(config, { logger, resources: RESOURCES, directory: NOWHERE, ...options });
+  return new ClassicContextInstance(config, { logger, resources: RESOURCES, directory: NOWHERE, tools: {}, instructions: "", ...options });
 }
 
 /** 一条频道消息：进事件流、不带轮次号。 */
@@ -57,9 +57,9 @@ function turn(turnId: string): AgentEntry[] {
 
 /** 跑到模型能看到的那条 user 消息为止。 */
 function renderWorld(engine: ClassicContextInstance, entries: readonly AgentEntry[]): string {
-  const windowed = engine.transformEntries(entries);
+  const windowed = engine.prepareEntries(entries);
   const messages = windowed.filter((entry) => entry.type === "message").map((entry) => entry.data);
-  const rendered = engine.transformMessages([...messages]);
+  const rendered = engine.renderMessages([...messages]);
   const first = rendered[0];
   if (first === undefined || !("content" in first)) return "";
   return typeof first.content === "string" ? first.content : "";
@@ -161,7 +161,7 @@ describe("classic context: 核心记忆块", () => {
   it("读到 frontmatter 并渲染进 system", () => {
     const directory = withMemory({ "persona.md": "---\nlabel: persona\ntitle: 核心人设\ndescription: 我是谁\n---\n\n你是 Neko。\n" });
     try {
-      const instructions = engineWith({}, { directory }).extendInstructions();
+      const instructions = engineWith({}, { directory }).instructions();
 
       expect(instructions).toContain("<core_memory>");
       expect(instructions).toContain("<persona>");
@@ -176,7 +176,7 @@ describe("classic context: 核心记忆块", () => {
   it("关掉开关就不读文件", () => {
     const directory = withMemory({ "persona.md": "---\nlabel: persona\n---\n你是 Neko。\n" });
     try {
-      expect(engineWith({ memoryBlocks: false }, { directory }).extendInstructions()).not.toContain("core_memory");
+      expect(engineWith({ memoryBlocks: false }, { directory }).instructions()).not.toContain("core_memory");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -190,7 +190,7 @@ describe("classic context: 核心记忆块", () => {
       "d.txt": "---\nlabel: persona\n---\n后来的\n",
     });
     try {
-      const instructions = engineWith({}, { directory }).extendInstructions();
+      const instructions = engineWith({}, { directory }).instructions();
 
       expect(instructions).toContain("先来的");
       expect(instructions).not.toContain("后来的");
@@ -204,7 +204,7 @@ describe("classic context: 核心记忆块", () => {
 
 describe("classic context: 装配前提", () => {
   it("缺目录或资源路径时直接抛错，不静默降级", () => {
-    expect(() => new ClassicContextInstance({}, { logger })).toThrow(/needs ContextEngineOptions/);
-    expect(() => new ClassicContextInstance({}, { logger, resources: RESOURCES })).toThrow(/needs ContextEngineOptions/);
+    expect(() => new ClassicContextInstance({}, { logger, tools: {}, instructions: "" })).toThrow(/needs ContextEngineOptions/);
+    expect(() => new ClassicContextInstance({}, { logger, resources: RESOURCES, tools: {}, instructions: "" })).toThrow(/needs ContextEngineOptions/);
   });
 });

@@ -8,6 +8,7 @@ import {
   simulateReadableStream,
   type Agent,
   type AgentEntry,
+  type AgentEvent,
   type AgentMessage,
   type AgentStorage,
   type LanguageModelV4StreamPart,
@@ -31,8 +32,26 @@ function mockModel(text: string, fails = false): MockLanguageModelV4 {
   });
 }
 
-function fakeAgent(storage: AgentStorage<AgentEntry>, model: MockLanguageModelV4): Agent {
-  return { storage, getModel: () => model } as unknown as Agent;
+/**
+ * 一个只够压缩用的假 agent：storage、模型，以及一个能手动发事件的通道。
+ * 压缩挂在轮次结束事件上，所以「这一轮结束了」得由用例自己说。
+ */
+function fakeAgent(storage: AgentStorage<AgentEntry>, model: MockLanguageModelV4): Agent & { endTurn(): Promise<void> } {
+  const listeners = new Set<(event: AgentEvent) => void | Promise<void>>();
+  const agent = {
+    storage,
+    getModel: () => model,
+    channel: {
+      subscribe: (_: string, listener: (event: AgentEvent) => void | Promise<void>) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    endTurn: async () => {
+      await Promise.all([...listeners].map((listener) => listener({ type: "turn.done", turnId: "t1" })));
+    },
+  };
+  return agent as unknown as Agent & { endTurn(): Promise<void> };
 }
 
 /** A message line long enough that a handful of them exceeds a small budget. */
@@ -193,20 +212,21 @@ describe("collapse", () => {
 describe("standard context engine", () => {
   it("passes the entries through while they fit, and writes nothing", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 10_000 }, { logger });
-    engine.init(fakeAgent(storage, mockModel("记忆")));
+    const engine = new StandardContextInstance({ maxChars: 10_000 }, { logger, tools: {}, instructions: "" });
+    const agent = fakeAgent(storage, mockModel("记忆"));
+    engine.attach(agent);
 
     const entries = ["a", "b"].map((id) => entry(`e-${id}`, message(id)));
     storage.append(...entries);
 
     calls.count = 0;
-    const out = await engine.transformEntries([...entries]);
+    const out = await engine.prepareEntries([...entries]);
     expect(out).toHaveLength(2);
     expect(out[0].id).toBe("e-a");
     expect(calls.count).toBe(0);
 
     // 没超预算就没什么可压的：轮次结束也不调模型
-    engine.onTurnFinish();
+    await agent.endTurn();
     await engine.settle();
     expect(calls.count).toBe(0);
     expect(compacts(await storage.read())).toHaveLength(0);
@@ -214,21 +234,22 @@ describe("standard context engine", () => {
 
   it("trims the oldest lines in the foreground, then folds them into a memory line once the turn ends", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300, refillRatio: 0.8 }, { logger });
-    engine.init(fakeAgent(storage, mockModel("记住：她在准备搬家")));
+    const engine = new StandardContextInstance({ maxChars: 300, refillRatio: 0.8 }, { logger, tools: {}, instructions: "" });
+    const agent = fakeAgent(storage, mockModel("记住：她在准备搬家"));
+    engine.attach(agent);
 
     const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
     storage.append(...entries);
 
     // 前台：裁剪是同步的，不问模型，也不写流
     calls.count = 0;
-    const out = await engine.transformEntries([...(await storage.read())]);
+    const out = await engine.prepareEntries([...(await storage.read())]);
     expect(calls.count).toBe(0);
     expect(out.length).toBeLessThan(entries.length);
     expect(compacts(await storage.read())).toHaveLength(0);
 
     // 后台：一轮结束后并入摘要
-    engine.onTurnFinish();
+    await agent.endTurn();
     await engine.settle();
 
     const written = compacts(await storage.read());
@@ -247,11 +268,11 @@ describe("standard context engine", () => {
     expect(first?.type === "message" && ["user", "custom"]).toContain(first?.type === "message" ? first.data.role : "");
 
     // 第二次装配：水位生效，记忆开在最前，且不再压缩
-    const again = await engine.transformEntries([...(await storage.read())]);
+    const again = await engine.prepareEntries([...(await storage.read())]);
     expect(again[0].type === "message" ? userText(again[0].data) : "").toContain("记住：她在准备搬家");
     expect(again.filter((item) => item.type === "message" && item.id.startsWith("e-")).map((item) => item.id)).toEqual(kept);
 
-    engine.onTurnFinish();
+    await agent.endTurn();
     await engine.settle();
     expect(compacts(await storage.read())).toHaveLength(1);
     expect(calls.count).toBe(1);
@@ -259,27 +280,28 @@ describe("standard context engine", () => {
 
   it("keeps trimming while the summary call fails, and retries on the next turn", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger });
-    engine.init(fakeAgent(storage, mockModel("", true)));
+    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
+    const agent = fakeAgent(storage, mockModel("", true));
+    engine.attach(agent);
 
     const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
     storage.append(...entries);
 
     calls.count = 0;
-    const first = await engine.transformEntries([...(await storage.read())]);
+    const first = await engine.prepareEntries([...(await storage.read())]);
     expect(first.length).toBeLessThan(entries.length);
     expect(calls.count).toBe(0);
 
     // 压缩失败：不留水位，也不影响这一轮
-    engine.onTurnFinish();
+    await agent.endTurn();
     await engine.settle();
     expect(calls.count).toBe(1);
     expect(compacts(await storage.read())).toHaveLength(0);
 
     // 下一轮照常裁剪，轮次结束再试一次
-    const second = await engine.transformEntries([...(await storage.read())]);
+    const second = await engine.prepareEntries([...(await storage.read())]);
     expect(second.length).toBeLessThan(entries.length);
-    engine.onTurnFinish();
+    await agent.endTurn();
     await engine.settle();
     expect(calls.count).toBe(2);
     expect(compacts(await storage.read())).toHaveLength(0);
@@ -287,16 +309,17 @@ describe("standard context engine", () => {
 
   it("compresses once even when two turns end back to back", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger });
-    engine.init(fakeAgent(storage, mockModel("记忆")));
+    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
+    const agent = fakeAgent(storage, mockModel("记忆"));
+    engine.attach(agent);
 
     const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
     storage.append(...entries);
 
     calls.count = 0;
-    await engine.transformEntries([...(await storage.read())]);
-    engine.onTurnFinish();
-    engine.onTurnFinish();
+    await engine.prepareEntries([...(await storage.read())]);
+    await agent.endTurn();
+    await agent.endTurn();
     await engine.settle();
 
     expect(calls.count).toBe(1);
@@ -305,21 +328,22 @@ describe("standard context engine", () => {
 
   it("passes everything through when no line boundary is available", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 80 }, { logger });
-    engine.init(fakeAgent(storage, mockModel("记忆")));
+    const engine = new StandardContextInstance({ maxChars: 80 }, { logger, tools: {}, instructions: "" });
+    const agent = fakeAgent(storage, mockModel("记忆"));
+    engine.attach(agent);
 
     const tools = ["a", "b", "c", "d"].map((id) =>
       entry(`t-${id}`, createToolMessage([{ type: "tool-result", toolCallId: id, toolName: "peek", output: { type: "text", value: "y".repeat(80) } }])),
     );
     storage.append(...tools);
 
-    const out = await engine.transformEntries([...(await storage.read())]);
+    const out = await engine.prepareEntries([...(await storage.read())]);
     expect(out).toHaveLength(tools.length);
     expect(lines(out)).toEqual(["tool", "tool", "tool", "tool"]);
 
     // 没有可切的点：轮次结束也不去问模型
     calls.count = 0;
-    engine.onTurnFinish();
+    await agent.endTurn();
     await engine.settle();
     expect(calls.count).toBe(0);
     expect(compacts(await storage.read())).toHaveLength(0);
@@ -327,35 +351,37 @@ describe("standard context engine", () => {
 
   it("grows linearly when no budget is configured", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 0 }, { logger });
-    engine.init(fakeAgent(storage, mockModel("记忆")));
+    const engine = new StandardContextInstance({ maxChars: 0 }, { logger, tools: {}, instructions: "" });
+    const agent = fakeAgent(storage, mockModel("记忆"));
+    engine.attach(agent);
 
     const entries = ["a", "b"].map((id) => entry(`e-${id}`, message(id)));
     storage.append(...entries);
 
     calls.count = 0;
-    const out = await engine.transformEntries(entries);
+    const out = await engine.prepareEntries(entries);
     expect(out).toBe(entries);
 
-    engine.onTurnFinish();
+    await agent.endTurn();
     await engine.settle();
     expect(calls.count).toBe(0);
   });
 
   it("ignores a memory whose anchor left the stream", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 10_000 }, { logger });
-    engine.init(fakeAgent(storage, mockModel("记忆")));
+    const engine = new StandardContextInstance({ maxChars: 10_000 }, { logger, tools: {}, instructions: "" });
+    const agent = fakeAgent(storage, mockModel("记忆"));
+    engine.attach(agent);
 
     storage.append(createEntry("ishiki.compact", { summary: "旧记忆", lastEntryId: "gone" }));
-    const out = await engine.transformEntries([...(await storage.read())]);
+    const out = await engine.prepareEntries([...(await storage.read())]);
 
     expect(out.filter((item) => item.type === "message")).toHaveLength(0);
   });
 
   it("drops an in-flight summary when the scene is unloaded", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger });
+    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
     let started: (() => void) | undefined;
     const began = new Promise<void>((resolve) => {
       started = resolve;
@@ -371,16 +397,17 @@ describe("standard context engine", () => {
         return { content: [{ type: "text", text: "记忆" }], finishReason: { unified: "stop", raw: undefined }, usage: USAGE, warnings: [] };
       },
     });
-    engine.init(fakeAgent(storage, held));
+    const agent = fakeAgent(storage, held);
+    const detach = engine.attach(agent);
 
     const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
     storage.append(...entries);
 
     calls.count = 0;
-    await engine.transformEntries([...(await storage.read())]);
-    engine.onTurnFinish();
+    await engine.prepareEntries([...(await storage.read())]);
+    await agent.endTurn();
     await began;
-    engine.stop();
+    detach();
     resolveHeld?.();
     await engine.settle();
 
@@ -390,7 +417,7 @@ describe("standard context engine", () => {
 
   it("runs a real turn past the budget while the summary is still in flight", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger });
+    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
     const prompts: string[] = [];
     let resolveHeld: (() => void) | undefined;
     let began: (() => void) | undefined;

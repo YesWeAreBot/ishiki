@@ -17,6 +17,7 @@ import {
 import { Context, type Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ContextEngine } from "../src/context/engine.js";
 import { StandardContextInstance } from "../src/context/standard.engine.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { createSendMessage } from "../src/tools/send-message.js";
@@ -564,8 +565,6 @@ describe("jev wakeup: 接进场景", () => {
     });
 
     const wakeup = new JevWakeupInstance({ apiKey: "k" }, { logger });
-    // 自定义消息要有人投影成模型消息，否则一轮的 prompt 是空的。
-    const context = new StandardContextInstance({ maxChars: 10_000 }, { logger });
     const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-jev-"));
 
     try {
@@ -577,7 +576,9 @@ describe("jev wakeup: 接进场景", () => {
         instructions: "",
         ctx,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
-        context,
+        // 装配器要的是 provider：实例得等工具面与提示词定下来才造。
+        context: { create: () => new StandardContextInstance({}, { logger, tools: {}, instructions: "" }) } as unknown as ContextEngine,
+        contextParams: { maxChars: 10_000 },
         tools: {
           send_message: createSendMessage({
             ctx,
