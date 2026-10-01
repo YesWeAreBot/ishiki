@@ -7,7 +7,6 @@ import {
   createJsonlStorage,
   type Agent,
   type AgentEvent,
-  type AgentPlugin,
   type AgentStorage,
   type LanguageModel,
   type LanguageModelUsage,
@@ -18,19 +17,10 @@ import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
 import { contextEngineServiceName, type ContextEngine, type ContextEngineInstance, type ContextEngines } from "./context/index.js";
-import type { InstanceDomain } from "./domain.js";
-import { type Disposer, type ExtensionHandler, type ExtensionService, extensionServiceName } from "./extension.js";
+import { claimLines, type InstanceDomain } from "./domain.js";
+import { extensionServiceName, type Disposer, type ExtensionHandler, type ExtensionService } from "./extension.js";
 import { FailoverModel } from "./failover.js";
-import {
-  claimsChannel,
-  engineParams,
-  matchSceneSpec,
-  resolveProfile,
-  sceneDirectoryName,
-  type CodemodeConfig,
-  type ResolvedPreset,
-  type SceneSpec,
-} from "./profile.js";
+import { engineParams, matchSceneSpec, resolveProfile, sceneDirectoryName, type CodemodeConfig, type ResolvedPreset, type SceneSpec } from "./profile.js";
 import { toolcallEngineServiceName, type ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
 import { CODE_MODE, createCodemode } from "./tools/codemode.js";
 import { createFinish } from "./tools/finish.js";
@@ -72,8 +62,6 @@ function engineProvider<T>(ctx: Context, service: string): T {
 export interface AgentRuntimeConfig {
   /** 实例标识，用于日志与 agent id。 */
   label: string;
-  /** 该频道号；聚合视窗取首个触发它的频道，仅用于日志。 */
-  channelId: string;
   /** 该频道的独立目录，存放 `events.jsonl` 及后续的附件。 */
   directory: string;
   model: LanguageModel;
@@ -82,7 +70,7 @@ export interface AgentRuntimeConfig {
   /** 本实例的可见域。 */
   domain: InstanceDomain;
   /** 平台能力之外的模型入口；上下文引擎要自己调模型时用它。 */
-  gateway?: Gateway;
+  gateway: Gateway;
   /** 基础提示词：内核那一段（身份与处境），聚合形态的地址簿跟在后面。扩展包的在它们之后。 */
   instructions: string;
   /**
@@ -91,9 +79,7 @@ export interface AgentRuntimeConfig {
    * 推迟到 AgentRuntime 构造期，是因为引擎要看的工具面与提示词要到扩展包挂完才定。
    * 提前造就等于让它拿着半份上下文开工。
    */
-  context: ContextEngine;
-  /** 该引擎名下的参数块：profile 与 scene 合并后的结果，可能为空。 */
-  contextParams: Partial<ContextEngines[keyof ContextEngines]>;
+  context: ContextEngineInstance;
   /** 内核工具面（`send_message` 与 `finish`）。扩展包在构造期间往这里加，加完才算定。 */
   tools: ToolSet;
   /**
@@ -131,85 +117,6 @@ function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
   return `usage(${parts.join(" ")})`;
 }
 
-/**
- * core 侧的插件：上下文引擎与停轮判定在这一点收拢成 core 见的唯一入口。
- *
- * 上下文引擎说自己干预上下文哪几段，方法名是它自己的；core 的钩子名只出现在这个函数里，
- * 按固定顺序转发过去。停轮判定读本步消息流，不设跨步标志：嵌套调用（code mode 沙箱内）的
- * 结果不落 step messages，扫描天然看不见它们，于是程序内说过的、做过的都不结束轮次，
- * 轮次的收尾只由直调产生。
- */
-export function createAgentPlugin(parts: { context: ContextEngineInstance }): AgentPlugin {
-  const { context } = parts;
-  const disposers: Array<() => void> = [];
-  return {
-    name: "ishiki",
-    // 引擎要在 agent 上挂东西（订阅、压缩水位），收尾控制没有。
-    init: (agent) => {
-      const disposer = context.attach?.(agent);
-      if (disposer) disposers.push(disposer);
-    },
-    stop: async () => {
-      for (const dispose of disposers) dispose();
-    },
-    // 上下文两段加工：一段段往下传。引擎缺席或返回 undefined 都表示这一步不改，原样放行。
-    transformEntries: (entries, options) => context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
-    transformMessages: (messages, options) => context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
-    // 引擎给出的那一段提示词接在内核拼好的提示词之后。
-    extendInstructions: () => context.instructions?.(),
-    // 停轮：唯一决策点，读本步消息流。finish 出现即停；否则发言（send_message 直调且全部
-    // continue!==true 且结果全成功）且本步没有别的实义工具时停；其余交 core 默认。
-    // 发言判定展开在这一点：只见本步消息，逐条找 send_message 的调用与结果——调用缺席判未发言，
-    // continue:true 是模型显式要求续轮（发了话但话没说完），error-text（执行抛错）与 ok:false 都算没说成，
-    // 部分失败（同批发送中一条 ok:false）判未完成，轮次留给模型看到失败再决定重试或改口。
-    onStepFinish: (info) => {
-      const calls = new Set<string>();
-      let sending = false;
-      // 显式要求续轮：话没说完，直接判不能停。
-      let continueRequested = false;
-      for (const message of info.result.messages) {
-        if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-        for (const part of message.content) {
-          if (part.type !== "tool-call") continue;
-          calls.add(part.toolName);
-          if (part.toolName !== SEND_MESSAGE_TOOL) continue;
-          if ((part.input as { continue?: boolean } | undefined)?.continue === true) {
-            continueRequested = true;
-            break;
-          }
-          sending = true;
-        }
-        if (continueRequested) break;
-      }
-
-      // 发言是否完成：本步每个 send_message 结果是否成功。
-      let sentOk = sending;
-      for (const message of info.result.messages) {
-        if (!sentOk) break;
-        if (message.role !== "tool" || !Array.isArray(message.content)) continue;
-        for (const part of message.content) {
-          if (part.type !== "tool-result" || part.toolName !== SEND_MESSAGE_TOOL) continue;
-          if (part.output.type === "error-text" || part.output.type === "error-json") {
-            sentOk = false;
-            break;
-          }
-          const value = part.output.type === "json" ? part.output.value : undefined;
-          if ((value as { ok?: boolean } | undefined)?.ok !== true) {
-            sentOk = false;
-            break;
-          }
-        }
-      }
-
-      const others = [...calls].some((name) => name !== FINISH_TOOL && name !== SEND_MESSAGE_TOOL);
-      if (calls.has(FINISH_TOOL) || (!others && calls.has(SEND_MESSAGE_TOOL) && !continueRequested && sentOk)) {
-        return { continue: false };
-      }
-      return undefined;
-    },
-  };
-}
-
 /** 收尾类工具名。停轮判定按名读消息流；这两个名字是内核机制的一部分，不由工具注册决定。 */
 const FINISH_TOOL = "finish";
 const SEND_MESSAGE_TOOL = "send_message";
@@ -218,7 +125,6 @@ const SEND_MESSAGE_TOOL = "send_message";
 export class AgentRuntime {
   /** 实例标识，用于日志与 agent id。 */
   readonly label: string;
-  readonly channelId: string;
   readonly directory: string;
   readonly storage: AgentStorage;
   /** 平台能力与其它 Koishi 服务的入口。扩展包挂载期间经它取用别的服务。 */
@@ -228,29 +134,26 @@ export class AgentRuntime {
 
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
+  private readonly context: ContextEngineInstance;
   private readonly agent: Agent;
-  /** 唤醒引擎这次挂载的拆卸函数：场景停止时调它，取消订阅并丢掉这次挂载攒下的账。 */
-  private disposeWakeup?: () => void;
   /** 装配期的工具面：内核工具先落进来，扩展包逐个往上加，加完才交给 core。 */
   private readonly tools: ToolSet;
   /** 扩展包交回来的提示词段，按包的挂载顺序；收尾时接在内核那一段与地址簿之后。 */
   private readonly addedTexts: string[] = [];
   /** 扩展包各自交回的拆卸函数，按挂载先后入队；停止时逆序执行，先挂的后拆。 */
   private readonly disposers: Disposer[] = [];
-  /** 装配是否仍在进行：只在这段里 `addTools` / `addInstructions` 可用，Agent 诞生后工具面即固定。 */
-  private assembling = true;
   /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
   private readonly toolStartedAt = new Map<string, number>();
   private readonly stepStartedAt = new Map<string, number>();
 
   constructor(config: AgentRuntimeConfig) {
     this.label = config.label;
-    this.channelId = config.channelId;
     this.directory = config.directory;
     this.ctx = config.ctx;
     this.domain = config.domain;
     this.logger = config.logger;
     this.wakeup = config.wakeup;
+    this.context = config.context;
 
     mkdirSync(this.directory, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.directory, "events.jsonl"));
@@ -273,19 +176,6 @@ export class AgentRuntime {
     const base = config.innerThoughts ? withInnerThoughts(this.tools, this.logger) : this.tools;
     const instructions = [config.instructions, ...this.addedTexts].filter((text) => text.length > 0).join("\n\n");
 
-    // 上下文引擎到这里才造：它的工具面与提示词两项依赖，此刻才算定。
-    // `base` 是模型目录收窄之前的那份——沙箱工具还没算进去，引擎看到的是本实例真实提供的工具，
-    // 不是代码模式改写后的投影。
-    const context = config.context.create(config.contextParams, {
-      logger: this.logger,
-      gateway: config.gateway,
-      directory: this.directory,
-      resources: resourcePath(),
-      domain: this.domain,
-      tools: base,
-      instructions,
-    });
-
     // 代码模式只改工具面：宿主工具一件不动，模型目录收窄成只剩沙箱那一件。
     // 收窄与沙箱工具是同一次装配的两半——表里点名的进沙箱，没点名的留在目录。
     const sandbox = config.codemode.enable ? createCodemode(config.codemode, base) : undefined;
@@ -296,35 +186,78 @@ export class AgentRuntime {
       instructions,
       storage: this.storage,
       // core 只见一个插件：上下文引擎与停轮判定在这一点收拢。
-      plugins: [createAgentPlugin({ context })],
+      plugins: [
+        {
+          name: "ishiki",
+          init: (agent) => {
+            const disposeContext = this.context.attach?.(agent);
+            if (disposeContext) this.disposers.push(disposeContext);
+            const disposeWakeup = this.wakeup.attach?.(agent);
+            if (disposeWakeup) this.disposers.push(disposeWakeup);
+            const unsubscribe = agent.channel.subscribe("agent", (event) => this.logEvent(event));
+            this.disposers.push(unsubscribe);
+          },
+          // 上下文两段加工：一段段往下传。引擎缺席或返回 undefined 都表示这一步不改，原样放行。
+          transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
+          transformMessages: (messages, options) => this.context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
+          // 引擎给出的那一段提示词接在内核拼好的提示词之后。
+          extendInstructions: () => this.context.instructions?.(),
+          // 停轮：唯一决策点，读本步消息流。finish 出现即停；否则发言（send_message 直调且全部
+          // continue!==true 且结果全成功）且本步没有别的实义工具时停；其余交 core 默认。
+          // 发言判定展开在这一点：只见本步消息，逐条找 send_message 的调用与结果——调用缺席判未发言，
+          // continue:true 是模型显式要求续轮（发了话但话没说完），error-text（执行抛错）与 ok:false 都算没说成，
+          // 部分失败（同批发送中一条 ok:false）判未完成，轮次留给模型看到失败再决定重试或改口。
+          onStepFinish: (info) => {
+            const calls = new Set<string>();
+            let sending = false;
+            // 显式要求续轮：话没说完，直接判不能停。
+            let continueRequested = false;
+            for (const message of info.result.messages) {
+              if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+              for (const part of message.content) {
+                if (part.type !== "tool-call") continue;
+                calls.add(part.toolName);
+                if (part.toolName !== SEND_MESSAGE_TOOL) continue;
+                if ((part.input as { continue?: boolean } | undefined)?.continue === true) {
+                  continueRequested = true;
+                  break;
+                }
+                sending = true;
+              }
+              if (continueRequested) break;
+            }
+
+            // 发言是否完成：本步每个 send_message 结果是否成功。
+            let sentOk = sending;
+            for (const message of info.result.messages) {
+              if (!sentOk) break;
+              if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+              for (const part of message.content) {
+                if (part.type !== "tool-result" || part.toolName !== SEND_MESSAGE_TOOL) continue;
+                if (part.output.type === "error-text" || part.output.type === "error-json") {
+                  sentOk = false;
+                  break;
+                }
+                const value = part.output.type === "json" ? part.output.value : undefined;
+                if ((value as { ok?: boolean } | undefined)?.ok !== true) {
+                  sentOk = false;
+                  break;
+                }
+              }
+            }
+
+            const others = [...calls].some((name) => name !== FINISH_TOOL && name !== SEND_MESSAGE_TOOL);
+            if (calls.has(FINISH_TOOL) || (!others && calls.has(SEND_MESSAGE_TOOL) && !continueRequested && sentOk)) {
+              return { continue: false };
+            }
+            return undefined;
+          },
+        },
+      ],
       tools: sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool },
       // core 的配置字段叫 toolCallers；它转发给 streamText 时才改名为 experimental_toolCallers。
       ...(sandbox === undefined ? {} : { toolCallers: sandbox.callers }),
     });
-    this.assembling = false;
-
-    // 引擎自己订阅事实流、读存储；运行时不替它转述发生了什么，也不告诉它记账归谁——
-    // 账的归属由事实流里每条消息自带的频道号给出，跨频道聚合与单频道走同一份代码。
-    this.disposeWakeup = config.wakeup.attach?.(this.agent);
-    this.agent.channel.subscribe("agent", (event) => this.logEvent(event));
-  }
-
-  /**
-   * 往本实例的工具面加一组工具：与内核工具或先挂的包撞名在这里抛错，不静默覆盖。
-   * 只在装配期（Agent 诞生之前）可用，之后工具面固定。
-   */
-  addTools(tools: ToolSet): void {
-    if (!this.assembling) throw new Error(`[${this.label}] tools are fixed once the agent exists`);
-    for (const [name, value] of Object.entries(tools)) {
-      if (name in this.tools) throw new Error(`tool "${name}" is already provided`);
-      this.tools[name] = value;
-    }
-  }
-
-  /** 追加一段系统提示词，位置在内核那一段与地址簿之后；按 {@link AgentRuntimeConfig.extensions} 的顺序接续。 */
-  addInstructions(instructions: string): void {
-    if (!this.assembling) throw new Error(`[${this.label}] instructions are fixed once the agent exists`);
-    if (instructions.length > 0) this.addedTexts.push(instructions);
   }
 
   /**
@@ -394,9 +327,6 @@ export class AgentRuntime {
   }
 
   async stop(): Promise<void> {
-    this.disposeWakeup?.();
-    // 与扩展包的拆卸同一个道理：拆卸函数随实例走一次，重复 stop 不再摘第二次。
-    this.disposeWakeup = undefined;
     await this.agent.stop();
     // 逆序拆：后挂的包可能用着先挂的包开的资源，先挂的拆了就悬空。
     for (const dispose of this.disposers.splice(0).reverse()) await dispose();
@@ -427,9 +357,6 @@ export class ProfileRuntime {
   private readonly scenesDir: string;
   /** 已激活的 preset 单元；fiber 建立时加入，拆卸或停止时摘出。 */
   private readonly presets: PresetRuntime[] = [];
-  /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
-  private persona?: string;
-  private systemTemplate?: string;
 
   constructor(options: ProfileRuntimeOptions) {
     this.id = options.id;
@@ -447,11 +374,9 @@ export class ProfileRuntime {
       specs: load.specs,
       extensions: load.extensions,
       directory: this.directory,
-      scenesDir: this.scenesDir,
       ctx: this.ctx,
       gateway: this.gateway,
       logger: this.logger,
-      instructions: () => this.instructions(),
     });
     this.presets.push(preset);
     this.logger.info(`[${this.id}/${preset.name}] preset active: ${load.specs.length} scene spec(s)`);
@@ -480,14 +405,6 @@ export class ProfileRuntime {
     const presets = this.presets.splice(0, this.presets.length);
     await Promise.all(presets.map((preset) => preset.stop()));
   }
-
-  private instructions(): string {
-    if (this.persona === undefined) this.persona = readSnippet(path.join(this.directory, "persona.md")) ?? "";
-    if (this.systemTemplate === undefined) this.systemTemplate = readFileSync(resourcePath("templates", "system.jinja"), "utf8");
-
-    const rendered = new Template(this.systemTemplate).render({});
-    return [rendered.trim(), this.persona].filter((part) => part.length > 0).join("\n\n");
-  }
 }
 
 export interface PresetRuntimeOptions {
@@ -499,13 +416,9 @@ export interface PresetRuntimeOptions {
   extensions: Record<string, unknown>;
   /** 所属 profile 的目录：事实根与人设都在这里。 */
   directory: string;
-  /** 实例根目录：`<profileDir>/scenes`。 */
-  scenesDir: string;
   ctx: Context;
   gateway: Gateway;
   logger: Logger;
-  /** 基础提示词（内核模板 + persona）的取用点；缓存由 profile 侧持有。 */
-  instructions: () => string;
 }
 
 /** 一个 preset 的激活单元：specs 与按需长出来的频道实例；生命周期跟着自己那条 fiber。 */
@@ -516,23 +429,22 @@ export class PresetRuntime {
   /** 启用的扩展包，包名到 config；provider 每次实例化时现取，服务因此不必被 preset 记住。 */
   private readonly extensions: Record<string, unknown>;
   private readonly directory: string;
-  private readonly scenesDir: string;
   private readonly ctx: Context;
   private readonly gateway: Gateway;
   private readonly logger: Logger;
-  private readonly instructions: () => string;
   private readonly scenes: Record<string, AgentRuntime | undefined> = {};
+  /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
+  private persona?: string;
+  private systemTemplate?: string;
 
   constructor(options: PresetRuntimeOptions) {
     this.name = options.name;
     this.specs = options.specs;
     this.extensions = options.extensions;
     this.directory = options.directory;
-    this.scenesDir = options.scenesDir;
     this.ctx = options.ctx;
     this.gateway = options.gateway;
     this.logger = options.logger;
-    this.instructions = options.instructions;
   }
 
   /** 按事件定位其归属频道实例，未创建时按需创建。 */
@@ -540,7 +452,7 @@ export class PresetRuntime {
     const { platform, selfId, channelId } = event.data;
     const spec = matchSceneSpec(this.specs, { sid: `${platform}:${selfId}`, channelId });
     if (spec === undefined) return undefined;
-    return this.ensure(spec, channelId, { platform, selfId });
+    return this.ensure(spec, platform, channelId, selfId);
   }
 
   async stop(): Promise<void> {
@@ -555,58 +467,25 @@ export class PresetRuntime {
    * 实例坐标随形态分岔：非聚合形态是 `(sid, channelId)`，每个频道一块视窗；聚合形态整块视窗
    * 以 preset 名为键，claims 里的全部频道汇进同一份 `events.jsonl`——合流的范围就是声明处所写的那些行。
    */
-  private ensure(spec: SceneSpec, channelId: string, address: { platform: string; selfId: string }): AgentRuntime {
+  private ensure(spec: SceneSpec, platform: string, channelId: string, selfId: string): AgentRuntime {
     const cross = spec.cross;
     const key = cross ? `cross_${spec.name}` : channelKey(spec.sid, channelId);
     const existing = this.scenes[key];
     if (existing !== undefined) return existing;
 
-    // 聚合视窗没有「自己所在的那个频道」：sid 取事件来源的账号，决定本实例从哪个 bot 发消息。
-    const sid = cross ? `${address.platform}:${address.selfId}` : spec.sid;
-
-    /** 聚合形态的出站寻址：可达清单与坐标解析都从 claims 现算一次，装配时冻结在工具里。非聚合形态取不到 claims。 */
-    const claims = spec.claims ?? {};
-    /** 认领的频道模式，逐行写成 `sid/模式`；地址簿与工具的报错文本都取这两份，不各写一套。 */
-    const reachable = Object.entries(claims).flatMap(([account, claim]) => (claim.whitelist ?? []).map((pattern) => `${account}/${pattern}`));
-    const excluded = Object.entries(claims).flatMap(([account, claim]) => (claim.blacklist ?? []).map((pattern) => `${account}/${pattern}`));
-    const directory = path.join(this.scenesDir, sceneDirectoryName(key));
+    /** 聚合形态的认领账号；非聚合形态取不到 claims，缺席即坐标唯一。 */
+    const accounts = cross ? Object.entries(spec.claims ?? {}).map(([sid, claim]) => ({ sid, claim })) : [];
+    const domain: InstanceDomain = cross ? { form: "cross", accounts } : { form: "channel", platform: platform, selfId: selfId, channelId };
+    const directory = path.join(this.directory, "scenes", sceneDirectoryName(key));
     const baseTools: ToolSet = {
       send_message: createSendMessage({
         ctx: this.ctx,
         logger: this.logger,
-        sid,
-        channelId,
+        domain,
         typing: spec.typing,
-        // 坐标由模型给，内核只验它落不落在本视窗认领的频道集合内。
-        // 坐标两种写法都收：带 sid 的复合坐标直接取；裸 channelId 只在恰好被一个 sid 认领时才算数——
-        // 多个账号都认领同名频道时它指不准，宁可报错让模型补上 sid，也不猜一个发出去。
-        ...(cross
-          ? {
-              routing: {
-                reachable,
-                excluded,
-                resolve: (target: string) => {
-                  const slash = target.indexOf("/");
-                  if (slash > 0) {
-                    const account = target.slice(0, slash);
-                    const claimed = target.slice(slash + 1);
-                    return claimsChannel(claims[account] ?? {}, claimed) ? { sid: account, channelId: claimed } : undefined;
-                  }
-                  // 裸频道号只在恰好被一个账号认领时才算数。认领判定只有 claimsChannel 一处，
-                  // 白名单与黑名单都算进去：被排除的频道不该因为「只有它认领这个名字」而可达。
-                  const owners = Object.entries(claims).filter(([, claim]) => claimsChannel(claim, target));
-                  return owners.length === 1 ? { sid: owners[0]![0], channelId: target } : undefined;
-                },
-              },
-            }
-          : {}),
       }),
       finish: createFinish(),
     };
-
-    const domain: InstanceDomain = cross
-      ? { form: "cross", accounts: Object.entries(claims).map(([sid, claim]) => ({ sid, claim })) }
-      : { form: "channel", platform: address.platform, selfId: address.selfId, channelId };
 
     // 扩展包按 preset 配置里的书写顺序挂到这一个实例上。取不到服务只有一种可能：这条 fiber 已经
     // 把它声明为依赖，装配次序错了，或服务卸载后旧引用还在用。抛错，不静默跳过。
@@ -625,9 +504,23 @@ export class PresetRuntime {
     const toolcall = engineProvider<ToolcallEngine>(this.ctx, toolcallEngineServiceName(spec.toolcall.engine));
     const model = toolcall.create(engineParams<ToolcallEngines>(spec.toolcall)).wrap(raw);
 
+    const context = engineProvider<ContextEngine>(this.ctx, contextEngineServiceName(spec.context.engine)).create(engineParams<ContextEngines>(spec.context), {
+      logger: this.logger,
+      gateway: this.gateway,
+      directory: directory,
+      resources: resourcePath(),
+      domain: domain,
+    });
+
+    const wakeup = engineProvider<WakeupEngine>(this.ctx, wakeupEngineServiceName(spec.wakeup.engine)).create(engineParams<WakeupEngines>(spec.wakeup), {
+      logger: this.logger,
+    });
+
     // 系统提示词：内核那一段（身份与处境）在前，聚合形态的地址簿居中，扩展包的加法在最后。
     const instructionTexts = [this.instructions()];
     if (cross) {
+      /** 认领模式逐行写成 `sid/模式`；地址簿与工具的报错文本都取这一份，不各算一次。 */
+      const { reachable, excluded } = claimLines(accounts);
       instructionTexts.push(
         [
           "本视窗合并了下列频道，每段事实行前的 [ #坐标 ] 标出它的出处，正文行自带发送者。",
@@ -643,7 +536,6 @@ export class PresetRuntime {
     }
     const scene = new AgentRuntime({
       label: cross ? `${spec.profile}/${spec.name}` : `${spec.profile}/${spec.name}/${channelId}`,
-      channelId,
       directory,
       model,
       // 聚合形态把可达地址清单拼进 instructions：坐标不进工具 schema（每个工具都挂一份会让工具目录膨胀），
@@ -652,22 +544,25 @@ export class PresetRuntime {
       ctx: this.ctx,
       domain,
       gateway: this.gateway,
-      // 引擎实例在 AgentRuntime 构造期才造：它的工具面与提示词依赖，要到扩展包挂完才定。
-      // 这里只交出造法与参数。
-      context: engineProvider<ContextEngine>(this.ctx, contextEngineServiceName(spec.context.engine)),
-      contextParams: engineParams<ContextEngines>(spec.context),
+      context: context,
       tools: baseTools,
       extensions,
       innerThoughts: spec.innerThoughts,
       codemode: spec.codemode,
-      wakeup: engineProvider<WakeupEngine>(this.ctx, wakeupEngineServiceName(spec.wakeup.engine)).create(engineParams<WakeupEngines>(spec.wakeup), {
-        logger: this.logger,
-      }),
+      wakeup: wakeup,
       logger: this.logger,
     });
     this.scenes[key] = scene;
     this.logger.info(`[${spec.profile}/${spec.name}] scene created: ${key}`);
     return scene;
+  }
+
+  private instructions(): string {
+    if (this.persona === undefined) this.persona = readSnippet(path.join(this.directory, "persona.md")) ?? "";
+    if (this.systemTemplate === undefined) this.systemTemplate = readFileSync(resourcePath("templates", "system.jinja"), "utf8");
+
+    const rendered = new Template(this.systemTemplate).render({});
+    return [rendered.trim(), this.persona].filter((part) => part.length > 0).join("\n\n");
   }
 }
 

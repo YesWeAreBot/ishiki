@@ -583,8 +583,7 @@ describe("jev wakeup: 接进场景", () => {
           send_message: createSendMessage({
             ctx,
             logger,
-            sid: "onebot:1",
-            channelId: "room",
+            domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
             typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
           }),
         },

@@ -7,7 +7,7 @@ import { parse } from "yaml";
 
 import { ClassicContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
-import { ExtensionService, type Disposer, type ExtensionHandler } from "./extension.js";
+import { type Disposer, type ExtensionHandler } from "./extension.js";
 import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -55,17 +55,23 @@ class Ishiki extends Service<Ishiki.Config> {
     // 内置引擎变体：一个变体一个 provider Service，构造即登记，服务名即准入。
     // 必须排在 ready 监听之前：provider 的登记也挂在 ready 上，先挂的先跑，profile 装载时
     // 才看得到这些服务，preset 的引擎依赖不会先落进等待态。
-    new StandardContextEngine(ctx);
-    new ClassicContextEngine(ctx);
-    new StandardWakeupEngine(ctx);
-    new ClassicWakeupEngine(ctx);
-    new JevWakeupEngine(ctx);
-    new NativeToolcallEngine(ctx);
-    new ClassicToolcallEngine(ctx);
-    new HermesToolcallEngine(ctx);
-    new Qwen3CoderToolcallEngine(ctx);
-    new MorphXmlToolcallEngine(ctx);
-    new YamlXmlToolcallEngine(ctx);
+
+    // Context 引擎族
+    ctx.plugin(StandardContextEngine);
+    ctx.plugin(ClassicContextEngine);
+
+    // 唤醒引擎族
+    ctx.plugin(StandardWakeupEngine);
+    ctx.plugin(ClassicWakeupEngine);
+    ctx.plugin(JevWakeupEngine);
+
+    // 工具调用引擎族
+    ctx.plugin(NativeToolcallEngine);
+    ctx.plugin(ClassicToolcallEngine);
+    ctx.plugin(HermesToolcallEngine);
+    ctx.plugin(Qwen3CoderToolcallEngine);
+    ctx.plugin(MorphXmlToolcallEngine);
+    ctx.plugin(YamlXmlToolcallEngine);
 
     ctx.on("ready", () => void this.load());
     ctx.on("internal/session", (session) => void this.onSession(session));
@@ -94,7 +100,8 @@ class Ishiki extends Service<Ishiki.Config> {
     }
 
     try {
-      runtime.activateProfiles(runtime.loadProfiles(profilesRoot, this.logger), this.profiles, { ctx: this.ctx, gateway: this.gateway, logger: this.logger });
+      const profiles = runtime.loadProfiles(profilesRoot, this.logger);
+      runtime.activateProfiles(profiles, this.profiles, { ctx: this.ctx, gateway: this.gateway, logger: this.logger });
     } catch (error) {
       this.logger.error(`profile loading failed, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -132,9 +139,16 @@ class Ishiki extends Service<Ishiki.Config> {
    * 但服务会跟着 Ishiki 走完，不随调用方那条 fiber 消失。
    */
   public provide(name: string, handler: ExtensionHandler): Disposer {
-    const fiber = this.ctx.plugin((ctx: Context) => {
-      new ExtensionService(ctx, name, handler);
-    });
+    const fiber = this.ctx.plugin(
+      class extends Service {
+        get handler() {
+          return handler;
+        }
+        constructor(ctx: Context) {
+          super(ctx, `ishiki.ext.${name}`, true);
+        }
+      },
+    );
     // `dispose()` 返回的是这条 fiber 状态是否变了，调用方不关心：它要的是「这个包的服务没了」。
     return () => {
       fiber.dispose();

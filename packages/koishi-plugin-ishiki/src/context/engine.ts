@@ -1,6 +1,6 @@
 import type { Agent, AgentEntry, AgentMessage, ToolSet } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import { Service, type Context, type Logger } from "koishi";
+import { Awaitable, Service, type Context, type Logger } from "koishi";
 
 import type { InstanceDomain } from "../domain.js";
 
@@ -51,14 +51,14 @@ export interface ContextEngineInstance {
    */
   attach?: (agent: Agent) => () => void;
   /** 事件流改写：裁窗口、提摘要、分段。拿不到就原样放行。 */
-  prepareEntries?: (entries: readonly AgentEntry[], request: ContextRequest) => readonly AgentEntry[] | Promise<readonly AgentEntry[]>;
+  prepareEntries?: (entries: readonly AgentEntry[], request: ContextRequest) => Awaitable<readonly AgentEntry[]>;
   /** 消息行渲染：把条目变成模型真正读到的那几行。拿不到就原样放行。 */
-  renderMessages?: (messages: readonly AgentMessage[], request: ContextRequest) => AgentMessage[] | Promise<AgentMessage[]>;
+  renderMessages?: (messages: AgentMessage[], request: ContextRequest) => Awaitable<AgentMessage[]>;
   /**
    * 实例级上下文提示词：追加在内核拼好的那一段之后。
    * 拿不到本轮 entries——core 在流裁剪之前就问一次，所以这段只能是与轮次无关的常驻内容。
    */
-  instructions?: () => string | undefined | Promise<string | undefined>;
+  instructions?: () => Awaitable<string | undefined>;
 }
 
 /**
@@ -76,31 +76,16 @@ export interface ContextRequest {
 /** 装配一个上下文引擎所需的运行态依赖：随 scene 而变，不来自配置。 */
 export interface ContextEngineOptions {
   logger: Logger;
-  gateway?: Gateway;
+  gateway: Gateway;
   /** 本 profile 的数据目录：需要自有文件的引擎（记忆块等）在这里读写。 */
-  directory?: string;
+  directory: string;
   /** 包内 `resources/` 的绝对路径：需要模板的引擎在这里找。 */
-  resources?: string;
+  resources: string;
   /**
    * 本实例的可见域。渲染事实行要它：聚合视窗一块吃下多个频道，不带坐标就分不清谁说的，于是每段
    * 带一个寻址头；单频道视窗行自带出处，不带头。缺省即按单频道视窗渲染。
    */
-  domain?: InstanceDomain;
-  /**
-   * 本实例最终的工具面：内核工具与扩展包的加法都在内。
-   *
-   * 引擎拿它是为了让自己的上下文模型与模型实际看到的那份对上——比如 Classic 要按工具清单决定
-   * 指令里写什么。实例造在扩展挂载之后就是为了这个：早一步拿到的是半份工具面，比没有更坏。
-   * 它是只读的上下文依据，不是工具管理权：引擎不能换它、不能执行它、不能改它。
-   * 代码模式收窄发生在之后，所以这份清单比模型最终拿到的目录多一件沙箱工具。
-   */
-  tools: ToolSet;
-  /**
-   * 本实例最终的系统提示词：内核那一段、聚合形态的地址簿、扩展包的那几段，接在一起。
-   * 与 {@link ContextEngineInstance.instructions} 追加的那一段是同一份文本的两个方向——
-   * 这里给的是它要接在后面的东西，不是给整个引擎的指令。
-   */
-  instructions: string;
+  domain: InstanceDomain;
 }
 
 /**

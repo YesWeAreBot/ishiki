@@ -241,7 +241,7 @@ export class StandardContextInstance implements ContextEngineInstance {
   }
 
   /** 前台：只裁窗口，不调模型。 */
-  prepareEntries = async (entries: readonly AgentEntry[]): Promise<readonly AgentEntry[]> => {
+  prepareEntries(entries: readonly AgentEntry[]) {
     if (this.ceiling === 0) return entries;
 
     const compact = lastCompact(entries);
@@ -268,9 +268,11 @@ export class StandardContextInstance implements ContextEngineInstance {
       return this.prepend(head, [...tail]);
     }
     return this.prepend(head, tail.slice(cut));
-  };
+  }
 
-  renderMessages = (messages: readonly AgentMessage[]): AgentMessage[] => collapse(messages, this.domain);
+  renderMessages(messages: readonly AgentMessage[]) {
+    return collapse(messages, this.domain);
+  }
 
   /** 一轮结束后，若刚才是超预算装配的，把切掉的那段并进摘要。不阻塞任何东西。 */
   private finishTurn(): void {

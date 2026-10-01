@@ -101,8 +101,7 @@ describe("code mode", () => {
     send_message: createSendMessage({
       ctx,
       logger,
-      sid: "onebot:1",
-      channelId: "private:9",
+      domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" },
       typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
     }),
     finish: createFinish(),

@@ -1,33 +1,16 @@
 import { jsonSchema, tool, Tool } from "@yesimagent/core";
 import { Context, h, Logger, sleep } from "koishi";
 
+import { claimLines, InstanceDomain, resolveClaimedChannel } from "../domain.js";
 import type { TypingConfig } from "../profile.js";
 
 export namespace SendMessageTool {
   export interface Options {
     ctx: Context;
     logger: Logger;
-    sid: string;
-    channelId: string;
+    /** 本实例的可见域：单频道形态坐标唯一，聚合形态坐标由模型给。 */
+    domain: InstanceDomain;
     typing: TypingConfig;
-    /**
-     * 多频道视窗的出站寻址：跨频道没有单值「当前位置」，目标由模型显式给。
-     * 缺省即单频道形态——坐标唯一，模型看不到也不必给 target。
-     */
-    routing?: {
-      /**
-       * 本视窗可达的频道，写成 `sid/模式`：报错文本取它，模型据此知道能往哪儿发。
-       * 写模式而不是频道清单——认领通常写成 `group:*` 这类通配，逐个频道要等运行时才知道。
-       */
-      reachable: readonly string[];
-      /** 认领范围里被黑名单排除的频道，写法同上：不写出来，模型会反复试同一个不达的坐标。 */
-      excluded: readonly string[];
-      /**
-       * 把模型给的坐标解析成一个频道：带 sid 的复合坐标直接取，无 sid 的裸 channelId 只在
-       * 恰好被一个 sid 认领时才算数。解析不出返回 undefined，调用方报 `InvalidTarget`。
-       */
-      resolve: (target: string) => { sid: string; channelId: string } | undefined;
-    };
   }
   export interface Input {
     messages: string[];
@@ -54,23 +37,24 @@ const TARGET_PROPERTY = {
 } as const;
 
 export function createSendMessage(options: SendMessageTool.Options): Tool<SendMessageTool.Input, SendMessageTool.Output> {
-  const routing = options.routing;
+  const { domain } = options;
+  const cross = domain.form === "cross";
   /** 报错里那句「能发到哪儿」：可达清单加上被排除的那些，别让模型反复试一个已经被排除的坐标。 */
   const reachText = (): string => {
-    if (routing === undefined) return "";
-    const parts = [`可达：${routing.reachable.join("、")}`];
-    if (routing.excluded.length > 0) parts.push(`已排除：${routing.excluded.join("、")}`);
+    if (!cross) return "";
+    const { reachable, excluded } = claimLines(domain.accounts);
+    const parts = [`可达：${reachable.join("、")}`];
+    if (excluded.length > 0) parts.push(`已排除：${excluded.join("、")}`);
     return parts.join("；");
   };
   return tool({
-    description:
-      routing === undefined
-        ? [
-            "在当前场景里发言。这是消息到达平台的唯一途径——只有本工具发出的内容会被别人看到。",
-            "本工具只发到当前频道，没有目标参数：别处的频道不在本视窗的可见域内。",
-            "一轮里可以多次调用。返回 {ok: true, count} 或 {ok: false, error, sent, failedAt}：sent 是已经成功发出的消息 ID，failedAt 是出错的 messages 下标；发送遇错会立即停止，failedAt 及其之后的消息都没有发出。必须检查 ok，不要假设发送成功。",
-          ].join("\n")
-        : CROSS_DESCRIPTION,
+    description: !cross
+      ? [
+          "在当前场景里发言。这是消息到达平台的唯一途径——只有本工具发出的内容会被别人看到。",
+          "本工具只发到当前频道，没有目标参数：别处的频道不在本视窗的可见域内。",
+          "一轮里可以多次调用。返回 {ok: true, count} 或 {ok: false, error, sent, failedAt}：sent 是已经成功发出的消息 ID，failedAt 是出错的 messages 下标；发送遇错会立即停止，failedAt 及其之后的消息都没有发出。必须检查 ok，不要假设发送成功。",
+        ].join("\n")
+      : CROSS_DESCRIPTION,
     inputSchema: jsonSchema<SendMessageTool.Input>({
       type: "object",
       properties: {
@@ -93,9 +77,9 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
             "默认 false。设为 true 时，发送后继续生成下一步，可以再调用工具或再次发送消息。需要「先回应再去做事」或「分几次发送并在中间查资料」时用它。",
         },
         // 坐标只进聚合形态的参数表：单频道形态的坐标唯一，模型看不见它反倒少一个能写错的地方。
-        ...(routing === undefined ? {} : { target: TARGET_PROPERTY }),
+        ...(!cross ? {} : { target: TARGET_PROPERTY }),
       },
-      required: routing === undefined ? ["messages"] : ["messages", "target"],
+      required: !cross ? ["messages"] : ["messages", "target"],
     }),
     execute: async (input) => {
       const messages = input.messages;
@@ -103,9 +87,12 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
         return { ok: false as const, error: { name: "InvalidInput", message: "messages 必须是非空字符串数组" }, sent: [], failedAt: 0 };
       }
 
-      // 聚合形态先验坐标：投递到本视窗覆盖范围之外的话，一条都不该发出去。
-      let { sid, channelId } = options;
-      if (routing !== undefined) {
+      // 单频道形态坐标唯一；聚合形态没有「当前位置」，坐标由模型给，
+      // 投递到本视窗覆盖范围之外的话一条都不该发出去。
+      let address: { sid: string; channelId: string };
+      if (domain.form === "channel") {
+        address = { sid: `${domain.platform}:${domain.selfId}`, channelId: domain.channelId };
+      } else {
         if (typeof input.target !== "string" || input.target.trim().length === 0) {
           return {
             ok: false as const,
@@ -114,8 +101,8 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
             failedAt: 0,
           };
         }
-        const address = routing.resolve(input.target.trim());
-        if (address === undefined) {
+        const resolved = resolveClaimedChannel(domain.accounts, input.target.trim());
+        if (resolved === undefined) {
           return {
             ok: false as const,
             error: { name: "InvalidTarget", message: `"${input.target}" 不在本视窗可达的频道内。${reachText()}` },
@@ -123,8 +110,10 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
             failedAt: 0,
           };
         }
-        ({ sid, channelId } = address);
+        address = resolved;
       }
+
+      const { sid, channelId } = address;
 
       const bot = options.ctx.bots[sid];
       if (bot === undefined) {

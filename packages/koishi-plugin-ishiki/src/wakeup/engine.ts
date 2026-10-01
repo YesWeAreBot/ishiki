@@ -36,12 +36,6 @@ export interface WakeupEngineDeps {
 /** 唤醒引擎的运行体：一个 AgentRuntime 一份，账本只记本视窗的事实流。 */
 export interface WakeupEngineInstance {
   /**
-   * 判定要同步给结果还是要等一次往返，由引擎自己定：`await` 对同步实现只是一个微任务。
-   * 调用点必须 `await` —— `Promise` 恒不等于 `"trigger"`。
-   */
-  decide(event: IshikiEvent): WakeupDecision | Promise<WakeupDecision>;
-
-  /**
    * 场景的 agent 建好后挂上来。引擎要「这个场景发生了什么、我自己说过什么」，只能从这里拿：
    * 订阅 `agent.channel` 看事实流，读 `agent.storage` 补上进程启动之前的历史。
    *
@@ -52,6 +46,11 @@ export interface WakeupEngineInstance {
    * 引擎实例随 agent 诞生，只挂载这一个 agent：账本与实例同生共死，状态留在实例内。
    */
   attach?(agent: Agent): () => void;
+  /**
+   * 判定要同步给结果还是要等一次往返，由引擎自己定：`await` 对同步实现只是一个微任务。
+   * 调用点必须 `await` —— `Promise` 恒不等于 `"trigger"`。
+   */
+  decide(event: IshikiEvent): WakeupDecision | Promise<WakeupDecision>;
 }
 
 /** 内容里是否 @ 了指定身份。`<at>` 不是合法消息内容时按「没有」处理。 */

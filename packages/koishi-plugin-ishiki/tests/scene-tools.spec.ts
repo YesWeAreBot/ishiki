@@ -72,7 +72,8 @@ describe("send_message", () => {
     },
   };
   const ctx = { bots } as unknown as Context;
-  const build = (typing = instant) => createSendMessage({ ctx, logger, sid: "onebot:1", channelId: "group:2", typing });
+  const build = (typing = instant) =>
+    createSendMessage({ ctx, logger, domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "group:2" }, typing });
 
   it("sends each message as its own platform message", async () => {
     sent.length = 0;
@@ -102,14 +103,14 @@ describe("send_message", () => {
         throw Object.assign(new Error("blocked"), { name: "BotOffline" });
       },
     };
-    const tool = createSendMessage({ ctx, logger, sid: "onebot:2", channelId: "group:2", typing: instant });
+    const tool = createSendMessage({ ctx, logger, domain: { form: "channel", platform: "onebot", selfId: "2", channelId: "group:2" }, typing: instant });
     const result = await run(tool, { messages: ["第一句"] });
 
     expect(result).toEqual({ ok: false, sent: [], failedAt: 0, error: { name: "BotOffline", message: "blocked" } });
   });
 
   it("reports an unconnected account and rejects empty input", async () => {
-    const tool = createSendMessage({ ctx, logger, sid: "onebot:9", channelId: "group:2", typing: instant });
+    const tool = createSendMessage({ ctx, logger, domain: { form: "channel", platform: "onebot", selfId: "9", channelId: "group:2" }, typing: instant });
 
     expect(await run(tool, { messages: ["在吗"] })).toMatchObject({ ok: false, error: { name: "BotNotFound" } });
     expect(await run(tool, { messages: [] })).toMatchObject({ ok: false, error: { name: "InvalidInput" } });
