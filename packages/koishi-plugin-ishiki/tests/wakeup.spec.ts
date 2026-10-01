@@ -11,6 +11,7 @@ import { StandardContextInstance } from "../src/context/standard.engine.js";
 import { AgentRuntime } from "../src/runtime.js";
 import type { IshikiMessageCreated } from "../src/types.js";
 import { ClassicWakeupEngine, ClassicWakeupInstance } from "../src/wakeup/classic.engine.js";
+import type { WakeupEngineInstance } from "../src/wakeup/engine.js";
 import { StandardWakeupEngine, StandardWakeupInstance } from "../src/wakeup/standard.engine.js";
 
 /** provider 只需要一个 Koishi Context，不需要 start；只有 `ctx.get(服务名)` 才要求 start。 */
@@ -241,6 +242,48 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
       expect(logs).toEqual([]);
       expect(wakeup.score("room")).toBe(65); // 100 - replyCost
       await scene.stop();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("停止后视窗的订阅被摘掉，重复 stop 不重复拆卸", async () => {
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: [] }) }) });
+    let detached = 0;
+    /** 只数挂载与拆卸次数的运行体：真实引擎的账另有几条用例在盯。 */
+    const wakeup: WakeupEngineInstance = {
+      decide: () => "wait",
+      attach: () => () => {
+        detached += 1;
+      },
+    };
+    const directory = mkdtempSync(path.join(tmpdir(), "ishiki-wakeup-"));
+
+    try {
+      const scene = new AgentRuntime({
+        label: "test/scene/room",
+        channelId: "room",
+        directory,
+        model,
+        instructions: "",
+        ctx: {} as Context,
+        domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
+        context: { create: () => new StandardContextInstance({}, { logger, tools: {}, instructions: "" }) } as unknown as ContextEngine,
+        contextParams: { maxChars: 10_000 },
+        tools: {},
+        extensions: [],
+        innerThoughts: false,
+        codemode: { enable: false, direct: [], timeoutMs: 30_000 },
+        wakeup,
+        logger,
+      });
+
+      await scene.stop();
+      expect(detached).toBe(1);
+
+      // 重复 stop 不再摘第二次。
+      await scene.stop();
+      expect(detached).toBe(1);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

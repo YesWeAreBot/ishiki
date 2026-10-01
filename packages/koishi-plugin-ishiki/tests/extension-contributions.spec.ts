@@ -46,7 +46,7 @@ const disposed: string[] = [];
  * 被叫一次。包自己解释 `config`，内核只负责原样递过来。
  */
 function extensionPackage(pkg = "neko-tools") {
-  return function nekoTools(ctx: Context) {
+  function nekoTools(ctx: Context) {
     const handler: ExtensionHandler = (presetConfig, runtime) => {
       calls.push({ domain: runtime.domain, directory: runtime.directory, config: presetConfig, ctx: runtime.ctx });
       mounted = runtime;
@@ -65,7 +65,10 @@ function extensionPackage(pkg = "neko-tools") {
     };
     // 归属声明：服务随这条 fiber 走。漏绑的话服务会活到 ishiki 自己 dispose。
     ctx.on("dispose", ctx.ishiki.provide(pkg, handler));
-  };
+  }
+  // 用了 ctx.ishiki 就得在 inject 里写明，否则 cordis 每次取用都记一条 not-registered 警告。
+  nekoTools.inject = ["ishiki"];
+  return nekoTools;
 }
 
 // ── 测试装配台 ──
@@ -395,13 +398,18 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     const holds: { unregister?: () => void | Promise<void> } = {};
 
     // 两条服务各归各的拆卸函数：拆掉 first 不该带走 second。
-    const holder = root.plugin((ctx: Context) => {
-      holds.unregister = ctx.ishiki.provide("first", () => undefined);
-      ctx.on(
-        "dispose",
-        ctx.ishiki.provide("second", () => undefined),
-      );
-    });
+    const holder = root.plugin(
+      Object.assign(
+        (ctx: Context) => {
+          holds.unregister = ctx.ishiki.provide("first", () => undefined);
+          ctx.on(
+            "dispose",
+            ctx.ishiki.provide("second", () => undefined),
+          );
+        },
+        { inject: ["ishiki"] },
+      ),
+    );
     await sleep(20);
 
     const profiles: ProfileRuntime[] = [];
@@ -432,26 +440,31 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     writePlain(dir, "neko", "neko", ["    extends:", "      first:", "      second:", "      third:"]);
     disposed.length = 0;
 
-    const packs = root.plugin((ctx: Context) => {
-      ctx.on(
-        "dispose",
-        ctx.ishiki.provide("first", () => () => {
-          disposed.push("first");
-        }),
-      );
-      ctx.on(
-        "dispose",
-        ctx.ishiki.provide("second", () => () => {
-          disposed.push("second");
-        }),
-      );
-      ctx.on(
-        "dispose",
-        ctx.ishiki.provide("third", () => {
-          throw new Error("这个包装不上");
-        }),
-      );
-    });
+    const packs = root.plugin(
+      Object.assign(
+        (ctx: Context) => {
+          ctx.on(
+            "dispose",
+            ctx.ishiki.provide("first", () => () => {
+              disposed.push("first");
+            }),
+          );
+          ctx.on(
+            "dispose",
+            ctx.ishiki.provide("second", () => () => {
+              disposed.push("second");
+            }),
+          );
+          ctx.on(
+            "dispose",
+            ctx.ishiki.provide("third", () => {
+              throw new Error("这个包装不上");
+            }),
+          );
+        },
+        { inject: ["ishiki"] },
+      ),
+    );
     await sleep(20);
 
     const profiles: ProfileRuntime[] = [];

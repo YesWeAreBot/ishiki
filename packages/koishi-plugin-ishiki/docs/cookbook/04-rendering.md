@@ -70,17 +70,17 @@
 
 ## 扩展点现状
 
-**当前没有对宿主插件开放的注册接口。** 渲染规则、受体、引擎族都在包内，新增一种行为意味着改这个包里的代码：
+**引擎族与工具可扩展，受体与渲染规则不可。** 引擎变体走 provider Service（见 [05-engines](./05-engines.md)），新工具经扩展包挂上；但渲染规则与受体归一化仍在包内，新增一种行为意味着改这个包里的代码：
 
 | 想扩展什么       | 现在怎么做                                                                                                         |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 一种上下文策略   | 继承 `ContextEngine` 提供一个 Koishi 服务，见 [05-engines](./05-engines.md)                                        |
+| 一种唤醒判定     | 继承 `WakeupEngine` 提供一个 Koishi 服务                                                                           |
+| 一种工具调用协议 | 继承 `ToolcallEngine` 提供一个 Koishi 服务                                                                         |
+| 新工具           | 扩展包经 `ctx.ishiki.provide()` 挂到某个 preset，在 `AgentRuntime` 构造期经 `addTools()` 加进工具面                |
 | 一种新事件类型   | 在受体（`src/session-handler.ts`）里归一化，在渲染规则（`src/context/standard.engine.ts` 的 `renderLine`）里加一条 |
-| 一种上下文策略   | 在 `src/context/` 新增引擎文件并注册，见 [05-engines](./05-engines.md)                                             |
-| 一种唤醒判定     | 在 `src/wakeup/` 新增引擎文件并注册                                                                                |
-| 一种工具调用协议 | 在 `src/toolcall/` 新增引擎文件并注册                                                                              |
-| 新工具           | 在 `src/tools/` 新增，在 `AgentRuntime` 装配处挂上                                                                 |
 
-服务层（`ctx.ishiki`）目前只暴露插件配置，不提供 `registerReceptor` / `registerTransform` 这类钩子。等第二种受体或第二种渲染策略真的出现时再加注册表——现在加只会得到只有一个实现、无人实现的接口。
+事件渲染目前由上下文引擎自己做（`standard` 折行合并，`classic` 渲染成 `<world_state>`），没有独立的 renderer 服务，也不承诺这样一条注册机制。`ctx.ishiki` 不提供 `registerReceptor` / `registerTransform` 这类钩子：等第二种受体或第二种渲染策略真的出现时再说——现在加只会得到只有一个实现、无人实现的接口。
 
 ## 不做的
 

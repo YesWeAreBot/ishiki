@@ -230,7 +230,7 @@ export class AgentRuntime {
   private readonly wakeup: WakeupEngineInstance;
   private readonly agent: Agent;
   /** 唤醒引擎这次挂载的拆卸函数：场景停止时调它，取消订阅并丢掉这次挂载攒下的账。 */
-  private readonly disposeWakeup?: () => void;
+  private disposeWakeup?: () => void;
   /** 装配期的工具面：内核工具先落进来，扩展包逐个往上加，加完才交给 core。 */
   private readonly tools: ToolSet;
   /** 扩展包交回来的提示词段，按包的挂载顺序；收尾时接在内核那一段与地址簿之后。 */
@@ -395,6 +395,8 @@ export class AgentRuntime {
 
   async stop(): Promise<void> {
     this.disposeWakeup?.();
+    // 与扩展包的拆卸同一个道理：拆卸函数随实例走一次，重复 stop 不再摘第二次。
+    this.disposeWakeup = undefined;
     await this.agent.stop();
     // 逆序拆：后挂的包可能用着先挂的包开的资源，先挂的拆了就悬空。
     for (const dispose of this.disposers.splice(0).reverse()) await dispose();

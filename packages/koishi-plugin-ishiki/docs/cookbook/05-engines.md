@@ -6,24 +6,28 @@ agent 循环里有些环节**只能有一个**：上下文怎么组装、这一�
 
 ishiki 的做法是把这些环节收进**引擎**：一个引擎 = 一个环节的一种实现 + 它的参数；同族互斥，preset 只能选一个。插件退回到加法——加工具、加提示词，不抢决策。
 
-## 注册表形态
+## 引擎形态
 
 每个族一个目录，三件东西：
 
 ```text
 src/<族>/
-  engine.ts            # 抽象基类 + 参数表 interface + 注册表
-  <名字>.engine.ts     # 一个变体一个文件，文件末尾自注册
-  index.ts             # 桶文件，import 各变体使注册生效
+  engine.ts            # provider 基类 + 参数表 interface + 服务名函数
+  <名字>.engine.ts     # 一个变体一个文件
+  index.ts             # 桶文件，export 各变体
 ```
 
 `engine.ts` 里固定三件事：
 
 - `interface XEngines {}`：参数表，键即 `x.<engine>` 的参数键，各变体文件用 `declare module` 增强它；
-- `registerXEngine(name, create)`：登记一个变体，**重名抛错**，配置错误在装载时立刻暴露；
-- `createXEngine(config)`：按 `config.engine` 取参数（`config[config.engine]`），**未登记的名字抛错，不静默退化**。
+- `<族>EngineServiceName(name)`：算出这个变体对应的服务名；
+- `XEngine extends Service`：provider 基类，构造即登记在那个服务名上，`create(config, options)` 造一个运行体。
+
+服务名形如 `ishiki.engine.<族>.<名字>`。**可用性只由这个名字对应的服务是否存在决定**：没有登记表，也没有注册或按名创建一类的动词。包继承基类、在构造里 `super(ctx, name)`，服务就在那儿了。内置变体由插件构造器内联 `new`（登记走 cordis 的 ready + 一个微任务），社区变体由自己的插件构造。preset 按服务名 `ctx.inject(...)`，服务不在就停在等待态，到了自动激活。
 
 参数声明为可选（`Partial`）而不是改用索引签名，是为了让 `config[config.engine]` 仍能推导出具体类型。换引擎后旧引擎的参数键会留在合并结果里，消费端只读自己那个键，读不到旧参数。
+
+**provider Service 不等于运行体。** provider 只持有插件级配置，`create()` 每次造一份全新的实例随 AgentRuntime 生灭；preset 依赖的是 provider 服务名，装配时 `ctx.get()` 取一次。名字带不带包前缀无关准入——那是阶段 2 之前的旧形状。
 
 ## 现有的族
 
@@ -32,21 +36,50 @@ src/<族>/
 | 上下文   | `standard`（缺省）、`classic`                                                | `context.<name>`  |
 | 唤醒     | `standard`（缺省）、`classic`、`jev`                                         | `wakeup.<name>`   |
 | 工具调用 | `native`（缺省）、`classic`、`hermes`、`qwen3coder`、`morph-xml`、`yaml-xml` | `toolcall.<name>` |
-| 记忆     | `standard`（空壳，未接线）                                                   | —                 |
 
-前两族实现 `AgentPlugin`：它们的钩子挂在 agent 实例上，随场景装配。第三族不进 `AgentPlugin` 体系——它作用于装配期的模型值，由调用点在装配时取用一次。记忆族只有抽象基类与一个返回空工具集的占位实现，插槽关系已定（它是被查询的数据源，不是管道上的兄弟），实现留给以后。
+三个族的运行体都不实现 core 的 `AgentPlugin`：上下文族声明自己干预上下文哪几段，唤醒族只给一个判定加一个挂载时机，工具调用族作用于装配期的模型值。core 侧只挂一个插件（`runtime.ts` 的 `createAgentPlugin`），由它把上下文族转发到 core 的钩子上，工具调用族在装配点就地包裹模型。
+
+**没有记忆族。** 曾经的空壳（抽象基类加一个 Registry、两个没有实现的变体）在 2026-10-01 删除：没有调用方、没有配置项、`keyof` 参数表为空因而构造路径不可达，留着只会让人以为存在一个可用的公共能力。`context.classic` 的 `memoryBlocks` 读 `<profileDir>/memory/*.md` 注入 system，是上下文引擎的真实功能，与此无关。将来真有记忆需求，非互斥的能力作为 `extends` 包提供；出现明确的互斥策略再重新设计一个族。
 
 ## 引擎随 AgentRuntime 诞生
 
 三个族的配置走同一条三层合并（内置缺省 ← preset ← scene，见 [01-profile](./01-profile.md)），实例全部随 `AgentRuntime` 在装配点诞生、随实例销毁——生命周期只有「实例」一种单位：
 
-- **上下文引擎**一实例一份。它不能跨 agent 共享——core 在 `createAgent` 时就把插件 hook 的引用绑好，引擎自己也记着 agent、压缩水位与在途压缩，共享会让这个频道的压缩去读另一个频道的存储。
-- **唤醒引擎**一实例一份。它曾经的账本「跨频道可见」依赖 preset 级共享实例；现状里冷却账本只看本视窗的事实流。真需要跨实例感知（如全局限频），变体从 `WakeupEngineDeps.shared`（profile 级状态池，随 ProfileRuntime 生灭）取自己的键自管读写，不用模块级闭包——插件重载时闭包会留下幽灵账。
+- **上下文引擎**一实例一份，造在 `AgentRuntime` 构造期、扩展挂载之后（引擎看到的是扩展加完的那份工具面与提示词）。它不能跨 agent 共享——引擎自己记着 agent、压缩水位与在途压缩，共享会让这个频道的压缩去读另一个频道的存储。压缩挂在 `turn.done` 事件上而不是 core 的轮次钩子：钩子的返回值会被 core `await`，压得慢或失败会拖住轮次收尾；事件通道对 listener 是 `Promise.all` 加 try/catch，压不坏也等不起的东西本就不该进关键路径。
+- **唤醒引擎**一实例一份，账本只看本视窗的事实流：每条消息自带频道号，引擎从事件里读账归谁，聚合与单频道走同一份代码。`WakeupEngineDeps` 只带一个可选 logger，没有跨实例的状态池——真需要跨实例感知（如全局限频）时，账得挂在某个长于实例的东西上；模块级闭包不作数，插件重载会留下幽灵账。
 - **工具调用引擎**在装配点就地包裹本实例的模型：它不带账，只是按需包裹模型的一层中间件。
 
-`attach` 契约保留但收窄为单次挂载：一个引擎实例只 attach 一个 agent，返回的 disposer 由实例停止时调用。引擎要「这个场景发生了什么」，从这里订阅事实流即可。
+`attach` 契约是单次挂载：一个引擎实例只 attach 一个 agent，返回的 disposer 由实例停止时调用。引擎要「这个场景发生了什么」，从这里订阅 `agent.channel` 即可。上下文引擎的 `attach` 拿 agent 是为了读 storage 与模型——两者都是 agent 自己的东西，预抄一份可能读到过期引用，压缩还必须与 core 读同一个 storage。
 
-变体准入（带包前缀的名字要求包在 preset 的 `extends` 里）在配置展开期校验；scene 就地覆写引擎变体同样受这道门约束——准入是 preset 的承诺，不随覆写放开。
+变体的准入就是那个服务在不在：preset 按最终 spec（含 scene 覆写）算出的服务名列表 `ctx.inject(...)`，缺一个就停在等待态并报一条。scene 可以就地换引擎变体，换完重算依赖——但换不出一个新族去，那要改 core。
+
+### 上下文引擎
+
+上下文引擎拥有完整请求上下文的领域责任，但方法名是自己的，不索引 core 的 `AgentPlugin`：
+
+```ts
+interface ContextEngineInstance {
+  attach?: (agent: Agent) => () => void;
+  prepareEntries?: (entries: readonly AgentEntry[], request: ContextRequest) => readonly AgentEntry[] | Promise<readonly AgentEntry[]>;
+  renderMessages?: (messages: readonly AgentMessage[], request: ContextRequest) => AgentMessage[] | Promise<AgentMessage[]>;
+  instructions?: () => string | undefined | Promise<string | undefined>;
+}
+
+interface ContextRequest {
+  readonly turnId: string;
+  readonly signal: AbortSignal;
+}
+```
+
+四个方法都可选，未实现的那一步表示不改，原样放行。`attach` 是拿到运行资源（storage、模型）的唯一入口，返回的 disposer 里一并退订与中止——挂了东西就得能一次拆干净，两个钩子拆不出这个配对。
+
+core 的钩子名（`init` / `transformEntries` / `transformMessages` / `extendInstructions` / `onStepFinish`）只出现在 `runtime.ts` 的 `createAgentPlugin` 一处，按固定顺序转发。停轮判定就写在同一个插件的 `onStepFinish` 里，是内核机制，不进引擎族。
+
+两段加工（`prepareEntries` / `renderMessages`）对应 core 数据流本身的两段：可见条目先裁剪，再组织成消息，往后 core 才转成 `ModelMessage[]`。这不是两个插件。
+
+`ContextRequest` 里没有步号：core 的 `transformEntries` / `transformMessages` 收的是 `TurnOptions`，步号在更靠后的 `prepareStep` 才出现。留一个恒为 undefined 的字段比没有它更糟。
+
+**上下文不是原子的。** 完整上下文（指令 + 消息 + 工具）的语义归引擎，但 core 在流裁剪之前就调 `extendInstructions()`，所以 `instructions()` 拿不到本轮的 entries；`prepareStep` 之后只给 `ModelMessage`，跨步上下文无处可取。真正一次成型的「请求上下文」需要 core 加钩子，现在由唯一那个 AgentPlugin 分段接线，不假装已经做到。工具不在其中流转：它在 `AgentRuntime` 构造期固定，作为只读快照进 `ContextEngineOptions`，引擎不能换、不能执行、不能改。
 
 ### 工具调用引擎
 
@@ -71,7 +104,7 @@ core 的缺省是「本步出现了工具调用就再走一步」，靠 `maxStep
 
 ## 代码模式不在工具调用族里
 
-代码模式与上面那六个变体是**两个维度**：`toolcall` 说的是模型的输出怎么读成工具调用（用哪种协议），代码模式说的是工具面长什么样（模型直接调，还是写程序调）。两者正交，所以代码模式不进注册表，它是一块与 `innerThoughts` 平级的顶层配置（`src/tools/codemode.ts`，装配点在 `runtime.ts` 的 `ensure()`）。
+代码模式与上面那六个变体是**两个维度**：`toolcall` 说的是模型的输出怎么读成工具调用（用哪种协议），代码模式说的是工具面长什么样（模型直接调，还是写程序调）。两者正交，所以代码模式不是一族，它是一块与 `innerThoughts` 平级的顶层配置（`src/tools/codemode.ts`），装配点在 `runtime.ts` 的 `AgentRuntime` 构造器里。
 
 机制：模型那一侧只剩一个工具 `code_mode`，参数是一段程序；程序在 QuickJS 沙箱里跑，经 SDK 绑定的 `tools.*` 调宿主工具。宿主工具在模型目录里被摘掉，模型的工具描述里换成从 schema 生成的 TS 签名。省下的是上下文而不是时间——工具返回的中间数据进的是沙箱变量，只有 `return` 出去的那一份回模型。
 
@@ -117,8 +150,8 @@ failover:
 ## 新增一个引擎
 
 1. 在对应目录建 `<名字>.engine.ts`：继承抽象基类，写清这个策略的取舍与与来源实现的差异（被否决的替代方案也写进去）。
-2. 文件末尾 `declare module` 增强参数表，再调 `registerXEngine`。
-3. 在 `index.ts` 里 import 该文件。
+2. 构造器 `super(ctx, "<名字>")`，把插件级配置自己存着；文件末尾 `declare module` 增强参数表。
+3. 在 `index.ts` 里 export 该文件，并让插件构造器 `new` 一次（内置变体在 `Ishiki` 构造器里内联）。
 4. 示例与文档同步：`resources/profile.example.yml` 与 cookbook 对应章节。
 5. 配置层不用改：`context` / `wakeup` / `toolcall` 的 Schema 是按引擎名判别的联合，新变体走同一形状。
 
@@ -126,9 +159,11 @@ failover:
 
 引擎是「选一个」，贡献物是「加一些」：包对某一个 AgentRuntime 提供工具与提示词，不抢决策。
 
-1. 建一个 Koishi 插件，继承 `ExtensionProvider`：`super(ctx, "<包名>")` 登记 `ishiki.ext.<包名>` 服务。
-2. 实现 `provide(presetConfig, runtime)`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，加法只能经 `runtime.addTools()` / `runtime.addInstructions()`；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。返回拆卸函数，实例停止时逆序执行。这个实例用不上这个包就什么都不调。
+1. 建一个 Koishi 插件（`static inject = ["ishiki"]`），在构造器里调 `ctx.ishiki.provide("<包名>", handler)`。它内部开一条 fiber 建 `ishiki.ext.<包名>` 服务，返回值就是那条 fiber 的 disposer——`ctx.on("dispose", disposer)` 把服务挂在自己这条 fiber 上，这是归属声明，不是可选的卫生习惯。
+2. 写 handler `(presetConfig, runtime) => void | (() => void)`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，加法只能经 `runtime.addTools()` / `runtime.addInstructions()`；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。返回拆卸函数，实例停止时逆序执行。这个实例用不上这个包就什么都不调。
 3. 在 preset 的 `extends` 里写上包名；需要参数就写 `config:`，字段含义由包自己解释。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名在装配点抛错。`enable: false` 表示这一档不要：不依赖、不等待、不调用。
 4. 归位由内核定：工具并入内核工具之后、`innerThoughts` 之前、代码模式收窄之前；提示词接在内核那一段之后，按 `extends` 的顺序。
+
+两个 disposer 是两件事，别混：`ctx.ishiki.provide()` 返回的那个移除的是**服务**（连同这条 fiber），由扩展插件自己绑在生命周期上；handler 返回的那个清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。
 
 坐标里没有的东西不要从别处推：`channel.type` 要用自己从 Koishi 取；包自己发的消息不结束轮次（停轮只认 `finish` 与 `send_message`）。完整契约与刻意的缺失项见 [03-community-extension-mechanism.md](../03-community-extension-mechanism.md)。

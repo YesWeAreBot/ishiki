@@ -142,4 +142,15 @@ describe("toolcall engine", () => {
       classicToolResponse({ type: "tool-result", toolCallId: "1", toolName: "peek_channel_history", output: { type: "error-text", value: "频道不存在" } }),
     ).toContain("<status>error</status>");
   });
+
+  it("两份运行体各数各的 tool-call id：模块级计数器会让第二个从前面那个的数后面接着数", async () => {
+    const first = stubModel(answer('[{"function":"peek_channel_history","params":{}}]'));
+    const second = stubModel(answer('[{"function":"peek_channel_history","params":{}}]'));
+
+    const firstResult = await (new ClassicToolcallEngine(app).create().wrap(first.model) as LanguageModelV4).doGenerate(callOptions());
+    const secondResult = await (new ClassicToolcallEngine(app).create().wrap(second.model) as LanguageModelV4).doGenerate(callOptions());
+
+    expect(firstResult.content.filter((part) => part.type === "tool-call").map((part) => part.toolCallId)).toEqual(["classic-1"]);
+    expect(secondResult.content.filter((part) => part.type === "tool-call").map((part) => part.toolCallId)).toEqual(["classic-1"]);
+  });
 });

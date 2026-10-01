@@ -165,17 +165,20 @@ function extractCalls(data: Record<string, unknown>, tools: readonly LanguageMod
   return calls;
 }
 
-let callSequence = 0;
-
 /** 非流式结果的内容面：thoughts 一段文本 + 每个 action 一个 tool-call。 */
-function classicContent(text: string, tools: readonly LanguageModelV4FunctionTool[], json: JsonParser<Record<string, unknown>>): LanguageModelV4Content[] {
+function classicContent(
+  text: string,
+  tools: readonly LanguageModelV4FunctionTool[],
+  json: JsonParser<Record<string, unknown>>,
+  ids: { next: number },
+): LanguageModelV4Content[] {
   const { data } = json.parse(text);
   if (data === null) return [{ type: "text", text }];
 
   const thoughts = thoughtsBlock(data.thoughts);
   const content: LanguageModelV4Content[] = thoughts.length > 0 ? [{ type: "text", text: thoughts }] : [];
   for (const call of extractCalls(data, tools)) {
-    content.push({ type: "tool-call", toolCallId: `classic-${++callSequence}`, toolName: call.toolName, input: call.input });
+    content.push({ type: "tool-call", toolCallId: `classic-${++ids.next}`, toolName: call.toolName, input: call.input });
   }
   return content;
 }
@@ -193,6 +196,8 @@ export function classicToolResponse(toolResult: ToolResultPart): ToolResponsePro
 export const classicProtocol = (): TCMProtocol => {
   // 每份协议一个解析器：诊断是它的实例状态，不跨场景共用。
   const json = new JsonParser<Record<string, unknown>>();
+  // 同理，tool-call 的 id 计数也属于这份协议：模块级计数器会让不同实例的 id 互相插队。
+  const ids = { next: 0 };
 
   return {
     formatTools({ tools, toolSystemPromptTemplate }) {
@@ -205,7 +210,7 @@ export const classicProtocol = (): TCMProtocol => {
 
     parseGeneratedText({ text, tools }) {
       try {
-        return classicContent(text, tools, json);
+        return classicContent(text, tools, json, ids);
       } catch {
         // 解析失败整段降级为纯文本：轮次照常收尾，模型在下一轮看到自己输出的坏 JSON。
         return [{ type: "text", text: `（上一条输出无法解析为有效格式）${text}` }];
@@ -243,9 +248,9 @@ export const classicProtocol = (): TCMProtocol => {
         // finish 与 flush 都会触发：解析一次，其余调用直接返回。
         if (emitted) return;
         emitted = true;
-        for (const item of classicContent(buffered, tools, json)) {
+        for (const item of classicContent(buffered, tools, json, ids)) {
           if (item.type === "text") {
-            const id = `classic-text-${++callSequence}`;
+            const id = `classic-text-${++ids.next}`;
             controller.enqueue({ type: "text-start", id });
             controller.enqueue({ type: "text-delta", id, delta: item.text });
             controller.enqueue({ type: "text-end", id });

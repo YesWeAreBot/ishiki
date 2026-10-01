@@ -79,7 +79,7 @@ class PlainContextEngine extends ContextEngine<"rolling"> {
  * 每次调用生成新的插件对象——cordis 对同一个插件对象重复 apply 会判重。
  */
 function extensionPackage(plugin: RollingPluginConfig = { endpoint: "provider-value" }) {
-  return function nekoTools(ctx: Context) {
+  function nekoTools(ctx: Context) {
     // 这个包没有 `extends` 加法，只有引擎 provider：服务上挂一个什么都不做的 handler。
     ctx.on(
       "dispose",
@@ -87,7 +87,10 @@ function extensionPackage(plugin: RollingPluginConfig = { endpoint: "provider-va
     );
     new RollingContextEngine(ctx, plugin);
     new PlainContextEngine(ctx, plugin);
-  };
+  }
+  // 用了 ctx.ishiki 就得在 inject 里写明，否则 cordis 每次取用都记一条 not-registered 警告。
+  nekoTools.inject = ["ishiki"];
+  return nekoTools;
 }
 
 // ── 测试装配台 ──
@@ -157,6 +160,9 @@ describe("内置引擎服务", () => {
   beforeAll(async () => {
     Logger.targets.push({ record: (record) => records.push(`${record.type} ${record.content}`) });
     dataDir = mkdtempSync(path.join(os.tmpdir(), "ishiki-ext-"));
+    // 放一份空 models.yaml：缺文件时插件会自建并记一条 warn，那是真实行为，
+    // 与这组用例无关，写好它就不必让输出里混着这条噪音。
+    writeFileSync(path.join(dataDir, "models.yaml"), "");
     // 服务自己的 profiles 目录里放一份只用内置引擎的 profile：装载发生在 ready 期间，
     // 与内置 provider 的登记同一拍，缺服务会被记成 error——这两条断言就在这里守着。
     mkdirSync(path.join(dataDir, "profiles"), { recursive: true });

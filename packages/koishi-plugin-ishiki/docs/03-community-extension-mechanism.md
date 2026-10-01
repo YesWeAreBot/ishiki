@@ -1,37 +1,42 @@
-# 社区扩展机制（Pre-Channel / Pre-Profile 分区下的注册与可见域）
+# 社区扩展机制（Pre-Channel / Pre-Profile 分区下的加法与可见域）
 
-状态: 已定（9 步全部落地；inject fiber 的失效语义已由 `tests/extensions.spec.ts` 实测）
-日期: 2026-09-27
+状态: 已定（9 步全部落地；注入 fiber 的失效语义已由 `tests/extensions.spec.ts` 实测）
+日期: 2026-10-01
 来源: 扩展设计讨论（多群寻址 → 包外受众 → 分区梳理 → cordis 失效语义 → 装配层级）
 
 ## 结论
 
-扩展机制面向社区作者，围绕 Agent 的两种运行形态（Pre-Channel / Pre-Profile）组织为三层：**进程级注册表 → preset 级选中 → 形态决定的实例层**。配置面统一为一棵 preset 树（preset 下要么挂 `scenes`，要么 `cross: true` + `claims`），装配面以 Scene/Plan/Runtime 三层消除配置单位与运行单位的不对等。社区只能向既有引擎族注册新变体，core 的分区与插入位置封闭；变体的可见性由 preset 的 `extends` 显式选中，未列出的不生效；ProfileRuntime Service 化，扩展失效时受影响的 profile 经 cordis inject fiber 整体重启，失效传播不自造。除此之外社区面还有一件加法：包对某一个 AgentRuntime 提供工具与提示词，由服务上的 `extend(coords)` 承担（见「贡献物（加法）」）。
+扩展机制面向社区作者，围绕 Agent 的两种运行形态（Pre-Channel / Pre-Profile）组织为三层：**进程级服务 → preset 级选中 → 形态决定的实例层**。配置面统一为一棵 preset 树（preset 下要么挂 `scenes`，要么 `cross: true` + `claims`），装配面以 Spec/Runtime 两层消除配置单位与运行单位的不对等。社区只能向既有引擎族加新变体，core 的分区与插入位置封闭；变体的可用性只由那个 Koishi 服务在不在决定，preset 按最终 spec 的服务名 `ctx.inject(...)`；ProfileRuntime 是持久宿主，preset 失效时受影响的 preset 经 cordis 注入 fiber 整体重启，失效传播不自造。除此之外社区面还有一件加法：包对某一个 AgentRuntime 提供工具与提示词，由 `ctx.ishiki.provide()` 登记的 handler 承担（见「贡献物（加法）」）。
 
 ## 贡献物（加法）
 
 社区面除了注册引擎变体，还有一件加法：包对某一个 AgentRuntime 提供工具与提示词。
 
-**注册**：不走注册动词，也不新开注册表。工具不从配置按名查找，配置只写 `extends` 的包名，服务名 `ishiki.ext.<包名>` 已经是准入门；服务本身就是登记处。包在服务上暴露一个成员：
+**登记**：不走注册动词，也不新开注册表。工具不从配置按名查找，配置只写 `extends` 的包名，服务名 `ishiki.ext.<包名>` 已经是准入门；服务本身就是登记处。包调一次 `ctx.ishiki.provide()`，它内部开一条 fiber 建服务：
 
 ```ts
-class NekoTools extends ExtensionProvider {
-  constructor(ctx: Context, pluginConfig: PluginConfig) {
-    super(ctx, "neko-tools");
-  }
-
-  provide(presetConfig: unknown, runtime: AgentRuntime): () => void {
-    runtime.addTools(createTools(presetConfig, runtime.domain));
-    runtime.addInstructions("...");
-    return () => client.close();
+export class NekoTools extends Plugin {
+  constructor(ctx: Context, config: Config) {
+    super(ctx, config);
+    ctx.on(
+      "dispose",
+      ctx.ishiki.provide("neko-tools", (presetConfig, runtime) => {
+        const options = parseConfig(presetConfig);
+        runtime.addTools(createTools(options, runtime.domain));
+        runtime.addInstructions(`检索上限 ${options.maxResults}。`);
+        return () => client.close();
+      }),
+    );
   }
 }
 ```
 
-- 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次，**同步**；异步准备在包的 apply 期做完。
-- `provide` 拿到的是已初始化基础字段、尚未创建 `Agent` 的实例。`agent` 本身碰不到，加法只能经 `addTools` / `addInstructions`；两者只在装配期可用，之后工具面固定，Agent 诞生后再调抛错。
+- 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次 handler，**同步**；异步准备在包的构造期做完。
+- handler 拿到的是已初始化基础字段、尚未创建 `Agent` 的实例。`agent` 本身碰不到，加法只能经 `addTools` / `addInstructions`；两者只在装配期可用，之后工具面固定，Agent 诞生后再调抛错。
 - 每频道的过滤归包自己：包看着 `runtime.domain` 决定这档要不要加，不加就什么都不调。
-- 返回值是这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们随实例一起消失。
+- handler 的返回值是这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们随实例一起消失。
+
+**两个 disposer 是两件事**：`ctx.ishiki.provide()` 返回的那个拆掉的是**服务**（连同那条 fiber），必须由扩展插件绑在自己的生命周期上；handler 返回的那个清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。cordis 把服务绑在调用方那条 fiber 上，所以 `ctx.on("dispose", ...)` 是归属声明而不是可选的卫生习惯。
 
 **坐标**从实例上直接取：`runtime.ctx`、`runtime.domain`、`runtime.directory`。
 
@@ -47,7 +52,7 @@ class NekoTools extends ExtensionProvider {
 
 **出站**：包有 `ctx`，要发消息就能发，内核不铺路也不设闸；但停轮判定只认内核的 `finish` 与 `send_message`，包的工具落在「其他工具 → 续轮」，包自己发的消息不结束轮次。
 
-**代价**：贡献物的错误只能在实例诞生时暴露（重名、`provide()` 抛错）。引擎变体的准入在装载期只看服务在不在，贡献物查不出来，因为它依赖实例坐标——这是「实例按需诞生」的必然。
+**代价**：贡献物的错误只能在实例诞生时暴露（重名、handler 抛错）。引擎变体的准入在装载期只看服务在不在，贡献物查不出来，因为它依赖实例坐标——这是「实例按需诞生」的必然。handler 抛错时装配回滚：已拿到拆卸函数的挂载按逆序拆掉，不给包留悬挂的引用；包自己在返回拆卸函数之前开的资源拆不了，内核拿不到拆卸函数就拆不了。
 
 ## 被否定的前提
 
@@ -61,16 +66,16 @@ class NekoTools extends ExtensionProvider {
    - **替换判定**：同一份注册走两条装配路径，形态由生效单位（scene 或 cross preset）决定；坐标处理差异（内核填值 vs 模型显式给值）由内核吃掉，扩展物无感知。
 
 3. **原假设：社区可以新开引擎族、新增插入位置，用描述符接口（FamilyDescriptor / ContributionDescriptor / 槽位表）描述扩展。**
-   - **为什么站不住**：引擎族是 core 精心设计的分区（上下文 / 唤醒 / 工具调用 / 记忆），社区新开族等于打破分区；描述符机器是 core 里只有一个使用者的接口层，违反 04-rendering 的 YAGNI 判据（「等第二种实现真的出现再加注册表」）。
-   - **替换判定**：社区只能向既有族注册变体（`registerXEngine` 语义原样：重名抛错、未登记抛错）；插入位置封闭，由 core API 枚举；要开新位置就是改 core，那是内核的事。
+   - **为什么站不住**：引擎族是 core 精心设计的分区（上下文 / 唤醒 / 工具调用），社区新开族等于打破分区；描述符机器是 core 里只有一个使用者的接口层，违反 04-rendering 的 YAGNI 判据（「等第二种实现真的出现再加注册表」）。
+   - **替换判定**：社区只能向既有族加变体，变体以 Koishi 服务存在（`ishiki.engine.<族>.<名字>`，重名由 cordis 抛错）；插入位置封闭，由 core 的引擎族枚举；要开新位置就是改 core，那是内核的事。
 
 4. **原假设：core 的钩子链（`AgentPlugin`）是社区扩展的挂载点。**
    - **为什么站不住**：core 的钩子合成规则里混着两种形状——管道式（`onAppend`/`transformEntries`/`afterToolCall`/`extendTools`）与唯一决策式（`onStepFinish` 首个非 undefined 胜出、`prepareStep` 覆写 `StepOptions`、`beforeToolCall` 改写 `ToolDecision`、`toModelMessages` 先注册者认领）。唯一决策式没有「共同正确」的合成语义，社区一拿到手就是上一代用 `priority` 与 `match(session)` 抢拦截权的复辟。
-   - **替换判定**：core 内只有一个 `AgentPlugin`（装配器），由内核持有，选择并装配所有激活的引擎。引擎本身可以都不是 `AgentPlugin`（上下文族今天挂在插件链上是投机设计，待装配器收编）。社区面不存在 `AgentPlugin` 类别，只有注册表。
+   - **替换判定**：core 内只有一个 `AgentPlugin`（装配器），由内核持有，把上下文引擎的方法转发到 core 的钩子上。三个引擎族的运行体都不是 `AgentPlugin`：上下文族有自己的方法名（`attach` / `prepareEntries` / `renderMessages` / `instructions`），唤醒族只给判定与挂载时机，工具调用族作用于装配期的模型值。社区面不存在 `AgentPlugin` 类别。
 
 5. **原假设：扩展失效传播需要 ishiki 自己实现（依赖 diff、引擎实例热替换），或依赖 cordis v4 的 isolate 隔离域。**
    - **为什么站不住**：失效传播正是 cordis inject fiber 的既有契约（koishi 4.18 → cordis 3.18.1：`internal/before-service` → required inject 该服务的 scope `reset()`，`internal/service` → `start()`）；isolate/realm 解决的是「同一服务名多实例并存」（athena 的 per-Life 需求），ishiki 的 profile 是 service 内的数据、注册表是进程级一张表，没有这个需求；v3 的 realm 实现还依赖 loader 的 delims/swap 补丁舞，不成熟。硬造 per-profile isolate 的代价是社区包副作用乘 N。热替换引擎实例则是 athena 报告点名的 fiber reload 做不到的状态迁移问题，手写同样要面对。
-   - **替换判定**：失效粒度 = profile 重启档。扩展包停用 → 其服务消失 → 只命中选中它的 profile fiber → reset（profile 停止，事实流在盘上不丢，进行中轮次死亡）；扩展包回来 → start → profile 重载。
+   - **替换判定**：失效粒度 = preset 重启档。扩展包停用 → 其服务消失 → 只命中依赖它的 preset fiber → reset（该 preset 停止，事实流在盘上不丢，进行中轮次死亡）；扩展包回来 → start → preset 重载。ProfileRuntime 是持久宿主，不随 preset 消失。
 
 6. **原假设：`cross-channel: true` 作为 preset 上的布尔开关（02 号文档原方案）。**
    - **为什么站不住**：一个 preset 类型承载两种配置语义。`typing`/`failover` 等 per-channel 字段在共享实例下语义漂移，schema 无法表达「cross 时禁止写」，校验只能靠装载期手写；聚合关系隐式（哪些 scene 合流要全文搜索按引用拼图）；把已有多 scene 引用的 preset 标上 cross 会立即合流全部引用者，副作用范围不由声明处决定。
@@ -95,7 +100,9 @@ Runtime  运行层   AgentRuntime 实例（原 SceneRuntime 更名），按 spec
 
 **Spec 是冻结配置，不是活实例**：模型引用名、引擎配置、可见域（匹配器或频道并集）。模型实例（`FailoverModel`）、上下文引擎、唤醒引擎、工具调用层、工具集全部在 Runtime 诞生时构造，随实例销毁——生命周期只有「实例」一种单位，没有 preset 级的共享活物。
 
-引擎（`context` / `wakeup` / `toolcall`）配置走同一条三层合并，scene 可就地覆盖；实例随 `AgentRuntime` 诞生与销毁，一个实例一套。上下文引擎与 agent 一对一（跨 agent 共享会让一个频道的压缩读另一个频道的存储）；唤醒引擎的账本只看本视窗的事实流，需要跨实例感知时经 `WakeupEngineDeps.shared`（profile 级状态池）自管读写，不共享实例。变体准入仍按 preset 的 `extends` 校验，scene 覆写不放开这道门。
+引擎（`context` / `wakeup` / `toolcall`）配置走同一条三层合并，scene 可就地覆盖；实例随 `AgentRuntime` 诞生与销毁，一个实例一套。上下文引擎与 agent 一对一（跨 agent 共享会让一个频道的压缩读另一个频道的存储），造在 `AgentRuntime` 构造期、扩展挂载之后，所以它看到的是扩展加完的那份工具面与提示词；唤醒引擎的账本只看本视窗的事实流，`WakeupEngineDeps` 只带一个可选 logger，没有跨实例的状态池。变体准入按最终 spec 算出的服务名——scene 换变体就是换依赖，换不出一个新族去。
+
+preset 是激活与错误隔离的单位：ProfileRuntime 是持久宿主（不随 preset 消失），每个 preset 一条 cordis fiber，键在它自己 `extends` 的包服务与最终 spec 的引擎服务上。preset 级错误（schema、语义、认领冲突、服务缺失）只跳过或等待那一个 preset；root profile 的错误与跨 preset 的频道认领冲突让整个 profile 失败。
 
 **展开规则只有一条**：一个生效单位，按可见域基数诞生 Runtime——Pre-Channel 每匹配频道一个，Pre-Profile 每块一个。`matchSceneSpec` 路由照旧（事件 → scene → 归属频道），scene 持有自己的合并结果；cross 的生效单位就是 preset 自身。
 
@@ -104,8 +111,8 @@ Runtime  运行层   AgentRuntime 实例（原 SceneRuntime 更名），按 spec
 ```yaml
 presets:
   chat: # 心智基线
-    extends: # 缺省不写：只用内核机制
-      neko-tools: # 只写包名即启用
+    extends: # 缺省不写：只用内核机制。键是包名，值是这个 preset 给它的东西。
+      neko-tools: # 只写包名即启用（enable 缺省为 true）
     model: gpt-4o
     context: { engine: standard }
     scenes: # 挂靠：归属由结构声明
@@ -121,7 +128,7 @@ presets:
     cross: true
     extends:
       neko-tools:
-        config: # 原样递给 provide()，字段含义由包自己解释
+        config: # 原样递给 handler，字段含义由包自己解释
           maxResults: 20
       vision-pack:
         enable: false # 认识但这一档不要：不依赖、不等待、不调用
@@ -139,7 +146,9 @@ presets:
 - `cross: true` 且写了 `scenes` → 报错（互斥）；缺 `claims` → 报错。
 - 普通 scene 缺 `sid` / `whitelist` → 报错（现状规则平移）。
 - 频道认领冲突（scene matchlist 与 cross claims 交叉、兄弟 scene 交叉）→ 报错（沿用「同一频道只归一个 scene」）。
-- `extends` 引用未安装的包（记 error，preset 停在等待态，服务到了自动激活）→ 报错；`enable: false` 的包既不依赖也不校验。引擎变体名拼错 → 报错。
+- `extends` 引用未安装的包（记 error，preset 停在等待态，服务到了自动激活）→ 报错；`enable` 不是布尔值 → 报错；`enable: false` 的包既不依赖也不校验。引擎变体的服务名算出来不存在 → 同样停在等待态。
+
+`extends` 属于 preset，scene 层没有这个字段——准入是 preset 的承诺，不随覆写放开。
 
 已知代价（接受）：scene 标识从 `profile/scene` 变为 `profile/preset/scene`（目录名仍可用 scene 名，profile 内唯一性由树位置保证；日志 label 用全路径）。配置文件不进 WebUI，四层嵌套不构成编辑体验问题。
 
@@ -158,36 +167,50 @@ presets:
 
 ### 2. 三层机制
 
-| 层     | 单位       | 内容                                                                                      | 生命周期                                                   |
-| ------ | ---------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| 注册层 | 进程级全局 | 引擎变体的类型定义；贡献物不注册，服务自身即登记处                                        | 模块加载或 apply 期，宿主持有，随 Koishi 插件 dispose 撤销 |
-| 选中层 | preset 级  | preset 的 `extends` 决定哪些包的变体可用、`context.engine` 等选哪个变体；scene 可就地扩展 | 静态配置，树内合并                                         |
-| 实例层 | 形态决定   | Pre-Channel 每频道一份；Pre-Profile 每块一份                                              | 按需诞生，随实例 dispose                                   |
+| 层     | 单位       | 内容                                                                                      | 生命周期                                |
+| ------ | ---------- | ----------------------------------------------------------------------------------------- | --------------------------------------- |
+| 服务层 | 进程级全局 | 引擎变体的 provider Service；贡献物的 `ishiki.ext.<包名>` Service                         | 插件构造期，随 Koishi 插件 dispose 撤销 |
+| 选中层 | preset 级  | preset 的 `extends` 决定挂了哪些包、`context.engine` 等选哪个变体；scene 可就地换引擎变体 | 静态配置，树内合并                      |
+| 实例层 | 形态决定   | Pre-Channel 每频道一份；Pre-Profile 每块一份                                              | 按需诞生，随实例 dispose                |
 
-推论：注册层永远进程级（不存在 profile 私有变体，否则注册表按 profile 分片与 #8 矛盾）；选中层永远 preset 级；实例层由形态决定，同一份注册两种实例化，没有第二套接口。
+推论：服务层永远进程级（不存在 profile 私有变体，否则服务名按 profile 分片，与失效粒度的设计矛盾）；选中层永远 preset 级；实例层由形态决定，同一份服务两种实例化，没有第二套接口。
 
-### 3. 注册面
+### 3. 引擎变体
 
-既有三族不动（`registerContextEngine` / `registerWakeupEngine` / `registerToolcallEngine`），社区变体继承同族基类，一并导出基类与参数表接口（`ContextEngines` 等，供 `declare module` 增强）。本阶段开放的就是这三族：
+开放的就是三族（`context` / `wakeup` / `toolcall`），社区变体继承同族 provider 基类，一并导出基类与参数表接口（`ContextEngines` 等，供 `declare module` 增强）。**没有注册动词**：变体就是继承 `ContextEngine`（或同族基类）的 Koishi 服务，构造时 `super(ctx, "<名字>")` 就登记在 `ishiki.engine.<族>.<名字>` 上：
 
 ```ts
-// 经 ctx.ishiki 调用；社区变体用 `包名/名字`，前缀即归属与准入的依据。
-ctx.ishiki.registerContextEngine("neko-tools/rolling", (config, options) => new RollingEngine(config, options));
-ctx.ishiki.registerWakeupEngine("neko-tools/greedy", (config, deps) => new GreedyWakeup(config, deps));
-ctx.ishiki.registerToolcallEngine("neko-tools/xml", (config) => new XmlToolcall(config));
+export class RollingEngine extends ContextEngine<"neko-tools/rolling"> {
+  constructor(
+    ctx: Context,
+    private readonly plugin: PluginConfig,
+  ) {
+    super(ctx, "neko-tools/rolling");
+  }
+
+  create(config: Partial<ContextEngines["neko-tools/rolling"]>, options: ContextEngineOptions): ContextEngineInstance {
+    return new RollingContextInstance({ ...this.plugin, ...config }, options);
+  }
+}
+
+declare module "../src/context/engine.js" {
+  interface ContextEngines {
+    "neko-tools/rolling": RollingRuntimeConfig;
+  }
+}
 ```
 
-暴露方式经 `ctx.ishiki` 薄转发（绑定运行中服务实例，不依赖模块解析唯一性；包外把 ishiki 装成普通 dependency 会产生第二份注册表实例并静默失效，这是用服务命名空间而非根导出的原因）。注册在 apply 期同步完成，`ready` 后注册不受支持。
+**可用性只由那个服务在不在决定**，名字带不带包前缀无关准入（带前缀的形状是更早的方案）。preset 按服务名 `ctx.inject(...)`，服务缺失就停在等待态并报一条。provider 只持有插件级配置；`create()` 每次造一份全新的运行体，随 `AgentRuntime` 生灭。
 
-注册随调用方的插件生命周期撤销：cordis 把服务方法里的 `this.ctx` 绑在调用方作用域上，转发器据此把反注册挂进调用方的 effect——包卸载即消失，重装同名注册不会撞「已登记」。
+基类与参数表从包根导出（`import { ContextEngine } from "koishi-plugin-ishiki"`）。根导出而不是自建子路径，是因为包外把 ishiki 装成普通 dependency 时，子路径可能解析到第二份运行时。
 
-贡献物不走这几个动词：它没有按名查找的需求，见「贡献物（加法）」。
+贡献物不走这条路：它没有按名查找的需求，见「贡献物（加法）」。
 
 ### 4. 选中与寻址
 
-`extends` 是**扩展包名数组**，选中单位是包，不含任何参数级配置；包内的细分归包自身 Koishi Config。preset 说「这个心智用得上这个包的能力」，包配置说「这个包怎么行为」。preset 文件 + `extends` 清单即完整依赖声明，分享 preset 等于声明了它需要的扩展包。带包前缀的名字（`包名/名字`）要求该包被 `extends` 选中：装载期检查，未选中的 spec 跳过自己并报出原因；无前缀的名字是内建变体，不问 `extends`。`extends` 因此是唯一的依赖声明处。
+`extends` 是**包名到配置对象的映射**，选中单位是包。`enable` 缺省为 `true`；`config` 原样递给该包的 handler，字段含义由包自己解释；`enable: false` 表示这一档不要——不建立依赖、不等待、不调用、不校验 `config`。preset 说「这个心智用得上这个包的能力」，包配置说「这个包怎么行为」。preset 文件 + `extends` 即完整依赖声明，分享 preset 等于声明了它需要的扩展包。
 
-静态准入与动态过滤的分界：**静态管谁能上场，动态管这场谁上场**。`extends` 只做包级准入（进程粒度、装载期解析）；贡献物这一层，运行时过滤归包自己——`extend` 拿得到本实例的坐标（具体频道，或聚合形态下的认领），按自己的逻辑决定给出什么（onebot-utils 的 `isGroupScope` 模式）。内核不替包做频道级过滤。内核两件工具（`send_message` / `finish`）不受此表管辖，它们是内核机制。
+静态准入与动态过滤的分界：**静态管谁能上场，动态管这场谁上场**。`extends` 只做包级准入（进程粒度、装载期解析）；贡献物这一层，运行时过滤归包自己——handler 拿得到本实例的坐标（具体频道，或聚合形态下的认领），按自己的逻辑决定给出什么（onebot-utils 的 `isGroupScope` 模式）。内核不替包做频道级过滤。内核两件工具（`send_message` / `finish`）不受此表管辖，它们是内核机制。
 
 工具寻址随形态分两条路径、同一份校验代码：
 
@@ -198,16 +221,35 @@ ctx.ishiki.registerToolcallEngine("neko-tools/xml", (config) => new XmlToolcall(
 
 ### 5. 装配器（core 唯一 AgentPlugin）
 
-core 侧只有一个插件，由 `AgentRuntime` 装配时在 `runtime.ts` 里就地拼出（`createAgentPlugin`）：上下文引擎不再实现 `AgentPlugin`，它只声明自己干预上下文管线上的哪几段（`init` / `stop` / `onAppend` / `transformEntries` / `transformMessages` / `extendInstructions` / `onTurnFinish`，签名直接取自 core 的插件契约），由这一个入口按固定顺序转发。停轮判定写在同一个插件的 `onStepFinish` 里，读本步消息流得出（停轮是内核机制，不是扩展点），不进社区面。唤醒与工具调用引擎不进 `AgentPlugin`，只负责建好交给既有取用点。
+core 侧只有一个插件，由 `AgentRuntime` 装配时在 `runtime.ts` 里就地拼出（`createAgentPlugin`）。上下文引擎有自己的方法名，不索引 `AgentPlugin`：
 
-Service 化的只是生命周期容器，不是装配逻辑：`ensure`/装配器照旧是普通代码，不因 fiber 化改形状——fiber 重跑从 Plan 零装配是接受的代价（事实流在盘上）。
+```ts
+interface ContextEngineInstance {
+  attach?: (agent: Agent) => () => void;
+  prepareEntries?: (entries: readonly AgentEntry[], request: ContextRequest) => readonly AgentEntry[] | Promise<readonly AgentEntry[]>;
+  renderMessages?: (messages: readonly AgentMessage[], request: ContextRequest) => AgentMessage[] | Promise<AgentMessage[]>;
+  instructions?: () => string | undefined | Promise<string | undefined>;
+}
+
+interface ContextRequest {
+  readonly turnId: string;
+  readonly signal: AbortSignal;
+}
+```
+
+core 的钩子名只出现在 `createAgentPlugin` 这一处，按固定顺序转发过去。停轮判定写在同一个插件的 `onStepFinish` 里，读本步消息流得出（停轮是内核机制，不是扩展点），不进社区面。唤醒与工具调用引擎不进 `AgentPlugin`，只负责建好交给既有取用点。
+
+完整上下文（指令 + 消息 + 工具）的领域责任归上下文引擎，但 core 目前没有 `prepareContext` 这类钩子：`extendInstructions()` 在流裁剪之前就调，所以 `instructions()` 拿不到本轮 entries；`prepareStep` 之后只给 `ModelMessage`，跨步上下文无处可取。因此接线是分段的，不是一次成型——这不是假装做到，是 core 的既有边界。工具不在其中流转：它在 `AgentRuntime` 构造期固定，作为只读快照进 `ContextEngineOptions`。
+
+Service 化的只是生命周期容器，不是装配逻辑：装配器照旧是普通代码，不因 fiber 化改形状——fiber 重跑从零装配是接受的代价（事实流在盘上）。
 
 ### 6. 失效语义（cordis 承载）
 
-- 社区扩展包 = Koishi 插件，`static inject = ["ishiki"]`，以 `Service` 子类提供服务（如 `ishiki.ext.neko-tools`），apply 期经 `ctx.effect()` 注册，unload 时 effect 反注册、服务随 fiber 消失。
-- **ProfileRuntime Service 化**：装载 profile 时按所有 preset 的 `extends` 并集算出依赖的扩展服务名，每 profile 一个 `ctx.inject(services, callback)` fiber（cordis v3 里它就是 `plugin({ inject, apply, name })` 的语法糖，每次调用一个独立匿名插件 fiber）。依赖缺失 → fiber 停在非激活态，`ready` 监听器挂 pending，不报错不加载；依赖出现 → `internal/service` → `start()` → fiber 重跑 → profile 重载。callback 具名（`ishiki/profile:<id>`），否则日志与 WebUI 里是匿名。装载拆成两步：`loadProfiles` 只解析出可装载项（含依赖服务名），`activateProfiles` 才按 fiber 实例化。
-- **AgentRuntime（原 SceneRuntime）不做 Service**：单位是 scene × 频道，频道集合由运行时事件发现（`route` → `ensure` 按需诞生），`whitelist: ["group:*"]` 这类通配无法预声明 fiber；生命周期挂在 ProfileRuntime 内（scenes 表 + profile stop 逐个收），Profile fiber 化后归属自然成立。
-- 扩展包停用 → 服务消失 → 选中它的 profile fiber reset → disposables 逆序跑 `runtime.stop()`；恢复 → profile 重载（事实流自盘恢复，连续性不丢）。粒度自动 per-profile：未选中该扩展的 profile 不依赖该服务，不动。不存在「包停了但 profile 继续跑旧贡献」的混合态。
+- 社区扩展包 = Koishi 插件，`static inject = ["ishiki"]`，在构造器里调 `ctx.ishiki.provide("neko-tools", handler)`。它内部开一条 fiber 建 `ishiki.ext.neko-tools` 服务，返回的 disposer 卸掉这条 fiber；扩展自己把它绑在 `ctx.on("dispose", ...)` 上，服务就随插件生灭。
+- **preset 是 fiber 单位**：装载时按每个 preset 的 `extends` 与最终 spec 的引擎服务算出依赖，一个 preset 一条 `ctx.inject(services, callback)` fiber。依赖缺失 → fiber 停在非激活态并记一条 error，preset 保持等待，不加载；依赖出现 → `internal/service` → `start()` → fiber 重跑 → preset 激活。callback 具名（`ishiki/preset:<profile>:<preset>`），否则日志与 WebUI 里是匿名。
+- **ProfileRuntime 是持久宿主，不做 fiber**：它与 preset 无关，load 期就建好，零激活 preset 时也在（fiber 无关的宿主，preset 各挂各的 fiber）。每个 preset 一个 `PresetRuntime`（specs + 按 `cross_<preset>` 或 `sid_channelId` 键索引的 AgentRuntime），路由从 `ProfileRuntime.route` 走到各激活的 `PresetRuntime`。
+- **AgentRuntime 不做 Service**：单位是生效单位 × 频道，频道集合由运行时事件发现（`route` → 按需诞生），`whitelist: ["group:*"]` 这类通配无法预声明 fiber；生命周期挂在 `PresetRuntime` 内。
+- 扩展包停用 → 服务消失 → 依赖它的 preset fiber reset → 该 preset 的 AgentRuntime 逐个 `stop()`（disposers 逆序跑）；恢复 → preset 重新激活，AgentRuntime 全新创建，handler 重新被叫一次。粒度自动 per-preset：未挂该扩展的 preset 不依赖这个服务，不动。不存在「包停了但 preset 继续跑旧贡献」的混合态。
 - 失效两类分治：**缺失等待**（扩展包不在，fiber 静默等 cordis 的 ready 门，到位自动激活）与**配置错误报错**（校验清单见配置面一节；装载期一次性报出，坏的只跳过自己）。
 
 ## 已定细节
@@ -215,14 +257,14 @@ Service 化的只是生命周期容器，不是装配逻辑：`ensure`/装配器
 1. 可见域是宿主实例属性；工具声明的是它需要什么坐标，与可见域是两个问题。
 2. 唤醒引擎不收记账命名空间：`attach(agent)` 只挂一个视窗，账归谁由事实流自己说明——每条消息都带自己的频道号，引擎从事件里读，一个频道一块账，聚合与单频道走同一份代码。`attach` 返回拆卸函数，场景停止时调用点调它。
 3. 停轮（`onStepFinish`）、`prepareStep`、`beforeToolCall`、`toModelMessages` 四类唯一决策钩子不进社区面；需要变体时在 core 内收成引擎族。
-4. 失效粒度取 profile 重启，不取引擎热替换；机制全部现成，轮次损失有界且由事实流兜底。
-5. 社区变体与内置变体写同一张注册表，语义一致：重名抛错、未登记抛错、不静默退化。
+4. 失效粒度取 preset 重启，不取引擎热替换；机制全部现成，轮次损失有界且由事实流兜底。
+5. 社区变体与内置变体走同一条路径：都是引擎族的 provider Service，preset 按服务名依赖，语义一致（缺失即等待，不静默退化）。
 6. `SceneRuntime` 更名 `AgentRuntime`：代码、测试与在用文档均已改名，`lib/` 随下次构建重生成。
 7. 非 cross 下模型实例照旧 per-scene（每 scene 一份 FailoverModel 重试状态）；仅 cross 的共享 Runtime 一套实例。现状行为零收缩。
 
 ## 待验证假设
 
-1. ~~**inject fiber 的重跑语义**~~（已验证）：`tests/extensions.spec.ts` 用最小扩展包跑通了全链路——服务缺席时 profile 不实例化；包装上后自动装载；`pkg.dispose()` 后 profile 停止并移出，重装后重建（事实流在盘上）；注册随包停用而撤销，重装同名不撞；无包前缀的内建变体不受 `extends` 门控。
+1. ~~**注入 fiber 的重跑语义**~~（已验证）：`tests/extension-contributions.spec.ts` 用真实 Koishi Service 跑通了全链路——服务缺席时 preset 停在等待态；包装上后自动激活；`holder.dispose()` 后 preset 停止并移出，重新包装后重建（事实流在盘上）。`ctx.ishiki.provide()` 的三条语义也在真实 `Context` 上验过：disposer 幂等、重复调用无害、不牵连别的 `ishiki.ext.*`；服务随调用方 fiber 一起消失；先抓住 `ctx.ishiki` 引用再从另一条 fiber 调 provide，服务挂在调用方那条上（所以 `ctx.on("dispose", ...)` 是归属声明，不是可选卫生）。
 
 2. **Pre-Profile 下工具坐标准确率**：模型在多频道合并窗口里显式给坐标的正确率（02 号文档待验证假设 1 的同一件事，扩展面复用其结论）。
    - 验证方式与失败含义见 02 号文档。
@@ -234,8 +276,8 @@ Service 化的只是生命周期容器，不是装配逻辑：`ensure`/装配器
 3. [x] cross Runtime 聚合（共享事实流 `cross_<preset>/`、聚合寻址头、run-length 合并、跨账号复合坐标）。
 4. [x] `send_message` 复合寻址（显式 target + 范围校验 + 报错重试闭环）。
 5. [x] `SceneRuntime` → `AgentRuntime` 改名。
-6. [x] 装配器收编（core 侧唯一插件在 `runtime.ts` 的 `createAgentPlugin`；上下文引擎不再实现 `AgentPlugin`，钩子在这一点收拢；`TurnControl` 保持内核独占）。
-7. [x] ProfileRuntime fiber 化 + 注册面导出（`loadProfiles`/`activateProfiles` 两步、`ctx.inject` 按 `extends` 并集门控、`ctx.ishiki.registerContextEngine`/`registerWakeupEngine`/`registerToolcallEngine` 三件、根导出基类与参数表接口）。
-8. [x] 端到端验证（`tests/extensions.spec.ts` 5 例：缺席等待与重装重建、装载出的 profile 能路由起场景、注册随包停用撤销、未选中包变体跳过、无前缀变体不受门控）。
+6. [x] 装配器收编（core 侧唯一插件在 `runtime.ts` 的 `createAgentPlugin`；上下文引擎不再实现 `AgentPlugin`，钩子在这一点收拢；停轮判定保持内核独占）。
+7. [x] preset fiber 化（ProfileRuntime 持久宿主 + 每 preset 一条 `ctx.inject` fiber + `PresetRuntime`；`ctx.inject` 按 `extends` 与最终 spec 的引擎服务门控；公共 API 收敛为 `ctx.ishiki.provide(name, handler)`）。
+8. [x] 端到端验证（`tests/extension-contributions.spec.ts` 12 例：缺席等待与重装重建、装载出的 preset 能路由起场景、注册 disposer 幂等、handler 中途抛错逆序回滚、同一包服务多个 preset 且配置隔离、Engine-only 与 Extension-only 独立）。
 
-9. [x] 贡献物落地（`src/domain.ts` 的可见域类型与 `src/extension.ts` 的加法契约、`ensure()` 的装配点、成员缺席与返回 `undefined` 两条空路径、撞名抛错；`tests/extension-contributions.spec.ts` 4 例：选中后工具与提示词进模型、聚合形态把认领的账号交给包且同一实例只问一次、未选中与包说不加时工具面相同、撞名抛错）。
+9. [x] 贡献物落地（`src/domain.ts` 的可见域类型与 `src/extension.ts` 的加法契约、`AgentRuntime` 构造期的装配点、handler 返回 `undefined` 与抛错两条路径、撞名抛错）。

@@ -490,21 +490,28 @@ function isPlain(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * 两层之间的合并：后一层覆盖前一层。`undefined` 与不含键的对象都算「未写」，
+ * 数组与标量一律整体替换。
+ *
+ * 只依赖 {@link isPlain} 这个模块级函数，除自递归外不捕获任何东西，所以住在模块级而非 {@link merge} 内部。
+ */
+function overlay(current: unknown, override: unknown): unknown {
+  if (override === undefined) return current;
+  if (!isPlain(current) || !isPlain(override)) return override;
+  const merged: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(override)) {
+    if (value === undefined) continue;
+    merged[key] = overlay(merged[key], value);
+  }
+  return merged;
+}
+
+/**
  * 按层合并配置：后一层覆盖前一层，未写的键沿用前一层。
  * `undefined` 与不含键的对象都算「未写」——Schema 会为空缺的块物化出空对象，这里不必特判。
  * 引擎参数按引擎名分键，换引擎后旧引擎的参数会留在结果里；消费端只读 `config[config.engine]`，那些键不会被读到。
  */
 function merge<T>(base: T, ...layers: readonly unknown[]): T {
-  const overlay = (current: unknown, override: unknown): unknown => {
-    if (override === undefined) return current;
-    if (!isPlain(current) || !isPlain(override)) return override;
-    const merged: Record<string, unknown> = { ...current };
-    for (const [key, value] of Object.entries(override)) {
-      if (value === undefined) continue;
-      merged[key] = overlay(merged[key], value);
-    }
-    return merged;
-  };
   // 入参已过 Schema 校验，故按 base 的形状断言：这一层只管结构，不管取值合法性。
   return layers.reduce<unknown>(overlay, base) as T;
 }

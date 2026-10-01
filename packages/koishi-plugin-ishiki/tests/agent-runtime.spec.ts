@@ -30,6 +30,20 @@ const model = new MockLanguageModelV4({
   },
 });
 const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
+
+/**
+ * 静音 AI SDK 的 `onError`：它缺省是 `console.error`，会把用例故意制造的模型错误原样打进 stderr。
+ * core 的 `settings` 只透传 `LanguageModelCallOptions`（不含 onError），内核没有干净的接缝——
+ * 同一份失败已经由 `turn failed` 走 logger 断言过一次，不必再让它占满输出。
+ */
+function muteSdkErrors(): () => void {
+  const original = console.error;
+  console.error = () => undefined;
+  return () => {
+    console.error = original;
+  };
+}
+
 // 引擎 provider 立在这台 ctx 上：运行时只按服务名取用，用例给的就是真服务。
 // toolcall 用 preset 的缺省（native），所以它也在这里。
 const ctx = new Context();
@@ -103,13 +117,19 @@ describe("profile runtime", () => {
   });
 
   it("wakes on a direct message and keeps the channel's own stream", async () => {
+    // 这个桩模型只抛错：轮次失败是本用例要断言的现象，SDK 那份 stderr 回显不必跟着看。
+    const unmute = muteSdkErrors();
     const dm = runtime.route(message("direct", "private:9", "a"))!;
-    await dm.deliver(message("direct", "private:9", "a"));
-    await dm.idle();
+    try {
+      await dm.deliver(message("direct", "private:9", "a"));
+      await dm.idle();
 
-    expect(calls.streams).toBe(1);
-    expect(logs.some((line) => line.includes("turn failed"))).toBe(true);
-    expect((await dm.storage.read()).some((entry) => entry.type === "message")).toBe(true);
+      expect(calls.streams).toBe(1);
+      expect(logs.some((line) => line.includes("turn failed"))).toBe(true);
+      expect((await dm.storage.read()).some((entry) => entry.type === "message")).toBe(true);
+    } finally {
+      unmute();
+    }
   });
 
   it("records a message the wakeup rule ignores without waking", async () => {
@@ -127,6 +147,28 @@ describe("profile runtime", () => {
 
   it("claims nothing for an unlisted channel", () => {
     expect(runtime.route(message("group", "guild:7", "e"))).toBeUndefined();
+  });
+
+  it("toolcall 变体缺席就抛错，不退回内置的 native", () => {
+    const missing = new ProfileRuntime({ id: "neko", directory: root, ctx, gateway, logger });
+    for (const preset of resolveProfile(
+      {
+        id: "neko",
+        presets: {
+          base: {
+            model: "test:model",
+            toolcall: { engine: "neko-tools/absent" },
+            scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
+          },
+        },
+      },
+      "neko",
+    ).presets) {
+      missing.activate(preset);
+    }
+
+    // 这台 ctx 上注册着 native 与其余内置变体，唯独没有这个社区变体。
+    expect(() => missing.route(message("direct", "private:88", "absent"))).toThrow(/ishiki\.engine\.toolcall\.neko-tools\/absent/);
   });
 
   it("takes a platform session all the way to its scene", () => {
@@ -428,27 +470,33 @@ describe("failover wiring", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "ishiki-failover-"));
     const gateway = makeGateway(endpoint(true), endpoint(false));
     const mark = logs.length;
+    // 后半段的普通引用会真的失败一次，那份 stderr 回显同 `turn failed` 断言重复。
+    const unmute = muteSdkErrors();
 
-    const group = makeRuntime(root, "fast", gateway);
-    const served = group.route(message("direct", "private:11", "f1"))!;
-    await served.deliver(message("direct", "private:11", "f1"));
-    await served.idle();
+    try {
+      const group = makeRuntime(root, "fast", gateway);
+      const served = group.route(message("direct", "private:11", "f1"))!;
+      await served.deliver(message("direct", "private:11", "f1"));
+      await served.idle();
 
-    expect(await said(served)).toBe("在");
-    expect(logs.slice(mark).some((line) => line.includes("turn failed"))).toBe(false);
+      expect(await said(served)).toBe("在");
+      expect(logs.slice(mark).some((line) => line.includes("turn failed"))).toBe(false);
 
-    // 普通引用不进组：同一个端点坏了，这一轮就是坏的
-    const plain = makeRuntime(root, "a:m", gateway);
-    const alone = plain.route(message("direct", "private:12", "f2"))!;
-    await alone.deliver(message("direct", "private:12", "f2"));
-    await alone.idle();
+      // 普通引用不进组：同一个端点坏了，这一轮就是坏的
+      const plain = makeRuntime(root, "a:m", gateway);
+      const alone = plain.route(message("direct", "private:12", "f2"))!;
+      await alone.deliver(message("direct", "private:12", "f2"));
+      await alone.idle();
 
-    expect(await said(alone)).toBe("");
-    expect(logs.slice(mark).some((line) => line.includes("turn failed"))).toBe(true);
+      expect(await said(alone)).toBe("");
+      expect(logs.slice(mark).some((line) => line.includes("turn failed"))).toBe(true);
 
-    await group.stop();
-    await plain.stop();
-    rmSync(root, { recursive: true, force: true });
+      await group.stop();
+      await plain.stop();
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      unmute();
+    }
   });
 
   /** 一台会抖的端点：前 `failTimes` 次调用连不上，之后照常作答。 */

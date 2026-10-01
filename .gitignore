@@ -171,6 +171,10 @@ yarn-error.log
 
 # End of https://www.toptal.com/developers/gitignore/api/node,yarn,turbo,vuejs
 
+.agents/
 data/
 lib/
+
 bun.lock
+skills-lock.json
+tsconfig.temp.json

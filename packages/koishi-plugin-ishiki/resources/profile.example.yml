@@ -50,10 +50,13 @@ presets:
       charPerSecond: 5
       minDelay: 800
       maxDelay: 4000
-    # 扩展包：键是包名，值是这个 preset 给它的东西。选中的包对本 preset 全部生效：
-    # 它注册的引擎变体（名字写成 "包名/名字"）可用，provide() 也会在每个实例诞生时被叫一次。
-    # 只写包名即启用；config 原样递给包，字段含义由包自己解释；
-    # enable: false 表示这一档不要，不建立依赖也不等待。
+    # 扩展包：键是包名，值是这个 preset 给它的东西。extends 只启用包附加的能力，
+    # 不决定引擎：某个引擎变体可不可用，只看 `ishiki.engine.<族>.<名字>` 这个 Koishi Service
+    # 在不在，名字带不带包前缀都一样。变体名写在下面 context / wakeup / toolcall 三段里。
+    # 只写包名即启用，enable: false 的在 preset 展开时就筛掉（静态）；剩下的每一项都是必需依赖，
+    # preset 缺哪个就停在等待态并报一条。
+    # 包交回的那个 handler 在每个实例的装配期被叫一次，能加的只有工具与提示词；
+    # config 原样递给包，字段含义由包自己解释。
     # extends:
     #   neko-tools:
     #     config:
