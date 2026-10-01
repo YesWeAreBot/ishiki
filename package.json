@@ -15,7 +15,7 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix .",
     "prepare": "husky",
-    "test": "yakumo vitest"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^26.5.0",

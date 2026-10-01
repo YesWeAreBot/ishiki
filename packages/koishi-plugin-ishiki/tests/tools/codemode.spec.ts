@@ -11,18 +11,19 @@ import {
   type LanguageModelV4StreamPart,
   type ToolSet,
 } from "@yesimagent/core";
+import type { Gateway } from "@yesimagent/gateway";
 import { Context, type Logger } from "koishi";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ContextEngine } from "../src/context/engine.js";
-import { StandardContextEngine, StandardContextInstance } from "../src/context/standard.engine.js";
-import { resolveProfile } from "../src/profile.js";
-import { AgentRuntime, ProfileRuntime } from "../src/runtime.js";
-import { NativeToolcallEngine } from "../src/toolcall/index.js";
-import { CODE_MODE, loadCodemode } from "../src/tools/codemode.js";
-import { createFinish } from "../src/tools/finish.js";
-import { createSendMessage } from "../src/tools/send-message.js";
-import { StandardWakeupEngine, StandardWakeupInstance } from "../src/wakeup/index.js";
+import { StandardContextEngine, StandardContextInstance } from "../../src/context/standard.engine.js";
+import { resolveProfile } from "../../src/profile.js";
+import { AgentRuntime, ProfileRuntime } from "../../src/runtime.js";
+import { NativeToolcallEngine } from "../../src/toolcall/index.js";
+import { CODE_MODE, loadCodemode } from "../../src/tools/codemode.js";
+import { createFinish } from "../../src/tools/finish.js";
+import { createSendMessage } from "../../src/tools/send-message.js";
+import { StandardWakeupEngine, StandardWakeupInstance } from "../../src/wakeup/index.js";
+import { contextOptions } from "../context-stub.js";
 
 const USAGE = {
   inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
@@ -140,15 +141,14 @@ describe("code mode", () => {
     });
     scene = new AgentRuntime({
       label: "test/scene/dm",
-      channelId: "private:9",
       directory,
       model,
+      gateway: {} as Gateway,
       instructions: "",
       ctx,
       domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" },
       // 装配器要的是 provider：引擎实例得等工具面与提示词定下来才造，这个用例不关心它的上下文。
-      context: { create: () => new StandardContextInstance({}, { logger, tools: {}, instructions: "" }) } as unknown as ContextEngine,
-      contextParams: { maxChars: 10_000 },
+      context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
       tools: baseTools,
       extensions: [],
       innerThoughts: false,

@@ -1,4 +1,4 @@
-import type { Agent, AgentEntry, AgentMessage, ToolSet } from "@yesimagent/core";
+import type { Agent, AgentEntry, AgentMessage } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
 import { Awaitable, Service, type Context, type Logger } from "koishi";
 
@@ -24,11 +24,6 @@ import type { InstanceDomain } from "../domain.js";
 
 /** 上下文引擎参数表：键即 `context.<engine>` 的参数键。各引擎文件用 `declare module` 增强它。 */
 export interface ContextEngines {}
-
-/** 变体对应的服务名。可用性只由这个名字对应的服务是否存在决定，不看名字里有没有包前缀。 */
-export function contextEngineServiceName(name: string): string {
-  return `ishiki.engine.context.${name}`;
-}
 
 /**
  * 上下文引擎的运行体：一个 AgentRuntime 一份。
@@ -95,8 +90,12 @@ export interface ContextEngineOptions {
  * 与 profile/scene 配置在 `create()` 处汇合，不做深合并。
  */
 export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> extends Service {
+  static GetName(name: string): string {
+    return `ishiki.engine.context.${name}`;
+  }
+
   public constructor(ctx: Context, name: K) {
-    super(ctx, contextEngineServiceName(String(name)));
+    super(ctx, ContextEngine.GetName(String(name)));
   }
 
   /**

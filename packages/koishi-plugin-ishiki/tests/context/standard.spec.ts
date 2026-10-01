@@ -16,8 +16,9 @@ import {
 import type { Logger } from "koishi";
 import { describe, expect, it } from "vitest";
 
-import { StandardContextInstance, collapse } from "../src/context/standard.engine.js";
-import { createAgentPlugin } from "../src/runtime.js";
+import { StandardContextInstance, collapse } from "../../src/context/standard.engine.js";
+import { contextOptions, contextPlugin } from "../context-stub.js";
+
 const logger = { warn: () => undefined } as unknown as Logger;
 const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
 const calls = { count: 0 };
@@ -212,7 +213,7 @@ describe("collapse", () => {
 describe("standard context engine", () => {
   it("passes the entries through while they fit, and writes nothing", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 10_000 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -234,7 +235,7 @@ describe("standard context engine", () => {
 
   it("trims the oldest lines in the foreground, then folds them into a memory line once the turn ends", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300, refillRatio: 0.8 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 300, refillRatio: 0.8 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记住：她在准备搬家"));
     engine.attach(agent);
 
@@ -280,7 +281,7 @@ describe("standard context engine", () => {
 
   it("keeps trimming while the summary call fails, and retries on the next turn", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("", true));
     engine.attach(agent);
 
@@ -309,7 +310,7 @@ describe("standard context engine", () => {
 
   it("compresses once even when two turns end back to back", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -328,7 +329,7 @@ describe("standard context engine", () => {
 
   it("passes everything through when no line boundary is available", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 80 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 80 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -351,7 +352,7 @@ describe("standard context engine", () => {
 
   it("grows linearly when no budget is configured", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 0 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 0 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -369,7 +370,7 @@ describe("standard context engine", () => {
 
   it("ignores a memory whose anchor left the stream", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 10_000 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -381,7 +382,7 @@ describe("standard context engine", () => {
 
   it("drops an in-flight summary when the scene is unloaded", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
     let started: (() => void) | undefined;
     const began = new Promise<void>((resolve) => {
       started = resolve;
@@ -417,7 +418,7 @@ describe("standard context engine", () => {
 
   it("runs a real turn past the budget while the summary is still in flight", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, { logger, tools: {}, instructions: "" });
+    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
     const prompts: string[] = [];
     let resolveHeld: (() => void) | undefined;
     let began: (() => void) | undefined;
@@ -438,7 +439,7 @@ describe("standard context engine", () => {
         return { content: [{ type: "text", text: "记住：她在准备搬家" }], finishReason: { unified: "stop", raw: undefined }, usage: USAGE, warnings: [] };
       },
     });
-    const agent = createAgent({ id: "fold", model, storage, plugins: [createAgentPlugin({ context: engine })] });
+    const agent = createAgent({ id: "fold", model, storage, plugins: [contextPlugin(engine)] });
     storage.append(...["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id))));
     await agent.init();
 

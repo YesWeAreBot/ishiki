@@ -3,16 +3,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { MockLanguageModelV4, createCustomMessage, simulateReadableStream, type LanguageModelV4StreamPart } from "@yesimagent/core";
+import type { Gateway } from "@yesimagent/gateway";
 import { Context, type Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ContextEngine } from "../src/context/engine.js";
-import { StandardContextInstance } from "../src/context/standard.engine.js";
-import { AgentRuntime } from "../src/runtime.js";
-import type { IshikiMessageCreated } from "../src/types.js";
-import { ClassicWakeupEngine, ClassicWakeupInstance } from "../src/wakeup/classic.engine.js";
-import type { WakeupEngineInstance } from "../src/wakeup/engine.js";
-import { StandardWakeupEngine, StandardWakeupInstance } from "../src/wakeup/standard.engine.js";
+import { StandardContextInstance } from "../../src/context/standard.engine.js";
+import { AgentRuntime } from "../../src/runtime.js";
+import type { IshikiMessageCreated } from "../../src/types.js";
+import { ClassicWakeupEngine, ClassicWakeupInstance } from "../../src/wakeup/classic.engine.js";
+import type { WakeupEngineInstance } from "../../src/wakeup/engine.js";
+import { StandardWakeupEngine, StandardWakeupInstance } from "../../src/wakeup/standard.engine.js";
+import { contextOptions } from "../context-stub.js";
 
 /** provider 只需要一个 Koishi Context，不需要 start；只有 `ctx.get(服务名)` 才要求 start。 */
 const app = new Context();
@@ -216,16 +217,15 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
     try {
       const scene = new AgentRuntime({
         label: "test/scene/room",
-        channelId: "room",
         directory,
         model,
+        gateway: {} as Gateway,
         instructions: "",
         // 这个用例只送事实行，平台能力用不上：给一个空壳，装配期没有扩展包会碰它。
         ctx: {} as Context,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
         // 装配器要的是 provider：实例得等工具面与提示词定下来才造。
-        context: { create: () => new StandardContextInstance({}, { logger, tools: {}, instructions: "" }) } as unknown as ContextEngine,
-        contextParams: { maxChars: 10_000 },
+        context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
         tools: {},
         extensions: [],
         innerThoughts: false,
@@ -248,11 +248,17 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
   });
 
   it("停止后视窗的订阅被摘掉，重复 stop 不重复拆卸", async () => {
-    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: [] }) }) });
+    const stream: LanguageModelV4StreamPart[] = [
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", delta: "嗯" },
+      { type: "text-end", id: "t" },
+      { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: USAGE },
+    ];
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: stream }) }) });
     let detached = 0;
     /** 只数挂载与拆卸次数的运行体：真实引擎的账另有几条用例在盯。 */
     const wakeup: WakeupEngineInstance = {
-      decide: () => "wait",
+      decide: () => "trigger",
       attach: () => () => {
         detached += 1;
       },
@@ -262,14 +268,13 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
     try {
       const scene = new AgentRuntime({
         label: "test/scene/room",
-        channelId: "room",
         directory,
         model,
+        gateway: {} as Gateway,
         instructions: "",
         ctx: {} as Context,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
-        context: { create: () => new StandardContextInstance({}, { logger, tools: {}, instructions: "" }) } as unknown as ContextEngine,
-        contextParams: { maxChars: 10_000 },
+        context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
         tools: {},
         extensions: [],
         innerThoughts: false,
@@ -277,6 +282,11 @@ describe("classic wakeup: 轮末回执由场景侧送进来", () => {
         wakeup,
         logger,
       });
+
+      // attach 挂在 core 的 init 上，init 到第一轮才跑：先让一轮走完，拆卸函数才在队列里。
+      await scene.deliver(message());
+      await scene.idle();
+      expect(detached).toBe(0);
 
       await scene.stop();
       expect(detached).toBe(1);

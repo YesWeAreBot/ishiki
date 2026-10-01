@@ -14,15 +14,16 @@ import {
   type AgentMessage,
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
+import type { Gateway } from "@yesimagent/gateway";
 import { Context, type Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ContextEngine } from "../src/context/engine.js";
-import { StandardContextInstance } from "../src/context/standard.engine.js";
-import { AgentRuntime } from "../src/runtime.js";
-import { createSendMessage } from "../src/tools/send-message.js";
-import type { IshikiMessageCreated, IshikiMessageDeleted } from "../src/types.js";
-import { JevWakeupEngine, JevWakeupInstance, type JevWakeupConfig } from "../src/wakeup/jev.engine.js";
+import { StandardContextInstance } from "../../src/context/standard.engine.js";
+import { AgentRuntime } from "../../src/runtime.js";
+import { createSendMessage } from "../../src/tools/send-message.js";
+import type { IshikiMessageCreated, IshikiMessageDeleted } from "../../src/types.js";
+import { JevWakeupEngine, JevWakeupInstance, type JevWakeupConfig } from "../../src/wakeup/jev.engine.js";
+import { contextOptions } from "../context-stub.js";
 
 /** provider 只需要一个 Koishi Context，不需要 start；只有 `ctx.get(服务名)` 才要求 start。 */
 const app = new Context();
@@ -570,15 +571,14 @@ describe("jev wakeup: 接进场景", () => {
     try {
       const scene = new AgentRuntime({
         label: "test/scene/room",
-        channelId: "room",
         directory,
         model,
+        gateway: {} as Gateway,
         instructions: "",
         ctx,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
         // 装配器要的是 provider：实例得等工具面与提示词定下来才造。
-        context: { create: () => new StandardContextInstance({}, { logger, tools: {}, instructions: "" }) } as unknown as ContextEngine,
-        contextParams: { maxChars: 10_000 },
+        context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
         tools: {
           send_message: createSendMessage({
             ctx,

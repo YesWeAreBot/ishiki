@@ -1,7 +1,3 @@
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import {
   MockLanguageModelV4,
   createAgent,
@@ -15,14 +11,13 @@ import {
 import { Context, type Logger } from "koishi";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { ClassicContextInstance } from "../src/context/classic.engine.js";
-import { createAgentPlugin } from "../src/runtime.js";
-import { ClassicToolcallEngine } from "../src/toolcall/classic.engine.js";
-import { loadParser } from "../src/toolcall/parser.js";
-import type { IshikiMessageCreated } from "../src/types.js";
+import { ClassicContextInstance } from "../../src/context/classic.engine.js";
+import { ClassicToolcallEngine } from "../../src/toolcall/classic.engine.js";
+import { loadParser } from "../../src/toolcall/parser.js";
+import type { IshikiMessageCreated } from "../../src/types.js";
+import { contextOptions, contextPlugin } from "../context-stub.js";
 
 const app = new Context();
-const RESOURCES = fileURLToPath(new URL("../resources", import.meta.url));
 const logger = { debug: () => undefined, warn: () => undefined, error: () => undefined } as unknown as Logger;
 const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
 
@@ -92,16 +87,13 @@ describe("classic 三件套跑一轮真实轮次", () => {
       }),
     };
 
-    const context = new ClassicContextInstance(
-      {},
-      { logger, resources: RESOURCES, directory: path.join(tmpdir(), "ishiki-classic-absent"), tools: {}, instructions: "" },
-    );
+    const context = new ClassicContextInstance({}, contextOptions(logger));
     const agent = createAgent({
       id: "classic-trio",
       model: new ClassicToolcallEngine(app).create().wrap(model),
       instructions: "You are Ishiki.",
       storage: createMemoryStorage(),
-      plugins: [createAgentPlugin({ context })],
+      plugins: [contextPlugin(context)],
       tools,
     });
 

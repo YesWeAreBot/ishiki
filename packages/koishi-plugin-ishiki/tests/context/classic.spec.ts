@@ -1,24 +1,20 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { createAssistantMessage, createCustomMessage, createEntry, createToolMessage, type AgentEntry, type AgentMessage } from "@yesimagent/core";
 import type { Logger } from "koishi";
 import { describe, expect, it } from "vitest";
 
-import { ClassicContextInstance, type ClassicContextConfig } from "../src/context/classic.engine.js";
-import type { ContextEngineOptions } from "../src/context/engine.js";
-import type { IshikiMessageCreated } from "../src/types.js";
+import { ClassicContextInstance, type ClassicContextConfig } from "../../src/context/classic.engine.js";
+import type { ContextEngineOptions } from "../../src/context/engine.js";
+import type { IshikiMessageCreated } from "../../src/types.js";
+import { contextOptions, contextOptionsMissing } from "../context-stub.js";
 
-const RESOURCES = fileURLToPath(new URL("../resources", import.meta.url));
 const logger = { debug: () => undefined, warn: () => undefined, error: () => undefined } as unknown as Logger;
 
-/** 一个不存在的目录：多数用例不需要记忆块，读不到就是空。 */
-const NOWHERE = path.join(tmpdir(), "ishiki-classic-absent");
-
 function engineWith(config: Partial<ClassicContextConfig> = {}, options: Partial<ContextEngineOptions> = {}): ClassicContextInstance {
-  return new ClassicContextInstance(config, { logger, resources: RESOURCES, directory: NOWHERE, tools: {}, instructions: "", ...options });
+  return new ClassicContextInstance(config, { ...contextOptions(logger), ...options });
 }
 
 /** 一条频道消息：进事件流、不带轮次号。 */
@@ -204,7 +200,7 @@ describe("classic context: 核心记忆块", () => {
 
 describe("classic context: 装配前提", () => {
   it("缺目录或资源路径时直接抛错，不静默降级", () => {
-    expect(() => new ClassicContextInstance({}, { logger, tools: {}, instructions: "" })).toThrow(/needs ContextEngineOptions/);
-    expect(() => new ClassicContextInstance({}, { logger, resources: RESOURCES, tools: {}, instructions: "" })).toThrow(/needs ContextEngineOptions/);
+    expect(() => new ClassicContextInstance({}, contextOptionsMissing(logger, "directory"))).toThrow(/needs ContextEngineOptions/);
+    expect(() => new ClassicContextInstance({}, contextOptionsMissing(logger, "resources"))).toThrow(/needs ContextEngineOptions/);
   });
 });

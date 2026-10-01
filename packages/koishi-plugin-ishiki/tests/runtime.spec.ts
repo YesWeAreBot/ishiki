@@ -111,7 +111,8 @@ describe("profile runtime", () => {
 
   it("creates a scene on demand, one per channel, and reuses it", () => {
     const dm = runtime.route(message("direct", "private:9", "a"));
-    expect(dm?.channelId).toBe("private:9");
+    // 坐标在 domain 上：非聚合形态就是那一个频道。
+    expect(dm?.domain).toEqual({ form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" });
     expect(runtime.route(message("direct", "private:9", "b"))).toBe(dm);
     expect(runtime.route(message("group", "group:2", "c"))).not.toBe(dm);
   });
@@ -188,7 +189,7 @@ describe("profile runtime", () => {
     const event = new StandardHandler().handle(session);
     expect(event?.type).toBe("ishiki.message.created");
     expect(event?.type === "ishiki.message.created" && event.data.isDirect).toBe(true);
-    expect(runtime.route(event!)?.channelId).toBe("private:9");
+    expect(runtime.route(event!)?.domain).toEqual({ form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" });
   });
 
   it("names each channel directory after the account and the channel", () => {

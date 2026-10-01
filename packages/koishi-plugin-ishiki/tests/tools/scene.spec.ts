@@ -7,13 +7,13 @@ import type { Gateway } from "@yesimagent/gateway";
 import { Context, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { StandardContextEngine } from "../src/context/standard.engine.js";
-import { resolveProfile } from "../src/profile.js";
-import { ProfileRuntime } from "../src/runtime.js";
-import { NativeToolcallEngine } from "../src/toolcall/native.engine.js";
-import { createFinish } from "../src/tools/finish.js";
-import { createSendMessage } from "../src/tools/send-message.js";
-import { StandardWakeupEngine } from "../src/wakeup/standard.engine.js";
+import { StandardContextEngine } from "../../src/context/standard.engine.js";
+import { resolveProfile } from "../../src/profile.js";
+import { ProfileRuntime } from "../../src/runtime.js";
+import { NativeToolcallEngine } from "../../src/toolcall/native.engine.js";
+import { createFinish } from "../../src/tools/finish.js";
+import { createSendMessage } from "../../src/tools/send-message.js";
+import { StandardWakeupEngine } from "../../src/wakeup/standard.engine.js";
 
 const USAGE = {
   inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },

@@ -20,11 +20,6 @@ export interface WakeupEngines {}
 /** 一条事件要不要唤起一轮；`wait` 表示继续等。 */
 export type WakeupDecision = "trigger" | "wait";
 
-/** 变体对应的服务名。可用性只由这个名字对应的服务是否存在决定，不看名字里有没有包前缀。 */
-export function wakeupEngineServiceName(name: string): string {
-  return `ishiki.engine.wakeup.${name}`;
-}
-
 /**
  * 建运行体时宿主递进来的东西：引擎拿不到 `Context`，只拿这一小包。
  * 需要发请求的引擎（如 `jev`）要一个日志出口，否则失败只能无声降级。
@@ -69,8 +64,12 @@ export function atSelf(content: string, selfId: string): boolean {
  * 插件级配置由子类自己持有，profile/scene 配置从 `create()` 进——两层各管各的，不做深合并。
  */
 export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupEngines> extends Service {
+  static GetName(name: string): string {
+    return `ishiki.engine.wakeup.${name}`;
+  }
+
   public constructor(ctx: Context, name: K) {
-    super(ctx, wakeupEngineServiceName(String(name)));
+    super(ctx, WakeupEngine.GetName(String(name)));
   }
 
   /** 造一个运行体。`config` 是 profile/scene 合并后该引擎名下的参数块，可能为空，默认值由引擎自己补。 */

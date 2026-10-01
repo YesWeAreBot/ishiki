@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { JsonParser } from "../src/toolcall/json-parser.js";
+import { JsonParser } from "../../src/toolcall/json-parser.js";
 
 /** 契约形状：`thoughts` 三段 + `actions`；解析器本身与形状无关，用真实形状当夹具。 */
 interface ClassicOutput {

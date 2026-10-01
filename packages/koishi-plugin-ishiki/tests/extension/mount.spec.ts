@@ -5,25 +5,22 @@ import path from "node:path";
 import {
   MockLanguageModelV4,
   createCustomMessage,
-  jsonSchema,
   simulateReadableStream,
-  tool,
   type LanguageModelV4CallOptions,
   type LanguageModelV4FunctionTool,
-  type LanguageModelV4Prompt,
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
 import { Context, sleep, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "../src/context/engine.js";
-import type { ExtensionHandler } from "../src/extension.js";
-import Ishiki from "../src/index.js";
-import { activateProfiles, loadProfiles, type AgentRuntime, type ProfileRuntime } from "../src/runtime.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "../../src/context/engine.js";
+import type { ExtensionHandler } from "../../src/extension.js";
+import Ishiki from "../../src/index.js";
+import { activateProfiles, loadProfiles, type AgentRuntime, type ProfileRuntime } from "../../src/runtime.js";
 
 /** 观察用引擎的参数表：它没有参数，声明出来是为了走通 `ContextEngine<"...">` 的约束。 */
-declare module "../src/context/engine.js" {
+declare module "../../src/context/engine.js" {
   interface ContextEngines {
     "neko-tools/spy": Record<string, never>;
   }
@@ -33,34 +30,20 @@ declare module "../src/context/engine.js" {
 
 /** 每次 `provide()` 收到的坐标与配置：内核实际交出去的东西，断言只落在这些事实上。 */
 const calls: Array<{ domain: AgentRuntime["domain"]; directory: string; config: unknown; ctx: Context }> = [];
-/** 这个包这次交回来的工具名；撞名用例把它改成内核工具名。 */
-let probeName = "neko_probe";
-/** 包手上那个半构造的实例：装配结束后再动它，看内核是否守住工具面固定这条线。 */
-let mounted: AgentRuntime | undefined;
 
 /** 拆卸记录：实例停止时按逆序执行，每个包一条。 */
 const disposed: string[] = [];
 
 /**
- * 一个只做加法的扩展包：`ctx.ishiki.provide()` 登记 `ishiki.ext.neko-tools`，handler 在每个实例诞生时
+ * 一个只记账的扩展包：`ctx.ishiki.provide()` 登记 `ishiki.ext.neko-tools`，handler 在每个实例诞生时
  * 被叫一次。包自己解释 `config`，内核只负责原样递过来。
  */
 function extensionPackage(pkg = "neko-tools") {
   function nekoTools(ctx: Context) {
     const handler: ExtensionHandler = (presetConfig, runtime) => {
       calls.push({ domain: runtime.domain, directory: runtime.directory, config: presetConfig, ctx: runtime.ctx });
-      mounted = runtime;
-      const { label = pkg } = (presetConfig ?? {}) as { label?: string };
-      runtime.addTools({
-        [probeName]: tool({
-          description: "探测",
-          inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
-          execute: async () => "ok",
-        }),
-      });
-      runtime.addInstructions(`本实例启用了 ${label}。`);
       return () => {
-        disposed.push(label);
+        disposed.push(pkg);
       };
     };
     // 归属声明：服务随这条 fiber 走。漏绑的话服务会活到 ishiki 自己 dispose。
@@ -109,14 +92,6 @@ function scripted(prompts: string[]): MockLanguageModelV4 {
 function toolCatalog(prompts: string[]): string[] {
   const tools: LanguageModelV4FunctionTool[] = JSON.parse(prompts.at(-1) ?? "{}").tools;
   return tools.map((entry) => entry.name);
-}
-
-/** 该轮送进模型的全部文本：系统提示词与事实行都在里面。 */
-function promptText(prompts: string[]): string {
-  const prompt: LanguageModelV4Prompt = JSON.parse(prompts.at(-1) ?? "{}").prompt;
-  return prompt
-    .flatMap((message) => (typeof message.content === "string" ? [message.content] : message.content.map((part) => (part.type === "text" ? part.text : ""))))
-    .join("\n");
 }
 
 function message(channelId: string, id: string, selfId = "1") {
@@ -208,11 +183,10 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     return { prompts, profiles, dispose: () => fork?.dispose() };
   }
 
-  it("provide 收到 preset 的 config 与实例坐标，加的工具与提示词一并进模型", async () => {
+  it("provide 收到 preset 的 config 与实例坐标", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-plain-"));
     writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:", "        config:", "          label: plain-pack"]);
     calls.length = 0;
-    probeName = "neko_probe";
     const rig = await stand(dir);
     try {
       expect(rig.profiles).toHaveLength(1);
@@ -226,11 +200,6 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
 
       await scene.deliver(message("private:9", "hi"));
       await scene.idle();
-
-      // 模型看到的东西：包的工具在目录里、内核自己的工具没被挤掉、包那段文字在系统提示里。
-      expect(toolCatalog(rig.prompts)).toContain("neko_probe");
-      expect(toolCatalog(rig.prompts)).toContain("send_message");
-      expect(promptText(rig.prompts)).toContain("本实例启用了 plain-pack。");
     } finally {
       await close(rig, dir);
     }
@@ -286,6 +255,7 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
       ].join("\n"),
     );
     calls.length = 0;
+    disposed.length = 0;
     const rig = await stand(dir);
     try {
       const profile = rig.profiles[0]!;
@@ -294,44 +264,11 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
       expect(chat).not.toBe(roleplay);
       expect(calls.map((call) => call.config)).toEqual([{ label: "chat-pack" }, { label: "roleplay-pack" }]);
 
-      // 两个实例的挂载互不相干：停掉一个，另一个照常跑。
+      // 两个实例的挂载互不相干：停掉一个只拆它那一次，另一个照常跑。
       await chat.stop();
+      expect(disposed).toEqual(["neko-tools"]);
       await roleplay.deliver(message("private:5", "still"));
       await roleplay.idle();
-      expect(promptText(rig.prompts)).toContain("本实例启用了 roleplay-pack。");
-    } finally {
-      await close(rig, dir);
-    }
-  });
-
-  it("与内核工具撞名：装配点直接抛错", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-clash-"));
-    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
-    calls.length = 0;
-    probeName = "send_message";
-    const rig = await stand(dir);
-    try {
-      expect(rig.profiles).toHaveLength(1);
-      expect(() => rig.profiles[0]!.route(message("private:9", "hi"))).toThrow(/already provided/);
-    } finally {
-      probeName = "neko_probe";
-      await close(rig, dir);
-    }
-  });
-
-  it("Agent 诞生后工具面固定：再 addTools 直接抛错", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-late-"));
-    writePlain(dir, "neko", "neko", ["    extends:", "      neko-tools:"]);
-    calls.length = 0;
-    mounted = undefined;
-    const rig = await stand(dir);
-    try {
-      rig.profiles[0]!.route(message("private:9", "hi"));
-      const late = {
-        neko_late: tool({ description: "迟到", inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }) }),
-      };
-      expect(() => mounted!.addTools(late)).toThrow(/fixed once the agent exists/);
-      expect(() => mounted!.addInstructions("迟到")).toThrow(/fixed once the agent exists/);
     } finally {
       await close(rig, dir);
     }
@@ -508,14 +445,15 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
       const scene = rig.profiles[0]!.route(message("private:9", "hi"))!;
       await scene.deliver(message("private:9", "hi"));
       await scene.idle();
-      expect(toolCatalog(rig.prompts)).toContain("neko_probe");
+      // 内核工具面原样可用：登记扩展不牵动装配。
+      expect(toolCatalog(rig.prompts)).toContain("send_message");
       expect(calls).toHaveLength(1);
     } finally {
       await close(rig, dir);
     }
   });
 
-  it("上下文引擎造出来时看到的是最终工具面与最终提示词", async () => {
+  it("上下文引擎造出来时看到的是本实例的坐标", async () => {
     const seen: ContextEngineOptions[] = [];
     /** 只记下 options 的观察用引擎：它不参与渲染，只证明依赖传到位的时刻。 */
     class SpyContextEngine extends ContextEngine<"neko-tools/spy"> {
@@ -540,10 +478,8 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
       try {
         rig.profiles[0]!.route(message("private:9", "hi"));
         expect(seen).toHaveLength(1);
-        // 内核工具与扩展包的加法都在内。实例造在挂载之后就是为了这份清单，
-        // 早一步造就只能拿到半份。
-        expect(Object.keys(seen[0]!.tools).sort()).toEqual(["finish", "neko_probe", "send_message"]);
-        expect(seen[0]!.instructions).toContain("本实例启用了 neko-tools。");
+        // 目录是本 preset 的目录：引擎要读的记忆块、模板都在这儿之下。
+        expect(seen[0]!.directory).toContain(path.basename(dir));
         expect(seen[0]!.domain).toEqual({ form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" });
       } finally {
         await close(rig, dir);

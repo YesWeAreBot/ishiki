@@ -175,20 +175,13 @@ declare module "koishi" {
   }
 }
 
-// 社区包需要的东西：扩展挂载面、运行体契约、服务名函数，以及 `declare module` 增强用的参数表接口。
-// 扩展走 `ctx.ishiki.provide(name, handler)`；引擎走继承 provider 基类，服务名由 serviceName 函数给出。
-export { ContextEngine, contextEngineServiceName, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
+// 社区包需要的东西：扩展挂载面、运行体契约，以及 `declare module` 增强用的参数表接口。
+// 扩展走 `ctx.ishiki.provide(name, handler)`；引擎走继承 provider 基类，服务名由基类的静态 `GetName` 给出。
+export { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
 export type { ClaimedAccount, InstanceDomain } from "./domain.js";
 export { extensionServiceName, type Disposer, type ExtensionHandler } from "./extension.js";
 export type { AgentRuntime } from "./runtime.js";
-export { ToolcallEngine, toolcallEngineServiceName, type ToolcallEngineInstance, type ToolcallEngines } from "./toolcall/index.js";
-export {
-  WakeupEngine,
-  wakeupEngineServiceName,
-  type WakeupDecision,
-  type WakeupEngineDeps,
-  type WakeupEngineInstance,
-  type WakeupEngines,
-} from "./wakeup/index.js";
+export { ToolcallEngine, type ToolcallEngineInstance, type ToolcallEngines } from "./toolcall/index.js";
+export { WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngineInstance, type WakeupEngines } from "./wakeup/index.js";
 
 export default Ishiki;

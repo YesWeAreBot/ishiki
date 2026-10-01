@@ -2,9 +2,9 @@ import type { LanguageModel, LanguageModelV4, LanguageModelV4CallOptions, Langua
 import { Context } from "koishi";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { classicProtocol, classicSystemPromptTemplate, classicToolResponse } from "../src/toolcall/classic.engine.js";
-import { ClassicToolcallEngine, HermesToolcallEngine, NativeToolcallEngine } from "../src/toolcall/index.js";
-import { loadParser } from "../src/toolcall/parser.js";
+import { classicProtocol, classicSystemPromptTemplate, classicToolResponse } from "../../src/toolcall/classic.engine.js";
+import { ClassicToolcallEngine, HermesToolcallEngine, NativeToolcallEngine } from "../../src/toolcall/index.js";
+import { loadParser } from "../../src/toolcall/parser.js";
 
 const app = new Context();
 

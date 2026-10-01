@@ -7,14 +7,14 @@ import type { Gateway } from "@yesimagent/gateway";
 import { Context, Logger, sleep } from "koishi";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { ContextEngine, contextEngineServiceName, type ContextEngineInstance } from "../src/context/engine.js";
-import Ishiki from "../src/index.js";
-import { activateProfiles, loadProfiles, type ProfileRuntime } from "../src/runtime.js";
-import { toolcallEngineServiceName } from "../src/toolcall/engine.js";
-import { wakeupEngineServiceName } from "../src/wakeup/engine.js";
+import { ContextEngine, type ContextEngineInstance } from "../../src/context/engine.js";
+import Ishiki from "../../src/index.js";
+import { activateProfiles, loadProfiles, type ProfileRuntime } from "../../src/runtime.js";
+import { ToolcallEngine } from "../../src/toolcall/engine.js";
+import { WakeupEngine } from "../../src/wakeup/engine.js";
 
 /** 变体参数表：社区包用 `declare module` 增强声明它的那个模块。 */
-declare module "../src/context/engine.js" {
+declare module "../../src/context/engine.js" {
   interface ContextEngines {
     "neko-tools/rolling": RollingRuntimeConfig;
     rolling: RollingRuntimeConfig;
@@ -178,13 +178,13 @@ describe("内置引擎服务", () => {
   });
 
   it("内置变体在 profile 装载前就位：一个变体一个服务，无需扩展包", () => {
-    expect(root.get(contextEngineServiceName("standard"))).toBeDefined();
-    expect(root.get(contextEngineServiceName("classic"))).toBeDefined();
-    expect(root.get(wakeupEngineServiceName("standard"))).toBeDefined();
-    expect(root.get(wakeupEngineServiceName("classic"))).toBeDefined();
-    expect(root.get(wakeupEngineServiceName("jev"))).toBeDefined();
+    expect(root.get(ContextEngine.GetName("standard"))).toBeDefined();
+    expect(root.get(ContextEngine.GetName("classic"))).toBeDefined();
+    expect(root.get(WakeupEngine.GetName("standard"))).toBeDefined();
+    expect(root.get(WakeupEngine.GetName("classic"))).toBeDefined();
+    expect(root.get(WakeupEngine.GetName("jev"))).toBeDefined();
     for (const name of ["native", "classic", "hermes", "qwen3coder", "morph-xml", "yaml-xml"]) {
-      expect(root.get(toolcallEngineServiceName(name))).toBeDefined();
+      expect(root.get(ToolcallEngine.GetName(name))).toBeDefined();
     }
   });
 
@@ -316,8 +316,8 @@ describe("preset 的引擎依赖", () => {
     // 依赖从展开后的 spec 扫描：preset 默认的 standard 与 scene 覆盖出来的 rolling 都在
     const [load] = loadProfiles(own, logger);
     const mixed = load!.presets.find((preset) => preset.name === "mixed")!;
-    expect(mixed.services).toContain(contextEngineServiceName("standard"));
-    expect(mixed.services).toContain(contextEngineServiceName("rolling"));
+    expect(mixed.services).toContain(ContextEngine.GetName("standard"));
+    expect(mixed.services).toContain(ContextEngine.GetName("rolling"));
 
     const profiles: ProfileRuntime[] = [];
     logs.length = 0;

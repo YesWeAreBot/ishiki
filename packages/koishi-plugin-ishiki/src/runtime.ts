@@ -16,18 +16,18 @@ import type { Gateway } from "@yesimagent/gateway";
 import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
-import { contextEngineServiceName, type ContextEngine, type ContextEngineInstance, type ContextEngines } from "./context/index.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngines } from "./context/index.js";
 import { claimLines, type InstanceDomain } from "./domain.js";
 import { extensionServiceName, type Disposer, type ExtensionHandler, type ExtensionService } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { engineParams, matchSceneSpec, resolveProfile, sceneDirectoryName, type CodemodeConfig, type ResolvedPreset, type SceneSpec } from "./profile.js";
-import { toolcallEngineServiceName, type ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
+import { ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
 import { CODE_MODE, createCodemode } from "./tools/codemode.js";
 import { createFinish } from "./tools/finish.js";
 import { withInnerThoughts } from "./tools/inner-thoughts.js";
 import { createSendMessage } from "./tools/send-message.js";
 import type { IshikiEvent } from "./types.js";
-import { wakeupEngineServiceName, type WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./wakeup/index.js";
+import { WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./wakeup/index.js";
 
 /** 实例键，同时是目录名的来源：sid 与 channelId 一并编码，避免不同账号下的同名频道冲突。 */
 function channelKey(sid: string, channelId: string): string {
@@ -73,12 +73,6 @@ export interface AgentRuntimeConfig {
   gateway: Gateway;
   /** 基础提示词：内核那一段（身份与处境），聚合形态的地址簿跟在后面。扩展包的在它们之后。 */
   instructions: string;
-  /**
-   * 上下文引擎的造法：由所属生效单位从 provider 取到，不在这里造实例。
-   *
-   * 推迟到 AgentRuntime 构造期，是因为引擎要看的工具面与提示词要到扩展包挂完才定。
-   * 提前造就等于让它拿着半份上下文开工。
-   */
   context: ContextEngineInstance;
   /** 内核工具面（`send_message` 与 `finish`）。扩展包在构造期间往这里加，加完才算定。 */
   tools: ToolSet;
@@ -138,8 +132,6 @@ export class AgentRuntime {
   private readonly agent: Agent;
   /** 装配期的工具面：内核工具先落进来，扩展包逐个往上加，加完才交给 core。 */
   private readonly tools: ToolSet;
-  /** 扩展包交回来的提示词段，按包的挂载顺序；收尾时接在内核那一段与地址簿之后。 */
-  private readonly addedTexts: string[] = [];
   /** 扩展包各自交回的拆卸函数，按挂载先后入队；停止时逆序执行，先挂的后拆。 */
   private readonly disposers: Disposer[] = [];
   /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
@@ -174,7 +166,6 @@ export class AgentRuntime {
     }
 
     const base = config.innerThoughts ? withInnerThoughts(this.tools, this.logger) : this.tools;
-    const instructions = [config.instructions, ...this.addedTexts].filter((text) => text.length > 0).join("\n\n");
 
     // 代码模式只改工具面：宿主工具一件不动，模型目录收窄成只剩沙箱那一件。
     // 收窄与沙箱工具是同一次装配的两半——表里点名的进沙箱，没点名的留在目录。
@@ -183,7 +174,6 @@ export class AgentRuntime {
     this.agent = createAgent({
       id: this.label,
       model: config.model,
-      instructions,
       storage: this.storage,
       // core 只见一个插件：上下文引擎与停轮判定在这一点收拢。
       plugins: [
@@ -201,7 +191,13 @@ export class AgentRuntime {
           transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
           transformMessages: (messages, options) => this.context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
           // 引擎给出的那一段提示词接在内核拼好的提示词之后。
-          extendInstructions: () => this.context.instructions?.(),
+          extendInstructions: async () => {
+            const extended = (await this.context.instructions?.()) ?? "";
+            return [config.instructions, extended].join("\n\n");
+          },
+          extendTools: () => {
+            return sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool };
+          },
           // 停轮：唯一决策点，读本步消息流。finish 出现即停；否则发言（send_message 直调且全部
           // continue!==true 且结果全成功）且本步没有别的实义工具时停；其余交 core 默认。
           // 发言判定展开在这一点：只见本步消息，逐条找 send_message 的调用与结果——调用缺席判未发言，
@@ -254,7 +250,6 @@ export class AgentRuntime {
           },
         },
       ],
-      tools: sandbox === undefined ? base : { ...base, [CODE_MODE]: sandbox.tool },
       // core 的配置字段叫 toolCallers；它转发给 streamText 时才改名为 experimental_toolCallers。
       ...(sandbox === undefined ? {} : { toolCallers: sandbox.callers }),
     });
@@ -501,10 +496,10 @@ export class PresetRuntime {
     // provider 都已由 preset 的 fiber 声明为依赖，这里取一次即可。
     const failover = this.gateway.groups().includes(spec.model) || (spec.failover.attempts ?? 1) > 1;
     const raw = failover ? new FailoverModel(this.gateway, spec.model, spec.failover, this.logger) : this.gateway.languageModel(spec.model);
-    const toolcall = engineProvider<ToolcallEngine>(this.ctx, toolcallEngineServiceName(spec.toolcall.engine));
+    const toolcall = engineProvider<ToolcallEngine>(this.ctx, ToolcallEngine.GetName(spec.toolcall.engine));
     const model = toolcall.create(engineParams<ToolcallEngines>(spec.toolcall)).wrap(raw);
 
-    const context = engineProvider<ContextEngine>(this.ctx, contextEngineServiceName(spec.context.engine)).create(engineParams<ContextEngines>(spec.context), {
+    const context = engineProvider<ContextEngine>(this.ctx, ContextEngine.GetName(spec.context.engine)).create(engineParams<ContextEngines>(spec.context), {
       logger: this.logger,
       gateway: this.gateway,
       directory: directory,
@@ -512,7 +507,7 @@ export class PresetRuntime {
       domain: domain,
     });
 
-    const wakeup = engineProvider<WakeupEngine>(this.ctx, wakeupEngineServiceName(spec.wakeup.engine)).create(engineParams<WakeupEngines>(spec.wakeup), {
+    const wakeup = engineProvider<WakeupEngine>(this.ctx, WakeupEngine.GetName(spec.wakeup.engine)).create(engineParams<WakeupEngines>(spec.wakeup), {
       logger: this.logger,
     });
 
@@ -588,9 +583,9 @@ export interface PresetLoad extends ResolvedPreset {
 function presetServices(preset: ResolvedPreset): string[] {
   const specs = preset.specs;
   const names = specs.flatMap((spec) => [
-    contextEngineServiceName(spec.context.engine),
-    wakeupEngineServiceName(spec.wakeup.engine),
-    toolcallEngineServiceName(spec.toolcall.engine),
+    ContextEngine.GetName(spec.context.engine),
+    WakeupEngine.GetName(spec.wakeup.engine),
+    ToolcallEngine.GetName(spec.toolcall.engine),
   ]);
   return [...new Set([...Object.keys(preset.extensions).map(extensionServiceName), ...names])];
 }
