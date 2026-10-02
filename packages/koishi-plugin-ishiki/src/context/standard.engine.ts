@@ -16,14 +16,36 @@ export interface IshikiCompact {
   lastEntryId: string;
 }
 
-/** 未配置时的字符预算上限；显式写 0 表示只线性增长、不压缩。 */
-const DEFAULT_CONTEXT_CHARS = 32_000;
+/** 未配置时的 token 预算上限；显式写 0 表示只线性增长、不压缩。 */
+const DEFAULT_CONTEXT_TOKENS = 32_000;
+
+/**
+ * 还没有过一次真实 usage 观测时，按多少 token / 可见字符估。
+ *
+ * 实测（中文人设 + 工具 schema + 推理与 base64 混排）：条目部分约 0.33 token/字符，
+ * 固定开销（system 提示词与工具 schema）约 9.5k token。这里取 0.5，宁可高估——高估 token 就是早裁，
+ * 代价是少留几轮，而不是把上下文塞爆。这一项不含固定开销，两个偏差方向相反，常用窗口尺寸内互相抵消，
+ * 但它是估不是准：校准一旦拿到两个观测点就接管。
+ */
+const FALLBACK_TOKENS_PER_CHAR = 0.5;
+
+/** 两个观测点的可见字符数至少要差这么多，否则差值里全是噪声，斜率会被放大成垃圾。 */
+const MIN_SAMPLE_GAP = 0.1;
+/** tok/char 的合理区间：一个可见字符到不了一个 token，最省的 base64 也在 0.2 以上。 */
+const MIN_TOKENS_PER_CHAR = 0.1;
+const MAX_TOKENS_PER_CHAR = 1.5;
+
+/** 一次观测：引擎自算的可见字符数 → core 报回来的真实输入 token 数。 */
+interface Sample {
+  chars: number;
+  tokens: number;
+}
 
 export interface StandardContextConfig {
   model?: string;
-  /** 单轮模型输入的文本上限（字符数）；超出时最旧的几轮退出模型视野，交给后台并入摘要。 */
-  maxChars: number;
-  /** 首选水位比例。0.8 表示尽量压到 `maxChars * 0.8`；裁剪粒度是一整轮，跨过水位的那一轮仍会留下。 */
+  /** 单次模型输入的 token 上限，含 system 提示词与工具 schema；超出时最旧的几轮退出模型视野，交给后台并入摘要。 */
+  maxTokens: number;
+  /** 首选水位比例。0.8 表示尽量压到预算的 0.8；裁剪粒度是一整轮，跨过水位的那一轮仍会留下。 */
   refillRatio?: number;
 }
 
@@ -163,6 +185,15 @@ function lastCompact(entries: readonly AgentEntry[]): AgentEntry<"ishiki.compact
   return undefined;
 }
 
+/** 一段条目交给模型时的可见字符数：只有消息条目有正文。 */
+function visibleSize(entries: readonly AgentEntry[], domain?: InstanceDomain): number {
+  let size = 0;
+  for (const entry of entries) {
+    if (entry.type === "message") size += renderText(entry.data, domain).length;
+  }
+  return size;
+}
+
 /** 流里的轮边界下标：core 在每轮开始写一条 `turn.start` 事件条目。 */
 function turnStarts(tail: readonly AgentEntry[]): number[] {
   const starts: number[] = [];
@@ -181,46 +212,64 @@ function turnStarts(tail: readonly AgentEntry[]): number[] {
  * 摘要却还停在上上次压缩的水位。轮边界天然不含半个 tool 配对，于是也不必再避开工具轨迹。
  *
  * 预算分两档：`target` 是首选水位，`ceiling` 是硬上限。粒度是一整轮，所以允许跨过水位的那一轮
- * 整轮留下（不越过 `ceiling`），再往前的轮次一律不纳入；最新一轮无论多大都留下，预算在这里是软的。
+ * 整轮留下（不越过 `ceiling`），再往前的轮次一律不纳入。
+ *
+ * 最新一轮自己就超过 `ceiling` 时，两种时机给出不同答案，由 `newest` 选：
+ * 轮内留（`keep`，模型要看自己刚做的动作，预算在这里是软的），轮末不留（`drop`，下一轮的窗口同样
+ * 留不下它，它必须整轮进摘要）。除这一条外两种走法逐字相同，所以轮末切点必定是轮内切点的超集。
+ *
  * 流里没有轮边界时返回 0（整段放行）：没有边界就没有安全的切点。
+ *
+ * 返回的下标与保留段的可见字符数：后者是「这一次交给模型的量」，交给 {@link StandardContextInstance} 与
+ * 真实 usage 配对做校准，省一次重复渲染。
  */
-function findCut(tail: readonly AgentEntry[], head: number, target: number, ceiling: number, domain?: InstanceDomain): number {
+function findCut(
+  tail: readonly AgentEntry[],
+  head: number,
+  target: number,
+  ceiling: number,
+  domain: InstanceDomain | undefined,
+  newest: "keep" | "drop",
+): { cut: number; kept: number } {
   const starts = turnStarts(tail);
-  if (starts.length === 0) return 0;
+  if (starts.length === 0) return { cut: 0, kept: head + visibleSize(tail, domain) };
 
   // 每一段的可见字符数：段 = 一个轮边界到下一个轮边界，最后一段到流尾。
   const segments: number[] = [];
   for (let index = 0; index < starts.length; index += 1) {
     const to = index + 1 < starts.length ? starts[index + 1] : tail.length;
-    let size = 0;
-    for (let at = starts[index]; at < to; at += 1) {
-      const entry = tail[at];
-      if (entry.type === "message") size += renderText(entry.data, domain).length;
-    }
-    segments.push(size);
+    segments.push(visibleSize(tail.slice(starts[index], to), domain));
   }
 
   let picked = segments.length - 1;
   let size = head + segments[picked];
+  if (size > ceiling && newest === "drop") return { cut: tail.length, kept: 0 };
   for (let index = segments.length - 2; index >= 0; index -= 1) {
-    size += segments[index];
-    if (size > ceiling) break;
+    const next = size + segments[index];
+    if (next > ceiling) break;
     picked = index;
+    size = next;
     if (size > target) break;
   }
-  return starts[picked];
+  return { cut: starts[picked], kept: size };
 }
 
 /**
  * 线性增长 + 空闲压缩，两条轨道各自独立：
  *
- * - 前台 `prepareEntries` 只做同步裁剪：预算内原样交给模型，超预算就把最旧的几轮切出模型视野，
- *   并把切到哪一条记在 `hidden` 上。这一步不调模型，任何一轮的附加延迟都是零。
- * - 后台 `finishTurn` 在一轮结束之后，把 `hidden` 记下的那段并进摘要，水位以 `ishiki.compact`
- *   条目追加到流中。压缩成功前聊天照常进行；压缩失败不影响本轮，下一轮结束再试。
+ * - 前台 `prepareEntries` 只做同步裁剪：预算内原样交给模型，超预算就把最旧的几轮切出模型视野。
+ *   这一步不调模型，任何一轮的附加延迟都是零。
+ * - 后台 `finishTurn` 在一轮结束之后，把「下一轮的窗口留不下的那一段」并进摘要，水位以
+ *   `ishiki.compact` 条目追加到流中。压缩成功前聊天照常进行；压缩失败不影响本轮，下一轮结束再试。
  *
- * 切点只在前台算一次。后台读到的流比前台长（本轮自己的产出已经落盘），同一个预算重算只会得出更晚
- * 或根本不存在的切点，前台已经藏起来的那段就永远进不了摘要——这里以「前台决定、后台照搬」换掉那种重算。
+ * 两处的切点用同一套规则算，只是轮末要按「下一轮的窗口留得下什么」来算：轮内留不下最新一轮时照留，
+ * 轮末不能——下一轮同样留不下它，让它留在窗口外就得进摘要。旧规则按行取「能装下的最大后缀」，
+ * 单条大消息就能把切点顶到最新一行，轮末重算时更是直接无解返回 -1，那段就永远进不了摘要。
+ *
+ * 预算是 token，量的是 core 每次请求的输入。裁剪必须先于请求决定，而引擎手上唯一的先行量是可见字符，
+ * 所以 token 预算由「token ≈ fixed + rate × 可见字符」折算成字符预算；fixed 与 rate 从 core 每步发的
+ * `turn.step` usage 里学（那个 usage 不含 system 提示词与工具 schema，只看字符估会把它们漏掉），
+ * 没有观测时用 {@link FALLBACK_TOKENS_PER_CHAR} 保守估。
  *
  * 除压缩成功时追加的那一条 compact 外，本引擎只读不写。
  */
@@ -231,24 +280,74 @@ export class StandardContextInstance implements ContextEngineInstance {
   private readonly logger?: Logger;
   /** 本实例的可见域；缺省即单频道视窗，行不带坐标。 */
   private readonly domain?: InstanceDomain;
-  private readonly ceiling: number;
-  private readonly target: number;
+  private readonly maxTokens: number;
+  private readonly refillRatio: number;
+  /** token ≈ fixed + rate × 可见字符；两个系数都从真实 usage 学，学不到时用兜底。 */
+  private rate?: number;
+  private fixed?: number;
+  /** 最近一次观测，以及最近一对字符数差得够开的观测（差得太近会把噪声放大成斜率）。 */
+  private latest?: Sample;
+  private paired?: readonly [Sample, Sample];
+  /** 上一次装配交给模型的可见字符数：与随后到达的 usage 配对。 */
+  private assembled?: number;
+  /** 由 token 预算折算出的可见字符预算，随校准更新。 */
+  private ceiling: number;
+  private target: number;
   /** 上一次装配是否超预算：后台压缩的触发条件。 */
   private over = false;
-  /** 上一次装配切到哪一条（被切掉的最后一条条目）：后台照此折叠，不重算切点。 */
-  private hidden?: string;
   private compacting?: Promise<void>;
   private abort?: AbortController;
 
   constructor(config: Partial<StandardContextConfig>, options: ContextEngineOptions) {
-    const maxChars = config.maxChars ?? DEFAULT_CONTEXT_CHARS;
+    const maxTokens = config.maxTokens ?? DEFAULT_CONTEXT_TOKENS;
     const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
-    this.config = { maxChars, refillRatio };
+    this.config = { maxTokens, refillRatio };
     this.logger = options.logger;
     this.domain = options.domain;
-    this.ceiling = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : 0;
-    this.target = this.ceiling * refillRatio;
-    if (this.ceiling === 0) this.logger?.warn("context budget disabled: maxChars is non-positive, compaction off");
+    this.refillRatio = refillRatio;
+    this.maxTokens = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 0;
+    this.ceiling = 0;
+    this.target = 0;
+    this.applyBudget();
+    if (this.ceiling === 0) this.logger?.warn("context budget disabled: maxTokens is non-positive, compaction off");
+  }
+
+  /** 把 token 预算折成可见字符预算：裁剪按字符算，对表对的是 token。 */
+  private applyBudget(): void {
+    const rate = this.rate ?? FALLBACK_TOKENS_PER_CHAR;
+    this.ceiling = this.maxTokens === 0 ? 0 : Math.max(0, (this.maxTokens - (this.fixed ?? 0)) / rate);
+    this.target = this.ceiling * this.refillRatio;
+  }
+
+  /**
+   * 校准。usage 是「已经发出去的那一次请求」的真实 token 数，而裁剪要决定下一次请求，所以它不能直接
+   * 当预算用，只能用来把字符口径换算成 token 口径。两个未知数要两个字符数差得够开的观测点：差值消掉
+   * 固定开销得到 tok/char，回代得到固定开销（system 提示词与工具 schema，不随窗口变化）。
+   */
+  private observe(usage?: { inputTokens?: number }): void {
+    const tokens = usage?.inputTokens;
+    const chars = this.assembled;
+    if (typeof tokens !== "number" || !(tokens > 0) || chars === undefined || !(chars > 0)) return;
+
+    const sample = { chars, tokens };
+    const latest = this.latest;
+    if (latest !== undefined && Math.abs(latest.chars - chars) / Math.max(latest.chars, chars) >= MIN_SAMPLE_GAP) {
+      this.paired = [latest, sample];
+    }
+    this.latest = sample;
+
+    const paired = this.paired;
+    if (paired === undefined) return;
+    const [first, second] = paired;
+    const rate = (second.tokens - first.tokens) / (second.chars - first.chars);
+    if (!(rate >= MIN_TOKENS_PER_CHAR && rate <= MAX_TOKENS_PER_CHAR)) {
+      // 观测点对不上型号（换了模型、拼错窗口）：丢掉这一对，继续用上一组系数或兜底值。
+      this.paired = undefined;
+      return;
+    }
+    this.rate = rate;
+    this.fixed = Math.max(0, first.tokens - rate * first.chars);
+    this.applyBudget();
   }
 
   /**
@@ -263,7 +362,8 @@ export class StandardContextInstance implements ContextEngineInstance {
   attach(agent: Agent): () => void {
     this.agent = agent;
     const unsubscribe = agent.channel.subscribe("agent", (event) => {
-      if (event.type === "turn.done") this.finishTurn();
+      if (event.type === "turn.step") this.observe(event.usage);
+      else if (event.type === "turn.done") this.finishTurn();
     });
     return () => {
       this.abort?.abort();
@@ -290,23 +390,21 @@ export class StandardContextInstance implements ContextEngineInstance {
 
     const { tail, head } = this.window(entries);
 
-    let size = head.length;
-    for (const entry of tail) {
-      if (entry.type === "message") size += renderText(entry.data, this.domain).length;
-    }
+    const size = head.length + visibleSize(tail, this.domain);
     if (size <= this.ceiling) {
       this.over = false;
+      this.assembled = size;
       return this.prepend(head, [...tail]);
     }
 
     this.over = true;
-    const cut = findCut(tail, head.length, this.target, this.ceiling, this.domain);
+    const { cut, kept } = findCut(tail, head.length, this.target, this.ceiling, this.domain, "keep");
+    // 这一次交给模型多少可见字符：随后的 turn.step usage 就是它的真实 token 数，两者配对做校准。
+    this.assembled = kept;
     if (cut === 0) {
       this.logger?.warn("context over budget with no turn boundary, entries passed through");
       return this.prepend(head, [...tail]);
     }
-    // 记在被切掉的最后一条上：下一次装配从它之后取窗口，后台也折叠到它。
-    this.hidden = tail[cut - 1].id;
     return this.prepend(head, tail.slice(cut));
   }
 
@@ -327,32 +425,30 @@ export class StandardContextInstance implements ContextEngineInstance {
     await this.compacting;
   }
 
-  /** 把前台切掉的那一段并入摘要，水位以 compact 条目追加到流中。全程在后台，失败只记一条日志。 */
+  /**
+   * 把「下一轮的窗口留不下的那一段」并入摘要，水位以 compact 条目追加到流中。全程在后台，失败只记一条日志。
+   *
+   * 轮末重算是安全的：流只增不减，同一个预算在更长的流上只会切得更靠前，所以轮末切点覆盖轮内切点；
+   * 而它是全函数，没有「切不出点」这种失败态——旧规则在这里返回 -1，前台藏起来的那段就永远进不了摘要。
+   */
   private async compact(): Promise<void> {
     const agent = this.agent;
     if (agent === undefined) return;
 
-    const through = this.hidden;
-    if (through === undefined) {
-      // 前台这一轮没切任何东西：没有要并入摘要的段落。
+    const { summary: previous, tail, head } = this.window(await agent.storage.read());
+    const { cut } = findCut(tail, head.length, this.target, this.ceiling, this.domain, "drop");
+    if (cut === 0) {
+      // 没有轮边界，或下一轮的窗口装得下全部：没有要并入摘要的段落。
       this.over = false;
       return;
     }
 
-    const { summary: previous, tail } = this.window(await agent.storage.read());
-    const end = tail.findIndex((entry) => entry.id === through);
-    if (end < 0) {
-      this.logger?.warn(`hidden range ${through} left the stream, compaction skipped`);
-      this.over = false;
-      this.hidden = undefined;
-      return;
-    }
-    const dropped = tail.slice(0, end + 1).filter((entry): entry is AgentEntry<"message"> => entry.type === "message");
+    const through = tail[cut - 1].id;
+    const dropped = tail.slice(0, cut).filter((entry): entry is AgentEntry<"message"> => entry.type === "message");
     if (dropped.length === 0) {
       // 切出去的全是事件条目：摘要没有可记的东西，只把水位推过去。
       await agent.storage.append(createEntry("ishiki.compact", { summary: previous ?? "", lastEntryId: through }));
       this.over = false;
-      this.hidden = undefined;
       return;
     }
 
@@ -360,16 +456,12 @@ export class StandardContextInstance implements ContextEngineInstance {
     this.abort = abort;
     try {
       const summary = await this.summarize(previous, dropped, abort.signal);
-      // 失败就留着 `over` 与 `hidden`，下一轮结束再试；本轮与后续轮次照常跑。
+      // 失败就留着 `over`，下一轮结束再试；本轮与后续轮次照常跑。
       // 停止之后才回来的摘要一律丢掉：这条流已经不属于任何活着的实例了。
       if (summary === undefined || abort.signal.aborted) return;
       // 直接写入存储：该条目是关于流的元数据，不经过 onAppend 的条目处理。
       await agent.storage.append(createEntry("ishiki.compact", { summary, lastEntryId: through }));
-      // 这一轮又切了更远的一段（压缩在跑时流里已出现新内容）：留着它，下一轮结束接着折。
-      if (this.hidden === through) {
-        this.hidden = undefined;
-        this.over = false;
-      }
+      this.over = false;
     } finally {
       if (this.abort === abort) this.abort = undefined;
     }

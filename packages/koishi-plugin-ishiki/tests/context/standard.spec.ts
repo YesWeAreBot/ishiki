@@ -37,7 +37,10 @@ function mockModel(text: string, fails = false): MockLanguageModelV4 {
  * 一个只够压缩用的假 agent：storage、模型，以及一个能手动发事件的通道。
  * 压缩挂在轮次结束事件上，所以「这一轮结束了」得由用例自己说。
  */
-function fakeAgent(storage: AgentStorage<AgentEntry>, model: MockLanguageModelV4): Agent & { endTurn(): Promise<void> } {
+function fakeAgent(
+  storage: AgentStorage<AgentEntry>,
+  model: MockLanguageModelV4,
+): Agent & { endTurn(): Promise<void>; step(inputTokens: number): Promise<void> } {
   const listeners = new Set<(event: AgentEvent) => void | Promise<void>>();
   const agent = {
     storage,
@@ -51,8 +54,11 @@ function fakeAgent(storage: AgentStorage<AgentEntry>, model: MockLanguageModelV4
     endTurn: async () => {
       await Promise.all([...listeners].map((listener) => listener({ type: "turn.done", turnId: "t1" })));
     },
+    step: async (inputTokens: number) => {
+      await Promise.all([...listeners].map((listener) => listener({ type: "turn.step", turnId: "t1", stepNumber: 0, usage: { inputTokens } })));
+    },
   };
-  return agent as unknown as Agent & { endTurn(): Promise<void> };
+  return agent as unknown as Agent & { endTurn(): Promise<void>; step(inputTokens: number): Promise<void> };
 }
 
 /** A message line long enough that a handful of them exceeds a small budget. */
@@ -223,7 +229,7 @@ describe("collapse", () => {
 describe("standard context engine", () => {
   it("passes the entries through while they fit, and writes nothing", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 10_000 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -245,7 +251,7 @@ describe("standard context engine", () => {
 
   it("trims whole turns in the foreground, then folds exactly that range into a memory line once the turn ends", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300, refillRatio: 0.8 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 150, refillRatio: 0.8 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记住：她在准备搬家"));
     engine.attach(agent);
 
@@ -292,10 +298,33 @@ describe("standard context engine", () => {
     expect(calls.count).toBe(1);
   });
 
+  it("learns the tok/char exchange rate from the provider's usage", async () => {
+    const storage = createMemoryStorage();
+    const engine = new StandardContextInstance({ maxTokens: 150 }, contextOptions(logger));
+    const agent = fakeAgent(storage, mockModel("记忆"));
+    engine.attach(agent);
+
+    // 兜底 0.5 tok/char：150 token 折 300 字符；一轮（一条 ~110 字符的可见行）装得下，六轮装不下
+    const entries = ["a", "b", "c", "d", "e", "f"].flatMap((id) => turn(id, message(`${id}0`)));
+    storage.append(...entries.slice(0, 2));
+    const first = await engine.prepareEntries([...(await storage.read())]);
+    expect(first.length).toBe(2);
+    await agent.step(35); // 观测点一：110 字符 → 35 token
+
+    storage.append(...entries.slice(2));
+    const mid = await engine.prepareEntries([...(await storage.read())]);
+    expect(mid.length).toBeLessThan(entries.length);
+    await agent.step(65); // 观测点二：两次交给模型的量不同，差值给出斜率，回代给出固定开销
+
+    // 斜率 (65-35)/(220-110) ≈ 0.27，预算从 300 字符放宽到 ~500：同一条流留得下的轮次变多
+    const after = await engine.prepareEntries([...(await storage.read())]);
+    expect(after.length).toBeGreaterThan(mid.length);
+  });
+
   it("keeps the previous whole turn when the watermark alone is exceeded", async () => {
     const storage = createMemoryStorage();
     // 水位 = 400 * 0.5 = 200，硬上限 400：两轮合计 ~222，跨过水位但没到上限
-    const engine = new StandardContextInstance({ maxChars: 400, refillRatio: 0.5 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 200, refillRatio: 0.5 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -318,9 +347,9 @@ describe("standard context engine", () => {
     expect(written[0].data.lastEntryId).toBe(entries[first - 1].id);
   });
 
-  it("folds the range it hid even after the turn grew the stream past the cut", async () => {
+  it("folds everything the next window cannot hold", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 150 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记住：她换了头像"));
     engine.attach(agent);
 
@@ -330,7 +359,7 @@ describe("standard context engine", () => {
     // 前台决定切点：保留最新一轮，切掉前两轮
     await engine.prepareEntries([...(await storage.read())]);
 
-    // 本轮随后产出新消息，末尾是工具结果：后台若按同一预算重算，已经找不到可切的点了
+    // 本轮随后产出新消息，末尾是工具结果：它自己就装不下，下一轮的窗口同样留不下它
     storage.append(
       createEntry("event", { type: "turn.start", turnId: "now" }, { id: "t-now" }),
       entry("e-now-0", message("now0")),
@@ -346,12 +375,40 @@ describe("standard context engine", () => {
     expect(written).toHaveLength(1);
     expect(calls.count).toBe(1);
     expect(written[0].data.summary).toBe("记住：她换了头像");
-    expect(written[0].data.lastEntryId).toBe("e-b-1");
+    expect(written[0].data.lastEntryId).toBe("e-now-2");
+  });
+
+  it("folds a turn too large to keep at its own end, so the next turn still has memory", async () => {
+    const storage = createMemoryStorage();
+    const engine = new StandardContextInstance({ maxTokens: 150 }, contextOptions(logger));
+    const agent = fakeAgent(storage, mockModel("记住：她让我画了一幅画"));
+    engine.attach(agent);
+
+    // 第一轮自己就超上限：轮内没有可切的点（唯一轮边界在流首），整轮进不了下一轮的窗口
+    const entries = turn("a", message("a0"), tool("a1", 400), tool("a2", 400));
+    storage.append(...entries);
+
+    calls.count = 0;
+    const out = await engine.prepareEntries([...(await storage.read())]);
+    expect(out).toHaveLength(entries.length);
+    expect(calls.count).toBe(0);
+
+    // 轮末整轮并入摘要：晚了就没有任何东西可看
+    await agent.endTurn();
+    await engine.settle();
+    const written = compacts(await storage.read());
+    expect(written).toHaveLength(1);
+    expect(written[0].data.lastEntryId).toBe("e-a-2");
+
+    // 第二条消息进来时，第一轮以摘要的形式还在
+    storage.append(...turn("b", message("b0")));
+    const again = await engine.prepareEntries([...(await storage.read())]);
+    expect(again[0].type === "message" ? userText(again[0].data) : "").toContain("记住：她让我画了一幅画");
   });
 
   it("keeps trimming while the summary call fails, and retries on the next turn", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 150 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("", true));
     engine.attach(agent);
 
@@ -380,7 +437,7 @@ describe("standard context engine", () => {
 
   it("compresses once even when two turns end back to back", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 150 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -399,7 +456,7 @@ describe("standard context engine", () => {
 
   it("passes everything through when no turn boundary is available", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 80 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 40 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -420,7 +477,7 @@ describe("standard context engine", () => {
 
   it("grows linearly when no budget is configured", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 0 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 0 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -438,7 +495,7 @@ describe("standard context engine", () => {
 
   it("ignores a memory whose anchor left the stream", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 10_000 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
@@ -450,7 +507,7 @@ describe("standard context engine", () => {
 
   it("drops an in-flight summary when the scene is unloaded", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 150 }, contextOptions(logger));
     let started: (() => void) | undefined;
     const began = new Promise<void>((resolve) => {
       started = resolve;
@@ -486,7 +543,7 @@ describe("standard context engine", () => {
 
   it("runs a real turn past the budget while the summary is still in flight", async () => {
     const storage = createMemoryStorage();
-    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
+    const engine = new StandardContextInstance({ maxTokens: 150 }, contextOptions(logger));
     const prompts: string[] = [];
     let resolveHeld: (() => void) | undefined;
     let began: (() => void) | undefined;

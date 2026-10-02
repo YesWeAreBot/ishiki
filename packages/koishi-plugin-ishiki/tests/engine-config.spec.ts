@@ -25,11 +25,11 @@ describe("engine config precedence", () => {
 
   it("profile 写下的引擎与参数原样带过来", () => {
     const spec = makeSpec({
-      context: { engine: "standard", standard: { maxChars: 1234 } },
+      context: { engine: "standard", standard: { maxTokens: 1234 } },
       wakeup: { engine: "standard", standard: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } },
     });
     // 断言整块：按引擎名分键，参数留在同名键下
-    expect(spec.context).toEqual({ engine: "standard", standard: { maxChars: 1234 } });
+    expect(spec.context).toEqual({ engine: "standard", standard: { maxTokens: 1234 } });
     expect(spec.wakeup).toEqual({ engine: "standard", standard: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } });
   });
 
@@ -52,14 +52,14 @@ describe("engine config precedence", () => {
       {
         model: "test:model",
         cross: true,
-        context: { engine: "standard", standard: { maxChars: 40_000 } },
+        context: { engine: "standard", standard: { maxTokens: 40_000 } },
         claims: { "onebot:1": { whitelist: ["group:*"] } },
       },
       "neko",
     ).specs;
 
     expect(specs[0]!.cross).toBe(true);
-    expect(specs[0]!.context).toEqual({ engine: "standard", standard: { maxChars: 40_000 } });
+    expect(specs[0]!.context).toEqual({ engine: "standard", standard: { maxTokens: 40_000 } });
   });
 
   it("引擎变体的名字不参与准入：带不带 `/` 都只是普通名字，profile 照常展开", () => {

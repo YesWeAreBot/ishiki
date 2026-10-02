@@ -57,7 +57,7 @@ model: onebot:gpt-4o-mini # 或 models.yaml 里的组名
 context:
   engine: standard
   standard:
-    maxChars: 32000
+    maxTokens: 32000
 wakeup:
   engine: standard
   standard:

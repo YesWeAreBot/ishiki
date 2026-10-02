@@ -149,7 +149,7 @@ describe("code mode", () => {
       ctx,
       domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" },
       // 装配器要的是 provider：引擎实例得等工具面与提示词定下来才造，这个用例不关心它的上下文。
-      context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
+      context: new StandardContextInstance({ maxTokens: 10_000 }, contextOptions(logger)),
       tools: baseTools,
       extensions: [],
       innerThoughts: false,
@@ -252,7 +252,7 @@ describe("codemode config", () => {
     });
     const config = {
       model: "test:model",
-      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      context: { engine: "standard", standard: { maxTokens: 10_000 } },
       typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
       wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
       codemode: { enable: true },

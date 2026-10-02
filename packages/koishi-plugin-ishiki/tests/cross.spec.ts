@@ -199,7 +199,7 @@ function crossSpecs(
       model: "test:model",
       cross: true,
       claims,
-      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      context: { engine: "standard", standard: { maxTokens: 10_000 } },
       wakeup,
       typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
     },
@@ -212,7 +212,7 @@ function plainSpecs(): ResolvedProfile {
   return resolveProfile(
     {
       model: "test:model",
-      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      context: { engine: "standard", standard: { maxTokens: 10_000 } },
       wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
       typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
       scenes: {
@@ -484,7 +484,7 @@ describe("引擎随生效单位独立", () => {
     const resolved = resolveProfile(
       {
         model: "test:model",
-        context: { engine: "standard", standard: { maxChars: 10_000 } },
+        context: { engine: "standard", standard: { maxTokens: 10_000 } },
         wakeup: { engine: "counting" },
         typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
         scenes: {

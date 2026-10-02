@@ -579,7 +579,7 @@ describe("jev wakeup: 接进场景", () => {
         ctx,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
         // 装配器要的是 provider：实例得等工具面与提示词定下来才造。
-        context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
+        context: new StandardContextInstance({ maxTokens: 10_000 }, contextOptions(logger)),
         tools: {
           send_message: createSendMessage({
             ctx,

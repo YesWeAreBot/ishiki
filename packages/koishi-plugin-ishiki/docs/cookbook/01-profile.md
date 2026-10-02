@@ -37,7 +37,7 @@ failover:
 context:
   engine: standard
   standard:
-    maxChars: 32000
+    maxTokens: 32000
     refillRatio: 0.8
 wakeup:
   engine: standard

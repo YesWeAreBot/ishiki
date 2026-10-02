@@ -226,7 +226,7 @@ describe("v3 wakeup: 轮末回执由场景侧送进来", () => {
         ctx: {} as Context,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
         // 装配器要的是 provider：实例得等工具面与提示词定下来才造。
-        context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
+        context: new StandardContextInstance({ maxTokens: 10_000 }, contextOptions(logger)),
         tools: {},
         extensions: [],
         innerThoughts: false,
@@ -276,7 +276,7 @@ describe("v3 wakeup: 轮末回执由场景侧送进来", () => {
         instructions: "",
         ctx: {} as Context,
         domain: { form: "channel", platform: "onebot", selfId: "1", channelId: "room" },
-        context: new StandardContextInstance({ maxChars: 10_000 }, contextOptions(logger)),
+        context: new StandardContextInstance({ maxTokens: 10_000 }, contextOptions(logger)),
         tools: {},
         extensions: [],
         innerThoughts: false,

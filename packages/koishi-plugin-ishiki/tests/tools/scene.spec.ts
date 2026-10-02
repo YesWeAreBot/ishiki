@@ -174,7 +174,7 @@ describe("tools through a real agent", () => {
 
   const config = {
     model: "test:model",
-    context: { engine: "standard", standard: { maxChars: 10_000 } },
+    context: { engine: "standard", standard: { maxTokens: 10_000 } },
     // 用例不测节奏：打字延迟归零。
     typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
     // 私聊才唤醒：群里的消息只落盘，不起轮次。

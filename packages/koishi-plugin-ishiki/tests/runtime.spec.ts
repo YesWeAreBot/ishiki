@@ -65,7 +65,7 @@ function load(root: string): ProfileRuntime[] {
 
 const config = {
   model: "test:model",
-  context: { engine: "standard", standard: { maxChars: 10_000 } },
+  context: { engine: "standard", standard: { maxTokens: 10_000 } },
   // 不认 @ 也不认引用，于是群里的消息唤不醒它、私聊能。
   wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
   scenes: {
@@ -418,7 +418,7 @@ function makeRuntime(directory: string, model: string, gateway: Gateway, failove
     {
       model,
       ...(failover === undefined ? {} : { failover }),
-      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      context: { engine: "standard", standard: { maxTokens: 10_000 } },
       wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
       scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
     },
