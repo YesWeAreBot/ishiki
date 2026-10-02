@@ -1,0 +1,40 @@
+{
+  "name": "koishi-plugin-ishiki-mcp-client",
+  "version": "0.0.1",
+  "files": [
+    "lib",
+    "resources"
+  ],
+  "main": "./lib/index.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js",
+      "require": "./lib/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0"
+  },
+  "devDependencies": {
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": "workspace:^"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": "workspace:^"
+  },
+  "koishi": {
+    "description": {
+      "zh": "MCP 协议客户端扩展包：把 MCP 服务器的工具接入 ishiki 视窗",
+      "en": "MCP protocol client extension: exposes MCP server tools to ishiki runtimes"
+    }
+  }
+}

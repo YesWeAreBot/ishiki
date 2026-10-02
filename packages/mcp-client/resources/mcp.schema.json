@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/YesWeAreBot/ishiki/packages/mcp-client/resources/mcp.schema.json",
+  "title": "ishiki MCP 配置",
+  "description": "放在 <dataPath>/.mcp.json（基线）或 <dataPath>/profiles/<名字>/mcp.json（替换基线）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "可选的 schema 引用，供编辑器补全与校验。"
+    },
+    "mcpServers": {
+      "type": "object",
+      "description": "服务器名到配置的映射。名字会作为工具名前缀（<服务器名>-<工具名>）。",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/serverConfig"
+      }
+    },
+    "disabledServers": {
+      "type": "array",
+      "description": "禁用名单：列在这里的服务器一律不连，压过其余任何设置。",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "enabledServers": {
+      "type": "array",
+      "description": "启用白名单：强行打开列在这里的服务器，压过 enabled: false 与禁用名单。",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "serverBase": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否连接这个服务器。false 表示完全不连（启用白名单除外）。"
+        },
+        "timeout": {
+          "type": "number",
+          "minimum": 0,
+          "description": "单次请求的超时（毫秒）；0 表示不限。不写则用 SDK 默认。"
+        },
+        "instructions": {
+          "type": "boolean",
+          "default": true,
+          "description": "该服务器用 getInstructions() 声明的说明要不要进系统提示词。false 只关说明，工具照给。"
+        }
+      }
+    },
+    "stdioServer": {
+      "allOf": [
+        { "$ref": "#/$defs/serverBase" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command"],
+          "properties": {
+            "enabled": {},
+            "timeout": {},
+            "instructions": {},
+            "type": { "type": "string", "enum": ["stdio"], "default": "stdio" },
+            "command": { "type": "string", "minLength": 1, "description": "要拉起的可执行文件名。" },
+            "args": { "type": "array", "items": { "type": "string" }, "description": "传给该进程的命令行参数。" },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "该进程的环境变量。只覆盖列出的键，不继承父进程其余环境。"
+            },
+            "cwd": { "type": "string", "description": "拉起进程时的工作目录；不写则继承当前目录。" }
+          },
+          "not": { "required": ["url"] }
+        }
+      ]
+    },
+    "httpServer": {
+      "allOf": [
+        { "$ref": "#/$defs/serverBase" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "url"],
+          "properties": {
+            "enabled": {},
+            "timeout": {},
+            "instructions": {},
+            "type": { "type": "string", "enum": ["http"] },
+            "url": { "type": "string", "minLength": 1, "description": "MCP 端点地址。" },
+            "headers": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "随请求发出的 HTTP 头。"
+            }
+          },
+          "not": { "required": ["command"] }
+        }
+      ]
+    },
+    "sseServer": {
+      "allOf": [
+        { "$ref": "#/$defs/serverBase" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "url"],
+          "properties": {
+            "enabled": {},
+            "timeout": {},
+            "instructions": {},
+            "type": { "type": "string", "enum": ["sse"] },
+            "url": { "type": "string", "minLength": 1, "description": "MCP 端点地址。" },
+            "headers": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "随请求发出的 HTTP 头。"
+            }
+          },
+          "not": { "required": ["command"] }
+        }
+      ]
+    },
+    "serverConfig": {
+      "oneOf": [{ "$ref": "#/$defs/stdioServer" }, { "$ref": "#/$defs/httpServer" }, { "$ref": "#/$defs/sseServer" }]
+    }
+  }
+}

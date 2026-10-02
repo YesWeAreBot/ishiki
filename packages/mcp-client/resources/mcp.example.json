@@ -1,0 +1,35 @@
+{
+  "$schema": "./mcp.schema.json",
+
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": {}
+    },
+
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      },
+      "timeout": 30000,
+      "instructions": true
+    },
+
+    "legacy": {
+      "type": "sse",
+      "url": "https://example.com/sse"
+    },
+
+    "sandbox": {
+      "command": "node",
+      "args": ["./sandbox-mcp.js"],
+      "enabled": false
+    }
+  },
+
+  "disabledServers": [],
+  "enabledServers": []
+}
