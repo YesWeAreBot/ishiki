@@ -4,6 +4,8 @@
 
 概念与设计取舍见 `packages/koishi-plugin-ishiki/docs/cookbook/`，动手改机制前先读 `00-principles.md`。安装与运行见 `packages/koishi-plugin-ishiki/README.md`。
 
+动手前先读 [`LESSONS.md`](./LESSONS.md)：本仓库反复出现、已被明确指出过的问题。
+
 ## 命令
 
 - `bun run test` —— 测试
