@@ -33,8 +33,8 @@ export class NekoTools extends Plugin {
 }
 ```
 
-- 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次 handler，**同步**；异步准备在包的构造期做完。
-- handler 拿到的是已初始化基础字段、尚未创建 `Agent` 的实例。`agent` 本身碰不到，包只能交回一个 `Extension`：`extendTools` / `extendInstructions` 两个钩子，名字与合成规则都照抄 `AgentPlugin` 的同名钩子，区别是内核不缓存——core 每轮第一步取一次，工具面与提示词因此每轮现算。
+- 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次 handler，**同步**；要等的东西放两个钩子里（它们返回 `Awaitable`，内核等着），放构造期就得自己先备好。
+- handler 拿到的是已初始化基础字段、尚未创建 `Agent` 的实例。`agent` 本身碰不到，包只能交回一个 `Extension`：`extendTools` / `extendInstructions` 两个钩子，名字、返回类型（`Awaitable`）与合成规则都照抄 `AgentPlugin` 的同名钩子，区别是内核不缓存——core 每轮第一步取一次，工具面与提示词因此每轮现算。内核按 `extends` 顺序逐个 await：顺序就是拼装顺序，也是撞名的判定顺序。
 - 每频道的过滤归包自己：包看着 `runtime.domain` 决定这档要不要加，用不上就返回 `undefined`，一个字也不必加。
 - 返回值里的 `dispose` 是这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们每轮从钩子现取，随实例一起消失。
 

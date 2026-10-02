@@ -142,6 +142,7 @@ describe("code mode", () => {
     scene = new AgentRuntime({
       label: "test/scene/dm",
       directory,
+      profileDirectory: directory,
       model,
       gateway: {} as Gateway,
       instructions: "",

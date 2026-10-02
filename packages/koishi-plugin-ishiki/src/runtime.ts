@@ -66,6 +66,8 @@ export interface AgentRuntimeConfig {
   label: string;
   /** 该频道的独立目录，存放 `events.jsonl` 及后续的附件。 */
   directory: string;
+  /** 所属 profile 的目录：本频道的 `directory` 是它 `scenes/` 下的一个子目录，profile 级的事实根与人设都在上一层。 */
+  profileDirectory: string;
   model: LanguageModel;
   /** 平台能力与其它 Koishi 服务的入口；扩展包挂载期间经它取用别的服务。 */
   ctx: Context;
@@ -122,6 +124,8 @@ export class AgentRuntime {
   /** 实例标识，用于日志与 agent id。 */
   readonly label: string;
   readonly directory: string;
+  /** 所属 profile 的目录：频道目录的上一层。profile 级配置（如 `mcp.json`）从它定位。 */
+  readonly profileDirectory: string;
   readonly storage: AgentStorage;
   /** 平台能力与其它 Koishi 服务的入口。扩展包挂载期间经它取用别的服务。 */
   readonly ctx: Context;
@@ -143,6 +147,7 @@ export class AgentRuntime {
   constructor(config: AgentRuntimeConfig) {
     this.label = config.label;
     this.directory = config.directory;
+    this.profileDirectory = config.profileDirectory;
     this.ctx = config.ctx;
     this.domain = config.domain;
     this.logger = config.logger;
@@ -197,7 +202,7 @@ export class AgentRuntime {
           extendInstructions: async () => {
             const parts = [config.instructions];
             for (const extension of this.extensions) {
-              const contributed = extension.extendInstructions?.();
+              const contributed = await extension.extendInstructions?.();
               if (contributed !== undefined && contributed.length > 0) parts.push(contributed);
             }
             const extended = (await this.context.instructions?.()) ?? "";
@@ -206,11 +211,11 @@ export class AgentRuntime {
           },
           // 工具面每轮现算：内核工具 → 扩展增量（按 extends 顺序，与内核工具或先装的包撞名抛错）
           // → innerThoughts 前置 → 代码模式收窄。core 每轮第一步来取一次，这里不缓存；
-          // 跨轮稳定由包自己在钩子里保证。
-          extendTools: () => {
+          // 跨轮稳定由包自己在钩子里保证。逐个 await：顺序就是拼装顺序，也是撞名的判定顺序。
+          extendTools: async () => {
             const merged: ToolSet = { ...config.tools };
             for (const extension of this.extensions) {
-              const contributed = extension.extendTools?.();
+              const contributed = await extension.extendTools?.();
               if (contributed === undefined) continue;
               for (const [name, tool] of Object.entries(contributed)) {
                 if (name in merged) throw new ToolConflictError(name);
@@ -513,7 +518,9 @@ export class PresetRuntime {
     // 扩展包按 preset 配置里的书写顺序挂到这一个实例上。取不到服务只有一种可能：这条 fiber 已经
     // 把它声明为依赖，装配次序错了，或服务卸载后旧引用还在用。抛错，不静默跳过。
     const extensions = Object.entries(this.extensions).map(([pkg, config]) => {
-      const handler = this.ctx.ishiki.getExtension(pkg);
+      // 这里的 `this.ctx` 是 Ishiki 插件自己的 ctx，它的 inject 链里没有 `ishiki`（就是它提供的），
+      // 属性访问 `ctx.ishiki` 因此每次都被 cordis 记一条 not-registered 警告。取法与同类处一致：走 `ctx.get`。
+      const handler = this.ctx.get("ishiki")?.getExtension(pkg);
       if (handler === undefined) throw new Error(`extension service "ishiki.ext.${pkg}" is not available`);
       return { handler, config };
     });
@@ -559,6 +566,7 @@ export class PresetRuntime {
     const scene = new AgentRuntime({
       label: cross ? `${spec.profile}/${spec.name}` : `${spec.profile}/${spec.name}/${channelId}`,
       directory,
+      profileDirectory: this.directory,
       model,
       // 聚合形态把可达地址清单拼进 instructions：坐标不进工具 schema（每个工具都挂一份会让工具目录膨胀），
       // 模型的出发点只有系统提示与事实行上的寻址头。非聚合形态照旧不带地址簿。

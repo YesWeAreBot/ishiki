@@ -1,4 +1,12 @@
-import type { LanguageModelV4Content, LanguageModelV4FunctionTool, LanguageModelV4StreamPart, LanguageModelV4ToolCall, ToolResultPart } from "@yesimagent/core";
+import type {
+  FileData,
+  LanguageModelV4Content,
+  LanguageModelV4FilePart,
+  LanguageModelV4FunctionTool,
+  LanguageModelV4StreamPart,
+  LanguageModelV4ToolCall,
+  ToolResultPart,
+} from "@yesimagent/core";
 import type { Context } from "koishi";
 
 import { ToolcallEngine, ToolcallEngineInstance } from "./engine.js";
@@ -140,14 +148,34 @@ export function observationBlock(toolName: string, output: ToolResultPart["outpu
       result = `(denied)${output.reason === undefined ? "" : ` ${output.reason}`}`;
       break;
     default:
-      result = output.value
-        .filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("\n");
+      // 媒体不带字节：这一份是纯文本渲染面（`context.v3` 把整段窗口压成一行文字，字节无处安放），
+      // 只留一行说明让模型知道有这张图。带字节的那条路在 {@link v3ToolResponse}。
+      result = output.value.map((part) => (part.type === "text" ? part.text : part.type === "file" ? mediaNote(part) : `[${part.type}]`)).join("\n");
       break;
   }
 
   return `<observation>\n  ${tag("function", toolName)}\n  ${tag("status", status)}\n  <result>${result}</result>\n</observation>`;
+}
+
+/** 纯文本面上一件媒体的说明行：只报类型与大小，不报数据。 */
+function mediaNote(part: { mediaType: string; data: FileData }): string {
+  if (part.data.type !== "data") return `[${part.mediaType}]`;
+  const raw = part.data.data;
+  const bytes = typeof raw === "string" ? Buffer.from(raw, "base64").byteLength : raw.byteLength;
+  return `[${part.mediaType} ${bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${bytes} B`}]`;
+}
+
+/**
+ * 工具结果里的 `file` 部件转成提示词面的 `file` 部件。
+ *
+ * 两边的字节类型不同：结果面的 `FileDataData` 收下 `ArrayBuffer`，提示词面只收
+ * `Uint8Array` 或 base64 串。`ArrayBuffer` 在这里落成 `Uint8Array`；其余分支两边同形，原样带走。
+ */
+function filePart(part: { mediaType: string; filename?: string; data: FileData }): LanguageModelV4FilePart {
+  const base = { type: "file" as const, mediaType: part.mediaType, filename: part.filename };
+  if (part.data.type !== "data") return { ...base, data: part.data };
+  const raw = part.data.data;
+  return { ...base, data: { type: "data", data: raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw } };
 }
 
 /** 从契约对象的 `actions` 数组提取合法调用；未登记的名字在此处丢弃。 */
@@ -185,7 +213,13 @@ function v3Content(
 
 /** 工具结果的模板面：v3 的 `<observation>`。 */
 export function v3ToolResponse(toolResult: ToolResultPart): ToolResponsePromptTemplateResult {
-  return observationBlock(toolResult.toolName, toolResult.output);
+  // 媒体以 `file` 部件原样交给模型，不经文本面：ai SDK 与各解析协议都按部件投递，
+  // 在这里把它写成文字就等于把图片丢一次。文本段仍是 v3 的 `<observation>` 形状。
+  const text = observationBlock(toolResult.toolName, toolResult.output);
+  if (toolResult.output.type !== "content") return text;
+  const files = toolResult.output.value.filter((part) => part.type === "file").map(filePart);
+  if (files.length === 0) return text;
+  return [{ type: "text", text }, ...files];
 }
 
 /**

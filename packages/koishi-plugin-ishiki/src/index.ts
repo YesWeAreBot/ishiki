@@ -5,30 +5,36 @@ import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gat
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
 
-import { V3ContextEngine, StandardContextEngine } from "./context/index.js";
+import { StandardContextEngine, V3ContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import { type Extension, type ExtensionHandler } from "./extension.js";
 import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
-  V3ToolcallEngine,
   HermesToolcallEngine,
   MorphXmlToolcallEngine,
   NativeToolcallEngine,
   Qwen3CoderToolcallEngine,
+  V3ToolcallEngine,
   YamlXmlToolcallEngine,
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import { loadCodemode } from "./tools/codemode.js";
-import { V3WakeupEngine, JevWakeupEngine, StandardWakeupEngine } from "./wakeup/index.js";
+import { JevWakeupEngine, StandardWakeupEngine, V3WakeupEngine } from "./wakeup/index.js";
 
 class Ishiki extends Service<Ishiki.Config> {
   static name = "ishiki";
   static inject = [];
 
   public logger: Logger;
+  /**
+   * 数据根的绝对路径，即配置里 `dataPath` 相对 `baseDir` 解析后的结果。
+   *
+   * 扩展包按这层目录布局定位自己的文件（profile 目录、基线配置都在它下面），
+   * 所以对外只给这一份：让每个包各自配一次路径，那份迟早与内核的这一份对不上。
+   */
+  public readonly dataPath: string;
 
-  private readonly dataRoot: string;
   private readonly gateway: Gateway;
   private readonly handler = new StandardHandler();
   private readonly profiles: runtime.ProfileRuntime[] = [];
@@ -39,8 +45,8 @@ class Ishiki extends Service<Ishiki.Config> {
     this.logger = ctx.logger("ishiki");
     this.logger.level = config.logLevel;
 
-    this.dataRoot = path.resolve(ctx.baseDir, config.dataPath);
-    const modelConfigFile = path.resolve(this.dataRoot, "models.yaml");
+    this.dataPath = path.resolve(ctx.baseDir, config.dataPath);
+    const modelConfigFile = path.resolve(this.dataPath, "models.yaml");
     if (!existsSync(modelConfigFile)) {
       this.logger.warn(`Model config file not found: ${modelConfigFile}, creating an empty one.`);
       mkdirSync(path.dirname(modelConfigFile), { recursive: true });
@@ -49,7 +55,7 @@ class Ishiki extends Service<Ishiki.Config> {
     const modelConfig = (parse(readFileSync(modelConfigFile, "utf-8")) as GatewayConfig) ?? {};
     this.gateway = createGateway({
       config: modelConfig,
-      fetch: this.config.dumpRequests ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataRoot, "requests") }) : undefined,
+      fetch: this.config.dumpRequests ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataPath, "requests") }) : undefined,
     });
 
     // 内置引擎变体：一个变体一个 provider Service，构造即登记，服务名即准入。
@@ -83,7 +89,7 @@ class Ishiki extends Service<Ishiki.Config> {
 
   /** 装载：先备好工具调用解析库，再展开每个 profile 的工厂。实例本身按需诞生。 */
   private async load(): Promise<void> {
-    const profilesRoot = path.resolve(this.dataRoot, "profiles");
+    const profilesRoot = path.resolve(this.dataPath, "profiles");
     if (!existsSync(profilesRoot)) {
       this.logger.warn(`Profiles directory not found: ${profilesRoot}`);
       return;
@@ -193,6 +199,9 @@ declare module "koishi" {
 
 // 社区包需要的东西：扩展挂载面、运行体契约，以及 `declare module` 增强用的参数表接口。
 // 扩展走 `ctx.ishiki.provide(name, handler)`；引擎走继承 provider 基类，服务名由基类的静态 `GetName` 给出。
+// core 的数据面在这里整体重导出：社区包要的 `ToolSet` / `ToolResultOutput` / `jsonSchema` / `tool` 全在那里，
+// 逐个转发既漏得出来也记不全，索性让一个入口说完。core 的版本由本包的依赖锁住。
+export * from "@yesimagent/core";
 export { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
 export type { ClaimedAccount, InstanceDomain } from "./domain.js";
 export { type Extension, type ExtensionHandler } from "./extension.js";

@@ -1,4 +1,4 @@
-import type { ToolSet } from "@yesimagent/core";
+import type { Awaitable, ToolSet } from "@yesimagent/core";
 
 import type { AgentRuntime } from "./runtime.js";
 
@@ -17,18 +17,19 @@ declare module "koishi" {
 /**
  * 扩展包在一个 AgentRuntime 上贡献的东西：core 那两个加法钩子的子集。
  *
- * 名字、合成规则与调用方向都照抄 `AgentPlugin` 的同名钩子——包实现、内核调用，工具增量并入工具面并与
- * 内核工具或先装配的包撞名抛错，提示词增量按 `extends` 的顺序拼接。差别只在位置：内核不缓存结果，
- * core 每轮第一步取一次，工具面与提示词因此每轮现算，跨轮稳定由包自己在闭包里保证。
+ * 名字、返回类型（`Awaitable`）、合成规则与调用方向都照抄 `AgentPlugin` 的同名钩子——包实现、内核调用，
+ * 工具增量并入工具面并与内核工具或先装配的包撞名抛错，提示词增量按 `extends` 的顺序拼接。逐个 await 而不是
+ * 并发取：顺序就是撞名的判定顺序。差别只在位置：内核不缓存结果，core 每轮第一步取一次，工具面与提示词
+ * 因此每轮现算，跨轮稳定由包自己在闭包里保证。
  *
  * 其余钩子不在这里。`onStepFinish` / `prepareStep` / `beforeToolCall` / `toModelMessages` 是唯一决策式
  * 或改写式，放进来就是上一代按优先级抢拦截权的复辟；要那类变化就做成引擎变体。
  */
 export interface Extension {
   /** 本实例这一轮的工具增量；缺席表示这一轮不加。 */
-  extendTools?(): ToolSet | void;
+  extendTools?(): Awaitable<ToolSet | void>;
   /** 本实例这一轮的提示词增量，接在内核那一段之后；缺席表示这一轮不加。 */
-  extendInstructions?(): string | void;
+  extendInstructions?(): Awaitable<string | void>;
   /** 这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们每轮从钩子现取。 */
   dispose?(): void | Promise<void>;
 }
