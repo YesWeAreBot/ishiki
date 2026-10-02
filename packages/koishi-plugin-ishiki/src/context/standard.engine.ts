@@ -17,13 +17,13 @@ export interface IshikiCompact {
 }
 
 /** 未配置时的字符预算上限；显式写 0 表示只线性增长、不压缩。 */
-const DEFAULT_CONTEXT_CHARS = 24_000;
+const DEFAULT_CONTEXT_CHARS = 32_000;
 
 export interface StandardContextConfig {
   model?: string;
-  /** 单轮模型输入的文本上限（字符数）；超出时最旧的一段退出模型视野，交给后台并入摘要。 */
+  /** 单轮模型输入的文本上限（字符数）；超出时最旧的几轮退出模型视野，交给后台并入摘要。 */
   maxChars: number;
-  /** 装配留下的水位比例。0.8 表示压到 `maxChars * 0.8`，为后续轮次留出余量。 */
+  /** 首选水位比例。0.8 表示尽量压到 `maxChars * 0.8`；裁剪粒度是一整轮，跨过水位的那一轮仍会留下。 */
   refillRatio?: number;
 }
 
@@ -163,34 +163,64 @@ function lastCompact(entries: readonly AgentEntry[]): AgentEntry<"ishiki.compact
   return undefined;
 }
 
-/**
- * 切点：让「摘要头 + 切点之后的可见行」落进 `target` 以内的最小位置，返回它在 `tail` 里的下标。
- * 切点必须落在 user / custom 行上：截断 tool call / tool result 配对会被提供商拒绝，所以工具轨迹整段留在切点之后。
- * 没有这样的点返回 -1。
- */
-function findCut(tail: readonly AgentEntry[], head: number, target: number, domain?: InstanceDomain): number {
-  let suffix = 0;
-  for (const entry of tail) {
-    if (entry.type === "message") suffix += renderText(entry.data, domain).length;
-  }
-
+/** 流里的轮边界下标：core 在每轮开始写一条 `turn.start` 事件条目。 */
+function turnStarts(tail: readonly AgentEntry[]): number[] {
+  const starts: number[] = [];
   for (let at = 0; at < tail.length; at += 1) {
     const entry = tail[at];
-    if (!(entry.type === "message")) continue;
-    if ((entry.data.role === "user" || entry.data.role === "custom") && head + suffix <= target) return at;
-    suffix -= renderText(entry.data, domain).length;
+    if (entry.type === "event" && entry.data.type === "turn.start") starts.push(at);
+  }
+  return starts;
+}
+
+/**
+ * 切点：以轮为单位，从最新一轮往前整轮纳入，返回保留段在 `tail` 里的下标。
+ *
+ * 按轮而不是按行。一轮被切掉半截，模型会看见自己没做完的动作和没有出处的工具结果；而按行的
+ * 「能容纳的最大后缀」规则下，单条大消息就能把窗口顶到只剩最新一行——上一整轮就此消失，
+ * 摘要却还停在上上次压缩的水位。轮边界天然不含半个 tool 配对，于是也不必再避开工具轨迹。
+ *
+ * 预算分两档：`target` 是首选水位，`ceiling` 是硬上限。粒度是一整轮，所以允许跨过水位的那一轮
+ * 整轮留下（不越过 `ceiling`），再往前的轮次一律不纳入；最新一轮无论多大都留下，预算在这里是软的。
+ * 流里没有轮边界时返回 0（整段放行）：没有边界就没有安全的切点。
+ */
+function findCut(tail: readonly AgentEntry[], head: number, target: number, ceiling: number, domain?: InstanceDomain): number {
+  const starts = turnStarts(tail);
+  if (starts.length === 0) return 0;
+
+  // 每一段的可见字符数：段 = 一个轮边界到下一个轮边界，最后一段到流尾。
+  const segments: number[] = [];
+  for (let index = 0; index < starts.length; index += 1) {
+    const to = index + 1 < starts.length ? starts[index + 1] : tail.length;
+    let size = 0;
+    for (let at = starts[index]; at < to; at += 1) {
+      const entry = tail[at];
+      if (entry.type === "message") size += renderText(entry.data, domain).length;
+    }
+    segments.push(size);
   }
 
-  return -1;
+  let picked = segments.length - 1;
+  let size = head + segments[picked];
+  for (let index = segments.length - 2; index >= 0; index -= 1) {
+    size += segments[index];
+    if (size > ceiling) break;
+    picked = index;
+    if (size > target) break;
+  }
+  return starts[picked];
 }
 
 /**
  * 线性增长 + 空闲压缩，两条轨道各自独立：
  *
- * - 前台 `prepareEntries` 只做同步裁剪：预算内原样交给模型，超预算就把最旧的可见行切出模型视野。
- *   这一步不调模型，任何一轮的附加延迟都是零。
- * - 后台 `finishTurn` 在一轮结束之后，把上次切掉的那段并进摘要，水位以 `ishiki.compact`
+ * - 前台 `prepareEntries` 只做同步裁剪：预算内原样交给模型，超预算就把最旧的几轮切出模型视野，
+ *   并把切到哪一条记在 `hidden` 上。这一步不调模型，任何一轮的附加延迟都是零。
+ * - 后台 `finishTurn` 在一轮结束之后，把 `hidden` 记下的那段并进摘要，水位以 `ishiki.compact`
  *   条目追加到流中。压缩成功前聊天照常进行；压缩失败不影响本轮，下一轮结束再试。
+ *
+ * 切点只在前台算一次。后台读到的流比前台长（本轮自己的产出已经落盘），同一个预算重算只会得出更晚
+ * 或根本不存在的切点，前台已经藏起来的那段就永远进不了摘要——这里以「前台决定、后台照搬」换掉那种重算。
  *
  * 除压缩成功时追加的那一条 compact 外，本引擎只读不写。
  */
@@ -205,6 +235,8 @@ export class StandardContextInstance implements ContextEngineInstance {
   private readonly target: number;
   /** 上一次装配是否超预算：后台压缩的触发条件。 */
   private over = false;
+  /** 上一次装配切到哪一条（被切掉的最后一条条目）：后台照此折叠，不重算切点。 */
+  private hidden?: string;
   private compacting?: Promise<void>;
   private abort?: AbortController;
 
@@ -240,17 +272,23 @@ export class StandardContextInstance implements ContextEngineInstance {
     };
   }
 
+  /**
+   * 摘要与水位之后的尾部。水位按 `lastEntryId` 找条目，不按 `ishiki.compact` 的物理落点：
+   * 压缩条目永远追加在流尾，而它记的那一段在流的中段。
+   */
+  private window(entries: readonly AgentEntry[]): { summary?: string; tail: readonly AgentEntry[]; head: string } {
+    const compact = lastCompact(entries);
+    const anchor = compact === undefined ? -1 : entries.findIndex((entry) => entry.id === compact.data.lastEntryId);
+    if (compact !== undefined && anchor < 0) this.logger?.warn(`memory anchor ${compact.data.lastEntryId} not found in stream, memory ignored`);
+    if (compact === undefined || anchor < 0) return { tail: entries, head: "" };
+    return { summary: compact.data.summary, tail: entries.slice(anchor + 1), head: `${MEMORY_HEAD}\n${compact.data.summary}` };
+  }
+
   /** 前台：只裁窗口，不调模型。 */
   prepareEntries(entries: readonly AgentEntry[]) {
     if (this.ceiling === 0) return entries;
 
-    const compact = lastCompact(entries);
-    const anchor = compact === undefined ? -1 : entries.findIndex((entry) => entry.id === compact.data.lastEntryId);
-    if (compact !== undefined && anchor < 0) this.logger?.warn(`memory anchor ${compact.data.lastEntryId} not found in stream, memory ignored`);
-
-    const memory = anchor < 0 ? undefined : compact;
-    const tail = memory === undefined ? entries : entries.slice(anchor + 1);
-    const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
+    const { tail, head } = this.window(entries);
 
     let size = head.length;
     for (const entry of tail) {
@@ -262,11 +300,13 @@ export class StandardContextInstance implements ContextEngineInstance {
     }
 
     this.over = true;
-    const cut = findCut(tail, head.length, this.target, this.domain);
-    if (cut < 0) {
-      this.logger?.warn("context over budget with no valid cut point, entries passed through");
+    const cut = findCut(tail, head.length, this.target, this.ceiling, this.domain);
+    if (cut === 0) {
+      this.logger?.warn("context over budget with no turn boundary, entries passed through");
       return this.prepend(head, [...tail]);
     }
+    // 记在被切掉的最后一条上：下一次装配从它之后取窗口，后台也折叠到它。
+    this.hidden = tail[cut - 1].id;
     return this.prepend(head, tail.slice(cut));
   }
 
@@ -287,37 +327,49 @@ export class StandardContextInstance implements ContextEngineInstance {
     await this.compacting;
   }
 
-  /** 把切掉的一段并入摘要，水位以 compact 条目追加到流中。全程在后台，失败只记一条日志。 */
+  /** 把前台切掉的那一段并入摘要，水位以 compact 条目追加到流中。全程在后台，失败只记一条日志。 */
   private async compact(): Promise<void> {
     const agent = this.agent;
     if (agent === undefined) return;
 
-    const entries = await agent.storage.read();
-    const compact = lastCompact(entries);
-    const anchor = compact === undefined ? -1 : entries.findIndex((entry) => entry.id === compact.data.lastEntryId);
-
-    const memory = anchor < 0 ? undefined : compact;
-    const tail = memory === undefined ? entries : entries.slice(anchor + 1);
-    const head = memory === undefined ? "" : `${MEMORY_HEAD}\n${memory.data.summary}`;
-
-    const cut = findCut(tail, head.length, this.target, this.domain);
-    const dropped = cut > 0 ? tail.slice(0, cut).filter((e) => e.type === "message") : [];
-    if (dropped.length === 0) {
-      // 没有可切的点，或切出来没有可见行：等下一次装配重新判定。
+    const through = this.hidden;
+    if (through === undefined) {
+      // 前台这一轮没切任何东西：没有要并入摘要的段落。
       this.over = false;
+      return;
+    }
+
+    const { summary: previous, tail } = this.window(await agent.storage.read());
+    const end = tail.findIndex((entry) => entry.id === through);
+    if (end < 0) {
+      this.logger?.warn(`hidden range ${through} left the stream, compaction skipped`);
+      this.over = false;
+      this.hidden = undefined;
+      return;
+    }
+    const dropped = tail.slice(0, end + 1).filter((entry): entry is AgentEntry<"message"> => entry.type === "message");
+    if (dropped.length === 0) {
+      // 切出去的全是事件条目：摘要没有可记的东西，只把水位推过去。
+      await agent.storage.append(createEntry("ishiki.compact", { summary: previous ?? "", lastEntryId: through }));
+      this.over = false;
+      this.hidden = undefined;
       return;
     }
 
     const abort = new AbortController();
     this.abort = abort;
     try {
-      const summary = await this.summarize(memory?.data.summary, dropped, abort.signal);
-      // 失败就留着 `over`，下一轮结束再试；本轮与后续轮次照常跑。
+      const summary = await this.summarize(previous, dropped, abort.signal);
+      // 失败就留着 `over` 与 `hidden`，下一轮结束再试；本轮与后续轮次照常跑。
       // 停止之后才回来的摘要一律丢掉：这条流已经不属于任何活着的实例了。
       if (summary === undefined || abort.signal.aborted) return;
       // 直接写入存储：该条目是关于流的元数据，不经过 onAppend 的条目处理。
-      await agent.storage.append(createEntry("ishiki.compact", { summary, lastEntryId: dropped[dropped.length - 1].id }));
-      this.over = false;
+      await agent.storage.append(createEntry("ishiki.compact", { summary, lastEntryId: through }));
+      // 这一轮又切了更远的一段（压缩在跑时流里已出现新内容）：留着它，下一轮结束接着折。
+      if (this.hidden === through) {
+        this.hidden = undefined;
+        this.over = false;
+      }
     } finally {
       if (this.abort === abort) this.abort = undefined;
     }

@@ -88,6 +88,16 @@ function entry(id: string, data: AgentMessage): AgentEntry {
   return createEntry("message", data, { id });
 }
 
+/** 一轮：core 在轮首写一条 `turn.start` 事件，之后才是这一轮的消息。 */
+function turn(id: string, ...messages: AgentMessage[]): AgentEntry[] {
+  return [createEntry("event", { type: "turn.start", turnId: id }, { id: `t-${id}` }), ...messages.map((data, index) => entry(`e-${id}-${index}`, data))];
+}
+
+/** 一条很长的工具结果：把某一轮顶大，用来验证裁剪不看单条消息大小。 */
+function tool(id: string, length: number): AgentMessage {
+  return createToolMessage([{ type: "tool-result", toolCallId: id, toolName: "peek", output: { type: "text", value: "y".repeat(length) } }]);
+}
+
 function compacts(entries: readonly AgentEntry[]): Array<AgentEntry<"ishiki.compact">> {
   return entries.filter((item): item is AgentEntry<"ishiki.compact"> => item.type === "ishiki.compact");
 }
@@ -233,13 +243,14 @@ describe("standard context engine", () => {
     expect(compacts(await storage.read())).toHaveLength(0);
   });
 
-  it("trims the oldest lines in the foreground, then folds them into a memory line once the turn ends", async () => {
+  it("trims whole turns in the foreground, then folds exactly that range into a memory line once the turn ends", async () => {
     const storage = createMemoryStorage();
     const engine = new StandardContextInstance({ maxChars: 300, refillRatio: 0.8 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记住：她在准备搬家"));
     engine.attach(agent);
 
-    const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
+    // 四轮，每轮两条 ~110 字符的可见行：预算 300 只装得下最新一轮
+    const entries = ["a", "b", "c", "d"].flatMap((id) => turn(id, message(`${id}1`), message(`${id}2`)));
     storage.append(...entries);
 
     // 前台：裁剪是同步的，不问模型，也不写流
@@ -249,7 +260,11 @@ describe("standard context engine", () => {
     expect(out.length).toBeLessThan(entries.length);
     expect(compacts(await storage.read())).toHaveLength(0);
 
-    // 后台：一轮结束后并入摘要
+    // 切点落在轮边界上：保留段从一轮的 turn.start 起，整轮进、整轮出
+    const first = entries.findIndex((item) => item.id === "t-d");
+    expect(out.map((item) => item.id)).toEqual(entries.slice(first).map((item) => item.id));
+
+    // 后台：一轮结束后并入摘要，水位停在被切掉的最后一条
     await agent.endTurn();
     await engine.settle();
 
@@ -257,26 +272,81 @@ describe("standard context engine", () => {
     expect(written).toHaveLength(1);
     expect(written[0].data.summary).toBe("记住：她在准备搬家");
     expect(calls.count).toBe(1);
+    // 水位是 id 语义：它指向保留段的前一条，而不是 compact 条目的物理落点
+    expect(written[0].data.lastEntryId).toBe(entries[first - 1].id);
 
-    const kept = out.filter((item) => item.type === "message" && item.id.startsWith("e-")).map((item) => item.id);
-    expect(kept.length).toBeGreaterThan(0);
-    expect(kept).toEqual(entries.slice(entries.length - kept.length).map((item) => item.id));
-
-    // 水位停在被裁掉的最后一条；切点落在行上，不落在工具轨迹中间
-    const anchor = entries.findIndex((item) => item.id === kept[0]);
-    expect(written[0].data.lastEntryId).toBe(entries[anchor - 1].id);
-    const first = out.find((item) => item.id === kept[0]);
-    expect(first?.type === "message" && ["user", "custom"]).toContain(first?.type === "message" ? first.data.role : "");
-
-    // 第二次装配：水位生效，记忆开在最前，且不再压缩
+    // 第二次装配：水位生效，记忆开在最前，保留段一字不差，且不再压缩
     const again = await engine.prepareEntries([...(await storage.read())]);
     expect(again[0].type === "message" ? userText(again[0].data) : "").toContain("记住：她在准备搬家");
-    expect(again.filter((item) => item.type === "message" && item.id.startsWith("e-")).map((item) => item.id)).toEqual(kept);
+    // 尾部会捎上后写的 compact 条目（它不是消息，core 会滤掉），其余与保留段逐条相同
+    expect(
+      again
+        .slice(1)
+        .filter((item) => item.type !== "ishiki.compact")
+        .map((item) => item.id),
+    ).toEqual(entries.slice(first).map((item) => item.id));
 
     await agent.endTurn();
     await engine.settle();
     expect(compacts(await storage.read())).toHaveLength(1);
     expect(calls.count).toBe(1);
+  });
+
+  it("keeps the previous whole turn when the watermark alone is exceeded", async () => {
+    const storage = createMemoryStorage();
+    // 水位 = 400 * 0.5 = 200，硬上限 400：两轮合计 ~222，跨过水位但没到上限
+    const engine = new StandardContextInstance({ maxChars: 400, refillRatio: 0.5 }, contextOptions(logger));
+    const agent = fakeAgent(storage, mockModel("记忆"));
+    engine.attach(agent);
+
+    // 四轮各一条消息：切到只剩最新一轮会丢掉上一轮，而上一轮装得进硬上限
+    const entries = ["o", "p", "q", "r"].flatMap((id) => turn(id, message(`${id}0`)));
+    storage.append(...entries);
+
+    calls.count = 0;
+    const out = await engine.prepareEntries([...(await storage.read())]);
+    expect(calls.count).toBe(0);
+
+    // 保留的是最新两轮。按行取「能装下的最大后缀」时这里只剩最新一条消息
+    const first = entries.findIndex((item) => item.id === "t-q");
+    expect(out.map((item) => item.id)).toEqual(entries.slice(first).map((item) => item.id));
+
+    await agent.endTurn();
+    await engine.settle();
+    const written = compacts(await storage.read());
+    expect(written).toHaveLength(1);
+    expect(written[0].data.lastEntryId).toBe(entries[first - 1].id);
+  });
+
+  it("folds the range it hid even after the turn grew the stream past the cut", async () => {
+    const storage = createMemoryStorage();
+    const engine = new StandardContextInstance({ maxChars: 300 }, contextOptions(logger));
+    const agent = fakeAgent(storage, mockModel("记住：她换了头像"));
+    engine.attach(agent);
+
+    const entries = ["a", "b", "c"].flatMap((id) => turn(id, message(`${id}1`), message(`${id}2`)));
+    storage.append(...entries);
+
+    // 前台决定切点：保留最新一轮，切掉前两轮
+    await engine.prepareEntries([...(await storage.read())]);
+
+    // 本轮随后产出新消息，末尾是工具结果：后台若按同一预算重算，已经找不到可切的点了
+    storage.append(
+      createEntry("event", { type: "turn.start", turnId: "now" }, { id: "t-now" }),
+      entry("e-now-0", message("now0")),
+      entry("e-now-1", tool("now-1", 200)),
+      entry("e-now-2", tool("now-2", 200)),
+    );
+
+    calls.count = 0;
+    await agent.endTurn();
+    await engine.settle();
+
+    const written = compacts(await storage.read());
+    expect(written).toHaveLength(1);
+    expect(calls.count).toBe(1);
+    expect(written[0].data.summary).toBe("记住：她换了头像");
+    expect(written[0].data.lastEntryId).toBe("e-b-1");
   });
 
   it("keeps trimming while the summary call fails, and retries on the next turn", async () => {
@@ -285,7 +355,7 @@ describe("standard context engine", () => {
     const agent = fakeAgent(storage, mockModel("", true));
     engine.attach(agent);
 
-    const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
+    const entries = ["a", "b", "c"].flatMap((id) => turn(id, message(`${id}1`), message(`${id}2`)));
     storage.append(...entries);
 
     calls.count = 0;
@@ -293,7 +363,7 @@ describe("standard context engine", () => {
     expect(first.length).toBeLessThan(entries.length);
     expect(calls.count).toBe(0);
 
-    // 压缩失败：不留水位，也不影响这一轮
+    // 压缩失败：水位不前进，也不影响这一轮
     await agent.endTurn();
     await engine.settle();
     expect(calls.count).toBe(1);
@@ -314,7 +384,7 @@ describe("standard context engine", () => {
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
-    const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
+    const entries = ["a", "b", "c"].flatMap((id) => turn(id, message(`${id}1`), message(`${id}2`)));
     storage.append(...entries);
 
     calls.count = 0;
@@ -327,15 +397,13 @@ describe("standard context engine", () => {
     expect(compacts(await storage.read())).toHaveLength(1);
   });
 
-  it("passes everything through when no line boundary is available", async () => {
+  it("passes everything through when no turn boundary is available", async () => {
     const storage = createMemoryStorage();
     const engine = new StandardContextInstance({ maxChars: 80 }, contextOptions(logger));
     const agent = fakeAgent(storage, mockModel("记忆"));
     engine.attach(agent);
 
-    const tools = ["a", "b", "c", "d"].map((id) =>
-      entry(`t-${id}`, createToolMessage([{ type: "tool-result", toolCallId: id, toolName: "peek", output: { type: "text", value: "y".repeat(80) } }])),
-    );
+    const tools = ["a", "b", "c", "d"].map((id) => entry(`t-${id}`, tool(id, 80)));
     storage.append(...tools);
 
     const out = await engine.prepareEntries([...(await storage.read())]);
@@ -401,7 +469,7 @@ describe("standard context engine", () => {
     const agent = fakeAgent(storage, held);
     const detach = engine.attach(agent);
 
-    const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(`e-${id}`, message(id)));
+    const entries = ["a", "b", "c"].flatMap((id) => turn(id, message(`${id}1`), message(`${id}2`)));
     storage.append(...entries);
 
     calls.count = 0;
