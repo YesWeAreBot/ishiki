@@ -22,7 +22,16 @@ import { ContextEngine, type ContextEngineInstance, type ContextEngines } from "
 import { claimLines, type InstanceDomain } from "./domain.js";
 import { type Extension, type ExtensionHandler } from "./extension.js";
 import { FailoverModel } from "./failover.js";
-import { engineParams, matchSceneSpec, resolveProfile, sceneDirectoryName, type CodemodeConfig, type ResolvedPreset, type SceneSpec } from "./profile.js";
+import {
+  assertNoOverlap,
+  CROSS_KEY,
+  engineParams,
+  matchSceneSpec,
+  resolveProfile,
+  sceneDirectoryName,
+  type CodemodeConfig,
+  type SceneSpec,
+} from "./profile.js";
 import { ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
 import { CODE_MODE, createCodemode } from "./tools/codemode.js";
 import { createFinish } from "./tools/finish.js";
@@ -51,7 +60,7 @@ function resourcePath(...segments: string[]): string {
 }
 
 /**
- * 从 Service 取引擎 provider。preset 的 fiber 已把这些服务声明为依赖，取不到只有一种可能：
+ * 从 Service 取引擎 provider。profile 的 fiber 已把这些服务声明为依赖，取不到只有一种可能：
  * 装配次序错了（instances 先于服务诞生，或服务被卸载后旧引用还在用）。抛错而不回退到内置实现。
  */
 function engineProvider<T>(ctx: Context, service: string): T {
@@ -64,10 +73,10 @@ function engineProvider<T>(ctx: Context, service: string): T {
 export interface AgentRuntimeConfig {
   /** 实例标识，用于日志与 agent id。 */
   label: string;
-  /** 该频道的独立目录，存放 `events.jsonl` 及后续的附件。 */
-  directory: string;
-  /** 所属 profile 的目录：本频道的 `directory` 是它 `scenes/` 下的一个子目录，profile 级的事实根与人设都在上一层。 */
-  profileDirectory: string;
+  /** 本实例的数据目录，`events.jsonl` 及后续的附件都在里面。 */
+  home: string;
+  /** 所属 profile 的目录：`profile.yaml` 与人设都在这一层，`home` 是它的下属。 */
+  root: string;
   model: LanguageModel;
   /** 平台能力与其它 Koishi 服务的入口；扩展包挂载期间经它取用别的服务。 */
   ctx: Context;
@@ -81,7 +90,7 @@ export interface AgentRuntimeConfig {
   /** 内核工具面（`send_message` 与 `finish`）。扩展包的增量每轮加在它之上。 */
   tools: ToolSet;
   /**
-   * 本实例启用的扩展包，按 preset 配置里的书写顺序。包名到 handler 的解析由所属生效单位完成，
+   * 本实例启用的扩展包，按 profile 配置里的书写顺序。包名到 handler 的解析由所属生效单位完成，
    * 这里只按顺序各叫一次这个 handler。
    */
   extensions: Array<{ handler: ExtensionHandler; config: unknown }>;
@@ -123,9 +132,10 @@ const SEND_MESSAGE_TOOL = "send_message";
 export class AgentRuntime {
   /** 实例标识，用于日志与 agent id。 */
   readonly label: string;
-  readonly directory: string;
-  /** 所属 profile 的目录：频道目录的上一层。profile 级配置（如 `mcp.json`）从它定位。 */
-  readonly profileDirectory: string;
+  /** 本实例的数据目录，`events.jsonl` 在里面。 */
+  readonly home: string;
+  /** 所属 profile 的目录：`profile.yaml` 与 profile 级配置（如 `mcp.json`）从它定位。 */
+  readonly root: string;
   readonly storage: AgentStorage;
   /** 平台能力与其它 Koishi 服务的入口。扩展包挂载期间经它取用别的服务。 */
   readonly ctx: Context;
@@ -146,22 +156,22 @@ export class AgentRuntime {
 
   constructor(config: AgentRuntimeConfig) {
     this.label = config.label;
-    this.directory = config.directory;
-    this.profileDirectory = config.profileDirectory;
+    this.home = config.home;
+    this.root = config.root;
     this.ctx = config.ctx;
     this.domain = config.domain;
     this.logger = config.logger;
     this.wakeup = config.wakeup;
     this.context = config.context;
 
-    mkdirSync(this.directory, { recursive: true });
-    this.storage = createJsonlStorage(path.join(this.directory, "events.jsonl"));
+    mkdirSync(this.home, { recursive: true });
+    this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
 
     // 扩展包在 Agent 诞生之前挂上：每个包交回一个有限的加法贡献物，这里只登记、不取用。
     // 取用发生在 core 每轮第一步的那两个钩子里（见下面的 extendTools / extendInstructions）。
-    for (const { handler, config: presetConfig } of config.extensions) {
+    for (const { handler, config: profileConfig } of config.extensions) {
       try {
-        const extension = handler(presetConfig, this);
+        const extension = handler(profileConfig, this);
         if (extension === undefined) continue;
         this.extensions.push(extension);
         const { dispose } = extension;
@@ -362,117 +372,47 @@ export class AgentRuntime {
 }
 
 export interface ProfileRuntimeOptions {
+  /** 本 profile 的 id，即它的目录名。 */
   id: string;
-  /** 这个 profile 的目录，`scenes/` 与 `persona.md` 都在里面。 */
-  directory: string;
+  /** 这个 profile 的目录：`profile.yaml`、`persona.md`、`scenes/` 与 `cross/` 都在里面。 */
+  root: string;
+  /** 本 profile 的装配清单；加载后不变。 */
+  specs: SceneSpec[];
+  /** 本 profile 启用的扩展包：包名到 `config` 原样内容，按书写顺序。 */
+  extensions: Record<string, unknown>;
   ctx: Context;
   gateway: Gateway;
   logger: Logger;
 }
 
 /**
- * 一份人设的运行态：常驻的路由壳 + 已激活的 preset 单元。
- * 宿主在装载时立住，不随扩展服务起落；可运行的只有 preset 单元——每个 preset 等自己的依赖（见 `activateProfiles`），
- * 一个在等或坏掉，不影响兄弟。
+ * 一个 profile 的激活单元：清单与按需长出来的频道实例，生命周期跟着自己那条 fiber。
+ * 与任何服务无关的东西（目录、清单）在构造时立住；引擎与扩展包等到实例诞生才取，因此依赖缺席时
+ * 这条 fiber 停住，服务回来再重建——事实流在盘上，连续性不丢。
  */
 export class ProfileRuntime {
   readonly id: string;
 
-  private readonly ctx: Context;
-  private readonly logger: Logger;
-  private readonly gateway: Gateway;
-  private readonly directory: string;
-  private readonly scenesDir: string;
-  /** 已激活的 preset 单元；fiber 建立时加入，拆卸或停止时摘出。 */
-  private readonly presets: PresetRuntime[] = [];
-
-  constructor(options: ProfileRuntimeOptions) {
-    this.id = options.id;
-    this.ctx = options.ctx;
-    this.logger = options.logger;
-    this.gateway = options.gateway;
-    this.directory = options.directory;
-    this.scenesDir = path.join(options.directory, "scenes");
-  }
-
-  /** 激活一份 preset：它依赖的扩展服务就位后由 fiber 调用。 */
-  activate(load: ResolvedPreset): PresetRuntime {
-    const preset = new PresetRuntime({
-      name: load.name,
-      specs: load.specs,
-      extensions: load.extensions,
-      directory: this.directory,
-      ctx: this.ctx,
-      gateway: this.gateway,
-      logger: this.logger,
-    });
-    this.presets.push(preset);
-    this.logger.info(`[${this.id}/${preset.name}] preset active: ${load.specs.length} scene spec(s)`);
-    return preset;
-  }
-
-  /** 摘掉一个 preset 单元：返回它此前是否处于激活状态，调用方据此决定要不要再停一次。 */
-  deactivate(preset: PresetRuntime): boolean {
-    const index = this.presets.indexOf(preset);
-    if (index < 0) return false;
-    this.presets.splice(index, 1);
-    return true;
-  }
-
-  /** 按事件在已激活的 preset 里定位其归属频道实例，未创建时按需创建。 */
-  route(event: IshikiEvent): AgentRuntime | undefined {
-    for (const preset of this.presets) {
-      const scene = preset.route(event);
-      if (scene !== undefined) return scene;
-    }
-    return undefined;
-  }
-
-  /** 停掉全部已激活的 preset；先摘出再停，父级先停时 fiber 的后续拆卸不会二次停止实例。 */
-  async stop(): Promise<void> {
-    const presets = this.presets.splice(0, this.presets.length);
-    await Promise.all(presets.map((preset) => preset.stop()));
-  }
-}
-
-export interface PresetRuntimeOptions {
-  /** preset 名：日志与 cross 实例的聚合键都取自它。 */
-  name: string;
-  /** 本 preset 的装配清单；加载后不变。 */
-  specs: SceneSpec[];
-  /** 本 preset 启用的扩展包：包名到 `config` 原样内容，按书写顺序。 */
-  extensions: Record<string, unknown>;
-  /** 所属 profile 的目录：事实根与人设都在这里。 */
-  directory: string;
-  ctx: Context;
-  gateway: Gateway;
-  logger: Logger;
-}
-
-/** 一个 preset 的激活单元：specs 与按需长出来的频道实例；生命周期跟着自己那条 fiber。 */
-export class PresetRuntime {
-  readonly name: string;
-
   private readonly specs: SceneSpec[];
-  /** 启用的扩展包，包名到 config；provider 每次实例化时现取，服务因此不必被 preset 记住。 */
+  /** 启用的扩展包，包名到 config；provider 每次实例化时现取，服务因此不必被 profile 记住。 */
   private readonly extensions: Record<string, unknown>;
-  private readonly directory: string;
+  private readonly root: string;
   private readonly ctx: Context;
-  private readonly gateway: Gateway;
   private readonly logger: Logger;
+  private readonly gateway: Gateway;
   private readonly scenes: Record<string, AgentRuntime | undefined> = {};
   /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
   private persona?: string;
   private systemTemplate?: string;
 
-  constructor(options: PresetRuntimeOptions) {
-    this.name = options.name;
+  constructor(options: ProfileRuntimeOptions) {
+    this.id = options.id;
     this.specs = options.specs;
     this.extensions = options.extensions;
-    this.directory = options.directory;
+    this.root = options.root;
     this.ctx = options.ctx;
-    this.gateway = options.gateway;
     this.logger = options.logger;
+    this.gateway = options.gateway;
   }
 
   /** 按事件定位其归属频道实例，未创建时按需创建。 */
@@ -490,21 +430,22 @@ export class PresetRuntime {
   /**
    * 按需创建实例：首次有事件落到它头上时创建，同时初始化目录、引擎与存储。
    * 装配的唯一决策点：模型、上下文引擎、唤醒引擎、工具调用层都随本实例在此诞生，
-   * 随实例停止一起销毁——生命周期只有「实例」一种单位，不再有 preset 级的共享活物。
+   * 随实例停止一起销毁——生命周期只有「实例」一种单位，不再有 profile 级的共享活物。
    *
    * 实例坐标随形态分岔：非聚合形态是 `(sid, channelId)`，每个频道一块视窗；聚合形态整块视窗
-   * 以 preset 名为键，claims 里的全部频道汇进同一份 `events.jsonl`——合流的范围就是声明处所写的那些行。
+   * 只有一处，claims 里的全部频道汇进同一份 `events.jsonl`——合流的范围就是声明处所写的那些行。
    */
   private ensure(spec: SceneSpec, platform: string, channelId: string, selfId: string): AgentRuntime {
     const cross = spec.cross;
-    const key = cross ? `cross_${spec.name}` : channelKey(spec.sid, channelId);
+    const key = cross ? CROSS_KEY : channelKey(spec.sid, channelId);
     const existing = this.scenes[key];
     if (existing !== undefined) return existing;
 
     /** 聚合形态的认领账号；非聚合形态取不到 claims，缺席即坐标唯一。 */
     const accounts = cross ? Object.entries(spec.claims ?? {}).map(([sid, claim]) => ({ sid, claim })) : [];
     const domain: InstanceDomain = cross ? { form: "cross", accounts } : { form: "channel", platform: platform, selfId: selfId, channelId };
-    const directory = path.join(this.directory, "scenes", sceneDirectoryName(key));
+    // 普通形态一个频道一个子目录；cross 形态整块视窗就一个 `cross/`，与 scene 名同字。
+    const home = cross ? path.join(this.root, CROSS_KEY) : path.join(this.root, "scenes", sceneDirectoryName(key));
     const baseTools: ToolSet = {
       send_message: createSendMessage({
         ctx: this.ctx,
@@ -515,7 +456,7 @@ export class PresetRuntime {
       finish: createFinish(),
     };
 
-    // 扩展包按 preset 配置里的书写顺序挂到这一个实例上。取不到服务只有一种可能：这条 fiber 已经
+    // 扩展包按 profile 配置里的书写顺序挂到这一个实例上。取不到服务只有一种可能：这条 fiber 已经
     // 把它声明为依赖，装配次序错了，或服务卸载后旧引用还在用。抛错，不静默跳过。
     const extensions = Object.entries(this.extensions).map(([pkg, config]) => {
       // 这里的 `this.ctx` 是 Ishiki 插件自己的 ctx，它的 inject 链里没有 `ishiki`（就是它提供的），
@@ -527,7 +468,7 @@ export class PresetRuntime {
 
     // 引擎在这里从各自的 provider 诞生，随本实例同生共死：provider 只管造，运行状态都在运行体里，
     // 上下文引擎记着本实例的 agent 与压缩水位，唤醒引擎的账本只看本视窗的事实流，不跨实例共享。
-    // provider 都已由 preset 的 fiber 声明为依赖，这里取一次即可。
+    // provider 都已由 profile 的 fiber 声明为依赖，这里取一次即可。
     const failover = this.gateway.groups().includes(spec.model) || (spec.failover.attempts ?? 1) > 1;
     const raw = failover ? new FailoverModel(this.gateway, spec.model, spec.failover, this.logger) : this.gateway.languageModel(spec.model);
     const toolcall = engineProvider<ToolcallEngine>(this.ctx, ToolcallEngine.GetName(spec.toolcall.engine));
@@ -536,7 +477,8 @@ export class PresetRuntime {
     const context = engineProvider<ContextEngine>(this.ctx, ContextEngine.GetName(spec.context.engine)).create(engineParams<ContextEngines>(spec.context), {
       logger: this.logger,
       gateway: this.gateway,
-      directory: directory,
+      // 引擎的数据目录是 profile 目录，不是实例目录：记忆块这类 profile 级资料在这里读写。
+      directory: this.root,
       resources: resourcePath(),
       domain: domain,
     });
@@ -564,9 +506,9 @@ export class PresetRuntime {
       );
     }
     const scene = new AgentRuntime({
-      label: cross ? `${spec.profile}/${spec.name}` : `${spec.profile}/${spec.name}/${channelId}`,
-      directory,
-      profileDirectory: this.directory,
+      label: cross ? `${this.id}/${spec.name}` : `${this.id}/${spec.name}/${channelId}`,
+      home,
+      root: this.root,
       model,
       // 聚合形态把可达地址清单拼进 instructions：坐标不进工具 schema（每个工具都挂一份会让工具目录膨胀），
       // 模型的出发点只有系统提示与事实行上的寻址头。非聚合形态照旧不带地址簿。
@@ -583,12 +525,12 @@ export class PresetRuntime {
       logger: this.logger,
     });
     this.scenes[key] = scene;
-    this.logger.info(`[${spec.profile}/${spec.name}] scene created: ${key}`);
+    this.logger.info(`[${this.id}/${spec.name}] scene created: ${key}`);
     return scene;
   }
 
   private instructions(): string {
-    if (this.persona === undefined) this.persona = readSnippet(path.join(this.directory, "persona.md")) ?? "";
+    if (this.persona === undefined) this.persona = readSnippet(path.join(this.root, "persona.md")) ?? "";
     if (this.systemTemplate === undefined) this.systemTemplate = readFileSync(resourcePath("templates", "system.jinja"), "utf8");
 
     const rendered = new Template(this.systemTemplate).render({});
@@ -601,47 +543,47 @@ function readSnippet(file: string): string | undefined {
   return existsSync(file) ? readFileSync(file, "utf8").trim() : undefined;
 }
 
-/**
- * 一个 preset 的可激活单元：展开好的清单与它依赖的服务。
- * 依赖决定这条 fiber 何时激活：服务缺席时停在非激活态，来了自动装载。
- */
-export interface PresetLoad extends ResolvedPreset {
+/** 一份装载就绪的 profile：清单已展开，尚未实例化——等它依赖的服务就位才激活。 */
+export interface ProfileLoad {
+  /** 目录名，全局唯一标识。 */
+  id: string;
+  /** profile 目录，`profile.yaml` 与 persona 都在里面。 */
+  root: string;
+  /** 本 profile 的装配清单；加载后不变。 */
+  specs: SceneSpec[];
+  /** 本 profile 启用的扩展包：包名到 `config` 原样内容，按书写顺序。 */
+  extensions: Record<string, unknown>;
   /** 依赖的服务名：启用的扩展包，加上各 spec 最终用到的三个引擎变体。 */
   services: string[];
 }
 
 /**
- * 算一个 preset 依赖的服务：启用的扩展包与每个最终 spec 的三个引擎变体。
- * 引擎从展开后的 spec 扫描而不是读 preset 原始配置——scene 覆盖出来的引擎也算这个 preset 的依赖。
+ * 算一个 profile 依赖的服务：启用的扩展包与每个最终 spec 的三个引擎变体。
+ * 引擎从展开后的 spec 扫描而不是读原始配置——scene 覆盖出来的引擎也算这个 profile 的依赖。
  * 扩展包在展开时已滤掉 `enable: false` 的项，剩下的逐个都是必需依赖：没有可选包这条线。
  */
-function presetServices(preset: ResolvedPreset): string[] {
-  const specs = preset.specs;
+function profileServices(specs: readonly SceneSpec[], extensions: Record<string, unknown>): string[] {
   const names = specs.flatMap((spec) => [
     ContextEngine.GetName(spec.context.engine),
     WakeupEngine.GetName(spec.wakeup.engine),
     ToolcallEngine.GetName(spec.toolcall.engine),
   ]);
-  return [...new Set([...Object.keys(preset.extensions).map((pkg) => `ishiki.ext.${pkg}`), ...names])];
-}
-
-/** 一份装载就绪的 profile：preset 分组已展开，尚未实例化——每个 preset 等自己依赖的服务就位。 */
-export interface ProfileLoad {
-  id: string;
-  directory: string;
-  /** 逐 preset 独立激活；一个 preset 的依赖不拖累同 profile 的其他 preset。 */
-  presets: PresetLoad[];
+  return [...new Set([...Object.keys(extensions).map((pkg) => `ishiki.ext.${pkg}`), ...names])];
 }
 
 /**
- * 扫描 profile 根目录并解析出全部可装载项：每个子目录读一份 profile.yml 或 profile.yaml。
- * 错误按作用域分治：profile 的根结构坏掉只跳过它自己；单个 preset 坏掉只跳过它自己（各记一条 error），其余照常。
- * 实例化不在这里——它按 preset 各开一条 fiber，等自己依赖的服务（扩展包与引擎变体）就位（见 `activateProfiles`）。
+ * 扫描 profile 根目录并解析出全部可装载项：每个子目录读一份 profile.yml 或 profile.yaml，目录名即 id。
+ * 坏掉的目录只跳过它自己（错误各记一条），其余照常装载。
+ * 频道归属在这一步统一判定：一个频道只能属于一个 spec，与已接收的清单相交的那一份整体跳过。
+ * 实例化不在这里——它按 profile 各开一条 fiber，等自己依赖的服务（扩展包与引擎变体）就位（见 `activateProfiles`）。
  */
 export function loadProfiles(root: string, logger: Logger): ProfileLoad[] {
   const loads: ProfileLoad[] = [];
+  const claimed: SceneSpec[] = [];
+  // 排序后处理：冲突时谁被跳过由目录名决定，不随文件系统的枚举顺序摇摆。
+  const entries = readdirSync(root, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
 
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
+  for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const file = ["profile.yml", "profile.yaml"].map((name) => path.join(root, entry.name, name)).find((candidate) => existsSync(candidate));
     if (file === undefined) {
@@ -650,16 +592,15 @@ export function loadProfiles(root: string, logger: Logger): ProfileLoad[] {
     }
     try {
       const resolved = resolveProfile(parse(readFileSync(file, "utf8")), entry.name);
-      for (const skip of resolved.skipped) logger.error(`[${resolved.id}] preset "${skip.preset}" skipped: ${skip.message}`);
+      // 比较的是「已接收的 + 这一份」的全量：profile 内两个 scene 撞上同一频道同样要拦。
+      assertNoOverlap([...claimed, ...resolved.specs]);
+      claimed.push(...resolved.specs);
       loads.push({
         id: resolved.id,
-        directory: path.join(root, entry.name),
-        presets: resolved.presets.map((preset) => ({
-          name: preset.name,
-          specs: preset.specs,
-          extensions: preset.extensions,
-          services: presetServices(preset),
-        })),
+        root: path.join(root, entry.name),
+        specs: resolved.specs,
+        extensions: resolved.extensions,
+        services: profileServices(resolved.specs, resolved.extensions),
       });
     } catch (error) {
       logger.error(`[${entry.name}] profile skipped: ${error instanceof Error ? error.message : String(error)}`);
@@ -674,37 +615,34 @@ export function loadProfiles(root: string, logger: Logger): ProfileLoad[] {
 }
 
 /**
- * 装载后的第二步：一个 profile 一个常驻宿主，一个 preset 一条 fiber。
- * 宿主立刻立住——目录与路由壳不依赖任何服务；每个 preset 等自己依赖的服务（扩展包与引擎变体）
- * 就位才激活，服务被卸载则它那条 fiber 复位：preset 单元停止并摘出，宿主与兄弟 preset 都不动；
- * 服务回来再重建（事实流在盘上，连续性不丢）。门控与拆卸都由 cordis 管，这里只写「建」与「停」。
+ * 装载后的第二步：一个 profile 一条 fiber，等自己依赖的服务（扩展包与引擎变体）就位才激活，
+ * 服务被卸载则这条 fiber 复位：运行体停止并摘出路由表；服务回来再重建（事实流在盘上，连续性不丢）。
+ * 门控与拆卸都由 cordis 管，这里只写「建」与「停」。
  *
  * 服务此刻缺席只记一条 error 就放行：缺席是可恢复的等待态，不是装配失败——后加载的服务
  * 一到，cordis 自己会把这条 fiber 拉起来。装配失败是另一回事（provider 在，`create()` 抛错），
  * 那一条留给 cordis 的 fiber 报。
  *
- * 建出的宿主推进调用方给的数组：调用方（`Ishiki`）按同一个引用做路由。
+ * 建出的运行体推进调用方给的数组：调用方（`Ishiki`）按同一个引用做路由。
  */
 export function activateProfiles(loads: readonly ProfileLoad[], profiles: ProfileRuntime[], deps: { ctx: Context; gateway: Gateway; logger: Logger }): void {
   for (const load of loads) {
-    const profile = new ProfileRuntime({ id: load.id, directory: load.directory, ...deps });
-    profiles.push(profile);
-    deps.logger.info(`profile "${profile.id}" loaded: ${load.presets.length} preset(s)`);
-
-    for (const preset of load.presets) {
-      const apply = (fiber: Context) => {
-        const runtime = profile.activate(preset);
-        fiber.on("dispose", () => {
-          if (profile.deactivate(runtime)) void runtime.stop();
-        });
-      };
-      // cordis 拿回调名当插件名：日志与面板里要能认出是哪个 preset。
-      Object.defineProperty(apply, "name", { value: `ishiki/preset:${load.id}/${preset.name}`, configurable: true });
-      const missing = preset.services.filter((service) => deps.ctx.get(service) === undefined);
-      if (missing.length > 0) {
-        deps.logger.error(`[${load.id}/${preset.name}] missing required service ${missing.map((service) => `"${service}"`).join(", ")}; preset is waiting`);
-      }
-      deps.ctx.inject(preset.services, apply);
+    const apply = (fiber: Context) => {
+      const profile = new ProfileRuntime({ id: load.id, root: load.root, specs: load.specs, extensions: load.extensions, ...deps });
+      profiles.push(profile);
+      deps.logger.info(`profile "${profile.id}" loaded: ${load.specs.length} scene spec(s)`);
+      fiber.on("dispose", () => {
+        const index = profiles.indexOf(profile);
+        if (index >= 0) profiles.splice(index, 1);
+        void profile.stop();
+      });
+    };
+    // cordis 拿回调名当插件名：日志与面板里要能认出是哪个 profile。
+    Object.defineProperty(apply, "name", { value: `ishiki/profile:${load.id}`, configurable: true });
+    const missing = load.services.filter((service) => deps.ctx.get(service) === undefined);
+    if (missing.length > 0) {
+      deps.logger.error(`[${load.id}] missing required service ${missing.map((service) => `"${service}"`).join(", ")}; profile is waiting`);
     }
+    deps.ctx.inject(load.services, apply);
   }
 }

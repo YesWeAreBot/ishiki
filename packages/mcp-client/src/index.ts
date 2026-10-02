@@ -11,7 +11,7 @@ import type { OutputLimits } from "./server.js";
  * MCP 客户端扩展包。
  *
  * 服务器不在 Koishi 控制台配，写在文件里：`<dataPath>/.mcp.json` 是基线，
- * `<dataPath>/profiles/<名字>/mcp.json` 存在时完全替换它。`dataPath` 取自内核服务，
+ * `<dataPath>/profiles/<目录名>/mcp.json` 存在时完全替换它。`dataPath` 取自内核服务，
  * 插件不再另配一份——两份路径迟早会有一份过期。形状见包内
  * `resources/mcp.schema.json`，字段语义见 `resources/README.md`。
  *
@@ -36,15 +36,15 @@ class IshikiMcpClient {
     const fallback = path.join(ctx.ishiki.dataPath, ".mcp.json");
     this.logger.info(`mcp-client loaded, fallback config ${fallback}`);
 
-    // 连接的建立不挂在 ready 上：扩展服务要在 preset 的 fiber 里就位，
+    // 连接的建立不挂在 ready 上：扩展服务要在 profile 的 fiber 里就位，
     // 挂 ready 会让它比 profile 装载晚一拍。
-    const dispose = ctx.ishiki.provide("mcp-client", (_presetConfig, runtime) => {
-      const { profileDirectory } = runtime;
-      this.logger.info(`mcp-client mounted for ${profileDirectory}`);
-      let pool = this.pools.get(profileDirectory);
+    const dispose = ctx.ishiki.provide("mcp-client", (_profileConfig, runtime) => {
+      const { root } = runtime;
+      this.logger.info(`mcp-client mounted for ${root}`);
+      let pool = this.pools.get(root);
       if (pool === undefined) {
-        pool = new ProfilePool(profileDirectory, fallback, config.limits, this.logger);
-        this.pools.set(profileDirectory, pool);
+        pool = new ProfilePool(root, fallback, config.limits, this.logger);
+        this.pools.set(root, pool);
       }
       pool.hold();
       return {
@@ -60,7 +60,7 @@ class IshikiMcpClient {
           return pool.instructions();
         },
         dispose: () => {
-          this.pools.delete(profileDirectory);
+          this.pools.delete(root);
           return pool.release();
         },
       };

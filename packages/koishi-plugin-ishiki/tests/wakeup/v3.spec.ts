@@ -217,8 +217,8 @@ describe("v3 wakeup: 轮末回执由场景侧送进来", () => {
     try {
       const scene = new AgentRuntime({
         label: "test/scene/room",
-        directory,
-        profileDirectory: directory,
+        home: directory,
+        root: directory,
         model,
         gateway: {} as Gateway,
         instructions: "",
@@ -269,8 +269,8 @@ describe("v3 wakeup: 轮末回执由场景侧送进来", () => {
     try {
       const scene = new AgentRuntime({
         label: "test/scene/room",
-        directory,
-        profileDirectory: directory,
+        home: directory,
+        root: directory,
         model,
         gateway: {} as Gateway,
         instructions: "",

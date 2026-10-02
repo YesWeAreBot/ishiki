@@ -173,20 +173,15 @@ describe("tools through a real agent", () => {
   };
 
   const config = {
-    id: "neko",
-    presets: {
-      base: {
-        model: "test:model",
-        context: { engine: "standard", standard: { maxChars: 10_000 } },
-        // 用例不测节奏：打字延迟归零。
-        typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
-        // 私聊才唤醒：群里的消息只落盘，不起轮次。
-        wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
-        scenes: {
-          rooms: { sid: "onebot:1", whitelist: ["group:*"] },
-          dms: { sid: "onebot:1", whitelist: ["private:*"] },
-        },
-      },
+    model: "test:model",
+    context: { engine: "standard", standard: { maxChars: 10_000 } },
+    // 用例不测节奏：打字延迟归零。
+    typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
+    // 私聊才唤醒：群里的消息只落盘，不起轮次。
+    wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+    scenes: {
+      rooms: { sid: "onebot:1", whitelist: ["group:*"] },
+      dms: { sid: "onebot:1", whitelist: ["private:*"] },
     },
   };
 
@@ -220,8 +215,8 @@ describe("tools through a real agent", () => {
       },
     });
     const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
-    runtime = new ProfileRuntime({ id: "neko", directory: root, ctx: app, gateway, logger });
-    for (const preset of resolveProfile(config, "neko").presets) runtime.activate(preset);
+    const resolved = resolveProfile(config, "neko");
+    runtime = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx: app, gateway, logger });
   });
 
   afterAll(async () => {

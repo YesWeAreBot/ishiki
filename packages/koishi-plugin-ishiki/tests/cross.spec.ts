@@ -90,7 +90,7 @@ function stubBot(sid: string) {
 }
 
 // 引擎 provider 立在这台 ctx 上：运行时只按服务名取用，用例给的就是真服务；bot 换成桩。
-// toolcall 用 preset 的缺省（native），所以它也在这里。
+// toolcall 用 profile 的缺省（native），所以它也在这里。
 const ctx = new Context();
 new StandardContextEngine(ctx);
 new StandardWakeupEngine(ctx);
@@ -165,8 +165,7 @@ function rig(resolved: ResolvedProfile): Rig {
   const script: LanguageModelV4StreamPart[][] = [];
   const model = scripted(() => script, prompts);
   const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
-  const runtime = new ProfileRuntime({ id: "neko", directory: root, ctx, gateway, logger });
-  for (const preset of resolved.presets) runtime.activate(preset);
+  const runtime = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
   return { root, prompts, script, runtime, scenesDir: path.join(root, "scenes") };
 }
 
@@ -190,45 +189,35 @@ async function teardown(rigged: Rig): Promise<void> {
   rmSync(rigged.root, { recursive: true, force: true });
 }
 
-/** 一个 cross preset：preset 自身即生效单位，claims 认领两个群与一个私聊。 */
+/** 一个 cross profile：profile 自身即生效单位，claims 认领两个群与一个私聊。 */
 function crossSpecs(
   claims: Record<string, { whitelist: string[]; blacklist?: string[] }> = { "onebot:1": { whitelist: ["group:*", "private:9"] } },
   wakeup: Wakeup = { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
 ): ResolvedProfile {
   return resolveProfile(
     {
-      id: "neko",
-      presets: {
-        lounge: {
-          model: "test:model",
-          cross: true,
-          claims,
-          context: { engine: "standard", standard: { maxChars: 10_000 } },
-          wakeup,
-          typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
-        },
-      },
+      model: "test:model",
+      cross: true,
+      claims,
+      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      wakeup,
+      typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
     },
     "neko",
   );
 }
 
-/** 一份普通 preset：一频道一实例，逐频道认领。 */
+/** 一份普通 profile：一频道一实例，逐频道认领。 */
 function plainSpecs(): ResolvedProfile {
   return resolveProfile(
     {
-      id: "plain",
-      presets: {
-        base: {
-          model: "test:model",
-          context: { engine: "standard", standard: { maxChars: 10_000 } },
-          wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
-          typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
-          scenes: {
-            rooms: { sid: "onebot:1", whitelist: ["group:*"] },
-            dms: { sid: "onebot:1", whitelist: ["private:*"] },
-          },
-        },
+      model: "test:model",
+      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+      typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
+      scenes: {
+        rooms: { sid: "onebot:1", whitelist: ["group:*"] },
+        dms: { sid: "onebot:1", whitelist: ["private:*"] },
       },
     },
     "plain",
@@ -252,17 +241,17 @@ describe("cross 聚合：claims 的频道共用一块视窗", () => {
     expect(dm).toBe(first);
   });
 
-  it("落盘进 cross_<preset> 目录，claims 的频道写同一份 events.jsonl", async () => {
+  it("落盘进 profile 根下的 cross 目录，claims 的频道写同一份 events.jsonl", async () => {
     const shared = rigged.runtime.route(message("group:2", "a"))!;
     await shared.deliver(message("group:2", "a"));
     await shared.deliver(message("group:7", "b"));
     await shared.deliver(message("private:9", "c"));
     await sleep(20);
 
-    // preset 名单是唯一的目录来源：没有 onebot_1_group_2 这样的频道目录
-    expect(readdirSync(rigged.scenesDir)).toEqual(["cross_lounge"]);
+    // cross 视窗与 scenes/ 并列落在 profile 根下：没有 onebot_1_group_2 这样的频道目录
+    expect(readdirSync(rigged.root)).toEqual(["cross"]);
 
-    const file = readFileSync(path.join(rigged.scenesDir, "cross_lounge", "events.jsonl"), "utf8");
+    const file = readFileSync(path.join(rigged.root, "cross", "events.jsonl"), "utf8");
     // 两个群的频道号出现在同一份流里——这正是合流要拿到的东西
     expect(file).toContain("group:2");
     expect(file).toContain("group:7");
@@ -490,27 +479,22 @@ describe("非 cross 零收缩", () => {
 });
 
 describe("引擎随生效单位独立", () => {
-  it("同一 preset 下的兄弟 scene 是两个实例，唤醒引擎各自一份", async () => {
+  it("同一 profile 下的兄弟 scene 是两个实例，唤醒引擎各自一份", async () => {
     built = 0;
     const resolved = resolveProfile(
       {
-        id: "plain",
-        presets: {
-          base: {
-            model: "test:model",
-            context: { engine: "standard", standard: { maxChars: 10_000 } },
-            wakeup: { engine: "counting" },
-            typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
-            scenes: {
-              rooms: { sid: "onebot:1", whitelist: ["group:*"] },
-              dms: { sid: "onebot:1", whitelist: ["private:*"] },
-            },
-          },
+        model: "test:model",
+        context: { engine: "standard", standard: { maxChars: 10_000 } },
+        wakeup: { engine: "counting" },
+        typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
+        scenes: {
+          rooms: { sid: "onebot:1", whitelist: ["group:*"] },
+          dms: { sid: "onebot:1", whitelist: ["private:*"] },
         },
       },
       "plain",
     );
-    expect(resolved.presets.flatMap((preset) => preset.specs).map((spec) => spec.preset)).toEqual(["base", "base"]);
+    expect(resolved.specs.map((spec) => spec.name)).toEqual(["rooms", "dms"]);
 
     const rigged = rig(resolved);
     const room = rigged.runtime.route(message("group:2", "a"));

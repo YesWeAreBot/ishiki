@@ -45,7 +45,7 @@ function muteSdkErrors(): () => void {
 }
 
 // 引擎 provider 立在这台 ctx 上：运行时只按服务名取用，用例给的就是真服务。
-// toolcall 用 preset 的缺省（native），所以它也在这里。
+// toolcall 用 profile 的缺省（native），所以它也在这里。
 const ctx = new Context();
 new StandardContextEngine(ctx);
 new StandardWakeupEngine(ctx);
@@ -56,28 +56,21 @@ beforeAll(async () => {
   await ctx.start();
 });
 
-/** 装载并实例化：测试直连生产里的「宿主 + 逐个 preset fiber」两步——解析出可装载项，再逐个激活。 */
+/** 装载并实例化：测试直连生产里的「宿主 + 逐个 profile fiber」两步——解析出可装载项，再逐个激活。 */
 function load(root: string): ProfileRuntime[] {
-  return loadProfiles(root, logger).map((item) => {
-    const profile = new ProfileRuntime({ id: item.id, directory: item.directory, ctx, gateway, logger });
-    for (const preset of item.presets) profile.activate(preset);
-    return profile;
-  });
+  return loadProfiles(root, logger).map(
+    (item) => new ProfileRuntime({ id: item.id, root: item.root, specs: item.specs, extensions: item.extensions, ctx, gateway, logger }),
+  );
 }
 
 const config = {
-  id: "neko",
-  presets: {
-    base: {
-      model: "test:model",
-      context: { engine: "standard", standard: { maxChars: 10_000 } },
-      // 不认 @ 也不认引用，于是群里的消息唤不醒它、私聊能。
-      wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
-      scenes: {
-        rooms: { sid: "onebot:1", whitelist: ["group:*"] },
-        dms: { sid: "onebot:1", whitelist: ["private:*"] },
-      },
-    },
+  model: "test:model",
+  context: { engine: "standard", standard: { maxChars: 10_000 } },
+  // 不认 @ 也不认引用，于是群里的消息唤不醒它、私聊能。
+  wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+  scenes: {
+    rooms: { sid: "onebot:1", whitelist: ["group:*"] },
+    dms: { sid: "onebot:1", whitelist: ["private:*"] },
   },
 };
 
@@ -100,8 +93,8 @@ describe("profile runtime", () => {
 
   beforeAll(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "ishiki-runtime-"));
-    runtime = new ProfileRuntime({ id: "neko", directory: root, ctx, gateway, logger });
-    for (const preset of resolveProfile(config, "neko").presets) runtime.activate(preset);
+    const resolved = resolveProfile(config, "neko");
+    runtime = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
   });
 
   afterAll(async () => {
@@ -151,22 +144,15 @@ describe("profile runtime", () => {
   });
 
   it("toolcall 变体缺席就抛错，不退回内置的 native", () => {
-    const missing = new ProfileRuntime({ id: "neko", directory: root, ctx, gateway, logger });
-    for (const preset of resolveProfile(
+    const resolved = resolveProfile(
       {
-        id: "neko",
-        presets: {
-          base: {
-            model: "test:model",
-            toolcall: { engine: "neko-tools/absent" },
-            scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
-          },
-        },
+        model: "test:model",
+        toolcall: { engine: "neko-tools/absent" },
+        scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
       },
       "neko",
-    ).presets) {
-      missing.activate(preset);
-    }
+    );
+    const missing = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
 
     // 这台 ctx 上注册着 native 与其余内置变体，唯独没有这个社区变体。
     expect(() => missing.route(message("direct", "private:88", "absent"))).toThrow(/ishiki\.engine\.toolcall\.neko-tools\/absent/);
@@ -201,58 +187,35 @@ describe("profile loading", () => {
   let root: string;
 
   /** 写一份最小 profile.yml。 */
-  const writeProfile = (directory: string, id: string | undefined, patterns: string[] = []) => {
+  const writeProfile = (directory: string, patterns: string[] = []) => {
     mkdirSync(path.join(root, directory), { recursive: true });
     writeFileSync(
       path.join(root, directory, "profile.yml"),
-      [
-        ...(id === undefined ? [] : [`id: ${id}`]),
-        "presets:",
-        "  base:",
-        "    model: test:model",
-        "    scenes:",
-        "      dms:",
-        "        sid: onebot:1",
-        "        whitelist:",
-        ...patterns.map((pattern) => `          - "${pattern}"`),
-      ].join("\n"),
+      ["model: test:model", "scenes:", "  dms:", "    sid: onebot:1", "    whitelist:", ...patterns.map((pattern) => `      - "${pattern}"`)].join("\n"),
     );
   };
 
   beforeAll(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "ishiki-profiles-"));
-    writeProfile("neko", undefined, ["private:*"]);
+    writeProfile("neko", ["private:*"]);
     mkdirSync(path.join(root, "broken"), { recursive: true });
-    writeFileSync(path.join(root, "broken", "profile.yml"), "presets: [");
+    writeFileSync(path.join(root, "broken", "profile.yml"), "scenes: [");
     mkdirSync(path.join(root, "dangling"), { recursive: true });
-    writeFileSync(
-      path.join(root, "dangling", "profile.yml"),
-      [
-        "presets:",
-        "  base:",
-        "    model: test:model",
-        "    scenes:",
-        "      dms:",
-        "        sid: onebot:1",
-        "        whitelist: ['private:*']",
-        "  orphan:",
-        "    model: test:model",
-      ].join("\n"),
-    );
+    // 有 model 却没有 scenes 又不声明 cross：整份目录跳过
+    writeFileSync(path.join(root, "dangling", "profile.yml"), "model: test:model");
     mkdirSync(path.join(root, "empty"), { recursive: true });
   });
 
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-  it("loads a profile from its directory, using the directory name as a fallback id", () => {
+  it("loads a profile from its directory, using the directory name as its id", () => {
     const items = loadProfiles(root, logger);
     const neko = items.find((item) => item.id === "neko")!;
 
-    expect(neko.presets.flatMap((preset) => preset.specs).map((spec) => spec.name)).toEqual(["dms"]);
-    expect(neko.presets[0]!.specs[0]!.sid).toBe("onebot:1");
-    // 坏 preset 只跳过自己：dangling 还带着有效的 base 加载，orphan 各记一条
-    expect(items.find((item) => item.id === "dangling")!.presets.map((preset) => preset.name)).toEqual(["base"]);
-    // 坏掉的目录只跳过它自己：YAML 读不动、没有 profile.yml，各记一条，其余 profile 照常
+    expect(neko.specs.map((spec) => spec.name)).toEqual(["dms"]);
+    expect(neko.specs[0]!.sid).toBe("onebot:1");
+    // 坏掉的目录只跳过它自己：YAML 读不动、缺 scenes、没有 profile.yml 各记一条，其余 profile 照常
+    expect(items.map((item) => item.id)).toEqual(["neko"]);
     expect(logs.some((line) => line.includes("broken"))).toBe(true);
     expect(logs.some((line) => line.includes("empty"))).toBe(true);
     expect(logs.some((line) => line.includes("is not cross"))).toBe(true);
@@ -261,13 +224,10 @@ describe("profile loading", () => {
   it("keeps a profile whose scene lists no channel: it simply claims nothing", () => {
     const none = mkdtempSync(path.join(os.tmpdir(), "ishiki-none-"));
     mkdirSync(path.join(none, "idle"), { recursive: true });
-    writeFileSync(
-      path.join(none, "idle", "profile.yml"),
-      ["presets:", "  base:", "    model: test:model", "    scenes:", "      dms:", "        sid: onebot:1", "        whitelist: []"].join("\n"),
-    );
+    writeFileSync(path.join(none, "idle", "profile.yml"), ["model: test:model", "scenes:", "  dms:", "    sid: onebot:1", "    whitelist: []"].join("\n"));
 
     const [item] = loadProfiles(none, logger);
-    expect(item!.presets.flatMap((preset) => preset.specs)).toHaveLength(1);
+    expect(item!.specs).toHaveLength(1);
 
     const profiles = load(none);
     expect(profiles[0]!.route(message("direct", "private:9", "a"))).toBeUndefined();
@@ -275,63 +235,75 @@ describe("profile loading", () => {
     rmSync(none, { recursive: true, force: true });
   });
 
-  it("loads overlapping profiles instead of proving channel ownership", () => {
+  it("skips a profile whose channel another profile already claims", () => {
     const clutter = mkdtempSync(path.join(os.tmpdir(), "ishiki-clash-"));
-    const write = (directory: string, id: string) => {
+    const write = (directory: string) => {
       mkdirSync(path.join(clutter, directory), { recursive: true });
       writeFileSync(
         path.join(clutter, directory, "profile.yml"),
-        [
-          `id: ${id}`,
-          "presets:",
-          "  base:",
-          "    model: test:model",
-          "    scenes:",
-          "      dms:",
-          "        sid: onebot:1",
-          "        whitelist:",
-          "          - '*'",
-        ].join("\n"),
+        ["model: test:model", "scenes:", "  dms:", "    sid: onebot:1", "    whitelist:", "      - '*'"].join("\n"),
       );
     };
 
-    write("a", "same");
-    write("b", "other");
+    write("a");
+    write("b");
 
-    const profiles = load(clutter);
-    expect(profiles.map((profile) => profile.id).sort()).toEqual(["other", "same"]);
-    // 两个 profile 都认领同一频道：谁接管由派发顺序决定，加载期不再判冲突
-    const event = message("group", "group:2", "clash");
-    expect(profiles.filter((profile) => profile.route(event) !== undefined)).toHaveLength(2);
+    const mark = logs.length;
+    // 目录名排序在前的是 a：频道先归它；b 撞同一频道，加载期整体跳过
+    const items = loadProfiles(clutter, logger);
+    expect(items.map((item) => item.id)).toEqual(["a"]);
+    expect(logs.slice(mark).some((line) => line.includes("profile skipped"))).toBe(true);
 
     rmSync(clutter, { recursive: true, force: true });
   });
+
+  it("skips a profile whose own two scenes claim the same channel", () => {
+    const self = mkdtempSync(path.join(os.tmpdir(), "ishiki-self-clash-"));
+    mkdirSync(path.join(self, "neko"), { recursive: true });
+    writeFileSync(
+      path.join(self, "neko", "profile.yml"),
+      [
+        "model: test:model",
+        "scenes:",
+        "  a:",
+        "    sid: onebot:1",
+        "    whitelist:",
+        "      - 'group:*'",
+        "  b:",
+        "    sid: onebot:1",
+        "    whitelist:",
+        "      - 'group:1'",
+      ].join("\n"),
+    );
+
+    const mark = logs.length;
+    expect(loadProfiles(self, logger)).toEqual([]);
+    expect(logs.slice(mark).some((line) => line.includes("profile skipped"))).toBe(true);
+
+    rmSync(self, { recursive: true, force: true });
+  });
 });
 
-/** 按给定配置展开出 spec 的 typing，用来验算预设与覆写的优先级。 */
+/** 按给定配置展开出 spec 的 typing，用来验算 profile 与 scene 覆写的优先级。 */
 function resolveTyping(typing?: Record<string, number>, sceneTyping?: Record<string, number>) {
   return resolveProfile(
     {
-      presets: {
-        base: {
-          model: "m",
-          ...(typing === undefined ? {} : { typing }),
-          scenes: { s: { sid: "onebot:1", whitelist: ["private:*"], ...(sceneTyping === undefined ? {} : { typing: sceneTyping }) } },
-        },
-      },
+      model: "m",
+      ...(typing === undefined ? {} : { typing }),
+      scenes: { s: { sid: "onebot:1", whitelist: ["private:*"], ...(sceneTyping === undefined ? {} : { typing: sceneTyping }) } },
     },
     "p",
-  ).presets[0]!.specs[0]!.typing;
+  ).specs[0]!.typing;
 }
 
 describe("typing config", () => {
-  it("fills the preset's unwritten fields and falls back to the built-in defaults", () => {
+  it("fills the profile's unwritten fields and falls back to the built-in defaults", () => {
     expect(resolveTyping({ baseDelay: 1 })).toEqual({ baseDelay: 1, charPerSecond: 5, minDelay: 800, maxDelay: 4000 });
     expect(resolveTyping()).toEqual({ baseDelay: 500, charPerSecond: 5, minDelay: 800, maxDelay: 4000 });
   });
 
-  it("lets a scene override single fields without wiping the preset", () => {
-    // scene 里的 typing 是局部覆写：没写的字段必须留在 preset 的值上
+  it("lets a scene override single fields without wiping the profile", () => {
+    // scene 里的 typing 是局部覆写：没写的字段必须留在 profile 的值上
     expect(resolveTyping({ baseDelay: 100, charPerSecond: 7, minDelay: 300, maxDelay: 900 }, { charPerSecond: 12 })).toEqual({
       baseDelay: 100,
       charPerSecond: 12,
@@ -342,20 +314,16 @@ describe("typing config", () => {
   });
 });
 
-/** 按给定配置展开出 spec 的 failover，用来验算预设与覆写的优先级。 */
+/** 按给定配置展开出 spec 的 failover，用来验算 profile 与 scene 覆写的优先级。 */
 function resolveFailover(failover?: Record<string, unknown>, sceneFailover?: Record<string, unknown>) {
   return resolveProfile(
     {
-      presets: {
-        base: {
-          model: "m",
-          ...(failover === undefined ? {} : { failover }),
-          scenes: { s: { sid: "onebot:1", whitelist: ["private:*"], ...(sceneFailover === undefined ? {} : { failover: sceneFailover }) } },
-        },
-      },
+      model: "m",
+      ...(failover === undefined ? {} : { failover }),
+      scenes: { s: { sid: "onebot:1", whitelist: ["private:*"], ...(sceneFailover === undefined ? {} : { failover: sceneFailover }) } },
     },
     "p",
-  ).presets[0]!.specs[0]!.failover;
+  ).specs[0]!.failover;
 }
 
 describe("failover config", () => {
@@ -363,7 +331,7 @@ describe("failover config", () => {
     expect(resolveFailover()).toEqual({ backoffMs: 500, failoverOn: "unavailable" });
   });
 
-  it("scene 只写一个字段，不动 preset 的其余字段", () => {
+  it("scene 只写一个字段，不动 profile 的其余字段", () => {
     expect(resolveFailover({ attempts: 3 }, { backoffMs: 100 })).toEqual({ attempts: 3, backoffMs: 100, failoverOn: "unavailable" });
     expect(resolveFailover(undefined, { failoverOn: "any" })).toEqual({ backoffMs: 500, failoverOn: "any" });
   });
@@ -448,22 +416,15 @@ function makeGateway(first: MockLanguageModelV4, second: MockLanguageModelV4): G
 function makeRuntime(directory: string, model: string, gateway: Gateway, failover?: Record<string, unknown>): ProfileRuntime {
   const resolved = resolveProfile(
     {
-      id: "failover",
-      presets: {
-        base: {
-          model,
-          ...(failover === undefined ? {} : { failover }),
-          context: { engine: "standard", standard: { maxChars: 10_000 } },
-          wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
-          scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
-        },
-      },
+      model,
+      ...(failover === undefined ? {} : { failover }),
+      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+      scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
     },
     "failover",
   );
-  const runtime = new ProfileRuntime({ id: "failover", directory, ctx, gateway, logger });
-  for (const preset of resolved.presets) runtime.activate(preset);
-  return runtime;
+  return new ProfileRuntime({ id: resolved.id, root: directory, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
 }
 
 describe("failover wiring", () => {

@@ -4,24 +4,23 @@
 
 ## 启用
 
-在某个 preset 的 `extends` 里写包名：
+在某个 profile 的 `extends` 里写包名：
 
 ```yaml
-presets:
-  chat:
-    model: openai:gpt-5.6-luna
-    extends:
-      mcp-client:
+# profiles/chat/profile.yaml
+model: openai:gpt-5.6-luna
+extends:
+  mcp-client:
 ```
 
-工具与提示词从这个 preset 认领的全部频道生效。
+工具与提示词从这个 profile 认领的全部频道生效。
 
 ## 配置
 
 两份文件，`<dataPath>` 是内核的 `dataPath`（默认 `data/ishiki`）：
 
 - `<dataPath>/.mcp.json` —— 基线
-- `<dataPath>/profiles/<名字>/mcp.json` —— **完全替换**基线，不是叠加
+- `<dataPath>/profiles/<目录名>/mcp.json` —— **完全替换**基线，不是叠加。目录名就是 profile 的 id
 
 字段语义、判定时机（静态/动态）与坏配置的处理见 [`resources/README.md`](./resources/README.md)。
 形状由 [`resources/mcp.schema.json`](./resources/mcp.schema.json) 定义，可填写样例见

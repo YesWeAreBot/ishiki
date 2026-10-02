@@ -86,7 +86,7 @@ export interface ContextEngineOptions {
 /**
  * 引擎 provider：Koishi 服务，一个变体一个，构造即登记。
  *
- * 服务名是唯一的事实来源——preset 依赖这个名字，取用也从这里取；插件级配置由子类自己持有，
+ * 服务名是唯一的事实来源——profile 依赖这个名字，取用也从这里取；插件级配置由子类自己持有，
  * 与 profile/scene 配置在 `create()` 处汇合，不做深合并。
  */
 export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> extends Service {

@@ -53,7 +53,7 @@
 - **顶层形状不对**（`mcpServers` 不是对象、`disabledServers` 不是数组……）：整份文件丢弃，记一条 error，该 profile 零 MCP 工具。别人照常跑。
 - **单个服务器形状不对**（缺 `command`、`type` 不认识、`timeout` 写了字符串）：只跳过这一个，记一条带服务器名的 error，其余照连。
 
-任何一级都不往上抛——preset 层的异常会连带整个 preset 停摆，不该由一份配置文件触发。
+任何一级都不往上抛——profile 层的异常会连带整个 profile 停摆，不该由一份配置文件触发。
 
 ## 工具结果里的图片
 

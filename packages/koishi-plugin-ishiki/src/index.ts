@@ -60,7 +60,7 @@ class Ishiki extends Service<Ishiki.Config> {
 
     // 内置引擎变体：一个变体一个 provider Service，构造即登记，服务名即准入。
     // 必须排在 ready 监听之前：provider 的登记也挂在 ready 上，先挂的先跑，profile 装载时
-    // 才看得到这些服务，preset 的引擎依赖不会先落进等待态。
+    // 才看得到这些服务，profile 的引擎依赖不会先落进等待态。
 
     // Context 引擎族
     ctx.plugin(StandardContextEngine);
@@ -138,7 +138,7 @@ class Ishiki extends Service<Ishiki.Config> {
    *
    * `handler` 在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步；它返回这次挂载的
    * `Extension`（工具与提示词两个加法钩子），实例停止时逆序执行它的 `dispose`。坐标在
-   * `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。这个实例用不上就返回 `undefined`。
+   * `runtime.ctx` / `runtime.domain` / `runtime.home` / `runtime.root` 上。这个实例用不上就返回 `undefined`。
    *
    * 服务本身就是那个 handler：`[Service.invoke]` 把它做成可调用的服务（`ctx.logger` 同款），
    * `ctx.get()` 取出来直接调用，不再包一层 `{ handler }`。它依旧是货真价实的 Service——能被 `inject`
@@ -152,8 +152,8 @@ class Ishiki extends Service<Ishiki.Config> {
     const fiber = this.ctx.plugin(
       class extends Service {
         // 呼叫即转交给 handler：cordis 用 `[Service.invoke]` 把服务实例做成函数，`ctx.logger` 同款。
-        [Service.invoke](presetConfig: unknown, agentRuntime: runtime.AgentRuntime): Extension | void {
-          return handler(presetConfig, agentRuntime);
+        [Service.invoke](profileConfig: unknown, agentRuntime: runtime.AgentRuntime): Extension | void {
+          return handler(profileConfig, agentRuntime);
         }
         constructor(ctx: Context) {
           super(ctx, `ishiki.ext.${name}`, true);

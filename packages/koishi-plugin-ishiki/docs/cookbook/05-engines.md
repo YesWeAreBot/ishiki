@@ -4,7 +4,7 @@
 
 agent 循环里有些环节**只能有一个**：上下文怎么组装、这一条消息唤不唤醒我、模型的输出怎么读成工具调用。上一代把这些交给插件抢：插件用 `priority` 与 `match(session)` 全局匹配，彼此不兼容、无法组合，一个群装三个插件就打架。
 
-ishiki 的做法是把这些环节收进**引擎**：一个引擎 = 一个环节的一种实现 + 它的参数；同族互斥，preset 只能选一个。插件退回到加法——加工具、加提示词，不抢决策。
+ishiki 的做法是把这些环节收进**引擎**：一个引擎 = 一个环节的一种实现 + 它的参数；同族互斥，一个 profile 只能选一个。插件退回到加法——加工具、加提示词，不抢决策。
 
 ## 引擎形态
 
@@ -23,11 +23,11 @@ src/<族>/
 - `<族>EngineServiceName(name)`：算出这个变体对应的服务名；
 - `XEngine extends Service`：provider 基类，构造即登记在那个服务名上，`create(config, options)` 造一个运行体。
 
-服务名形如 `ishiki.engine.<族>.<名字>`。**可用性只由这个名字对应的服务是否存在决定**：没有登记表，也没有注册或按名创建一类的动词。包继承基类、在构造里 `super(ctx, name)`，服务就在那儿了。内置变体由插件构造器内联 `new`（登记走 cordis 的 ready + 一个微任务），社区变体由自己的插件构造。preset 按服务名 `ctx.inject(...)`，服务不在就停在等待态，到了自动激活。
+服务名形如 `ishiki.engine.<族>.<名字>`。**可用性只由这个名字对应的服务是否存在决定**：没有登记表，也没有注册或按名创建一类的动词。包继承基类、在构造里 `super(ctx, name)`，服务就在那儿了。内置变体由插件构造器内联 `new`（登记走 cordis 的 ready + 一个微任务），社区变体由自己的插件构造。profile 按服务名 `ctx.inject(...)`，服务不在就停在等待态，到了自动激活。
 
 参数声明为可选（`Partial`）而不是改用索引签名，是为了让 `config[config.engine]` 仍能推导出具体类型。换引擎后旧引擎的参数键会留在合并结果里，消费端只读自己那个键，读不到旧参数。
 
-**provider Service 不等于运行体。** provider 只持有插件级配置，`create()` 每次造一份全新的实例随 AgentRuntime 生灭；preset 依赖的是 provider 服务名，装配时 `ctx.get()` 取一次。名字带不带包前缀无关准入——那是阶段 2 之前的旧形状。
+**provider Service 不等于运行体。** provider 只持有插件级配置，`create()` 每次造一份全新的实例随 AgentRuntime 生灭；profile 依赖的是 provider 服务名，装配时 `ctx.get()` 取一次。名字带不带包前缀无关准入——那是阶段 2 之前的旧形状。
 
 ## 现有的族
 
@@ -43,7 +43,7 @@ src/<族>/
 
 ## 引擎随 AgentRuntime 诞生
 
-三个族的配置走同一条三层合并（内置缺省 ← preset ← scene，见 [01-profile](./01-profile.md)），实例全部随 `AgentRuntime` 在装配点诞生、随实例销毁——生命周期只有「实例」一种单位：
+三个族的配置走同一条三层合并（内置缺省 ← profile ← scene，见 [01-profile](./01-profile.md)），实例全部随 `AgentRuntime` 在装配点诞生、随实例销毁——生命周期只有「实例」一种单位：
 
 - **上下文引擎**一实例一份，造在 `AgentRuntime` 构造期、扩展挂载之后（引擎看到的是扩展加完的那份工具面与提示词）。它不能跨 agent 共享——引擎自己记着 agent、压缩水位与在途压缩，共享会让这个频道的压缩去读另一个频道的存储。压缩挂在 `turn.done` 事件上而不是 core 的轮次钩子：钩子的返回值会被 core `await`，压得慢或失败会拖住轮次收尾；事件通道对 listener 是 `Promise.all` 加 try/catch，压不坏也等不起的东西本就不该进关键路径。
 - **唤醒引擎**一实例一份，账本只看本视窗的事实流：每条消息自带频道号，引擎从事件里读账归谁，聚合与单频道走同一份代码。`WakeupEngineDeps` 只带一个可选 logger，没有跨实例的状态池——真需要跨实例感知（如全局限频）时，账得挂在某个长于实例的东西上；模块级闭包不作数，插件重载会留下幽灵账。
@@ -51,7 +51,7 @@ src/<族>/
 
 `attach` 契约是单次挂载：一个引擎实例只 attach 一个 agent，返回的 disposer 由实例停止时调用。引擎要「这个场景发生了什么」，从这里订阅 `agent.channel` 即可。上下文引擎的 `attach` 拿 agent 是为了读 storage 与模型——两者都是 agent 自己的东西，预抄一份可能读到过期引用，压缩还必须与 core 读同一个 storage。
 
-变体的准入就是那个服务在不在：preset 按最终 spec（含 scene 覆写）算出的服务名列表 `ctx.inject(...)`，缺一个就停在等待态并报一条。scene 可以就地换引擎变体，换完重算依赖——但换不出一个新族去，那要改 core。
+变体的准入就是那个服务在不在：profile 按最终 spec（含 scene 覆写）算出的服务名列表 `ctx.inject(...)`，缺一个就停在等待态并报一条。scene 可以就地换引擎变体，换完重算依赖——但换不出一个新族去，那要改 core。
 
 ### 上下文引擎
 
@@ -160,8 +160,8 @@ failover:
 引擎是「选一个」，贡献物是「加一些」：包对某一个 AgentRuntime 提供工具与提示词，不抢决策。
 
 1. 建一个 Koishi 插件（`static inject = ["ishiki"]`），在构造器里调 `ctx.ishiki.provide("<包名>", handler)`。它内部开一条 fiber 建 `ishiki.ext.<包名>` 服务，返回值就是那条 fiber 的 disposer——`ctx.on("dispose", disposer)` 把服务挂在自己这条 fiber 上，这是归属声明，不是可选的卫生习惯。
-2. 写 handler `(presetConfig, runtime) => Extension | void`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，包交回一个 `Extension`——`extendTools` / `extendInstructions` 两个钩子，返回 `Awaitable`，由 core 每轮第一步取一次，内核按 `extends` 顺序逐个 await；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.directory` 上。返回值里的 `dispose` 在实例停止时逆序执行。钩子里的错误落在轮次里。这个实例用不上这个包就返回 `undefined`。
-3. 在 preset 的 `extends` 里写上包名；需要参数就写 `config:`，字段含义由包自己解释。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名抛 `ToolConflictError`。`enable: false` 表示这一档不要：不依赖、不等待、不调用。
+2. 写 handler `(profileConfig, runtime) => Extension | void`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，包交回一个 `Extension`——`extendTools` / `extendInstructions` 两个钩子，返回 `Awaitable`，由 core 每轮第一步取一次，内核按 `extends` 顺序逐个 await；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.home` / `runtime.root` 上。返回值里的 `dispose` 在实例停止时逆序执行。钩子里的错误落在轮次里。这个实例用不上这个包就返回 `undefined`。
+3. 在 profile 的 `extends` 里写上包名；需要参数就写 `config:`，字段含义由包自己解释。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名抛 `ToolConflictError`。`enable: false` 表示这一档不要：不依赖、不等待、不调用。
 4. 内核不缓存这两样：每一轮第一步现取现算，工具面的顺序是内核工具 + 各包增量（按 `extends` 的顺序），之后 `innerThoughts`，再之后代码模式收窄；提示词接在内核那一段之后。要跨轮稳定就由包自己在闭包里缓存。
 
 两个 disposer 是两件事，别混：`ctx.ishiki.provide()` 返回的那个移除的是**服务**（连同这条 fiber），由扩展插件自己绑在生命周期上；返回值里的 `dispose` 清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。

@@ -1,208 +1,219 @@
-# Profile 示例：一份人设 = 一个通信域。
-# 放在 <dataPath>/profiles/<目录名>/profile.yml（或 .yaml）；目录名即 id 的缺省值。
-id: neko # 可选，缺省为所在目录名
+# Profile 示例：一个 profile.yaml 定义一个心智，目录名就是它的全局唯一 id。
+# 放在 <dataPath>/profiles/<目录名>/profile.yml（或 .yaml）。
+#
+# 下面的四段是四份**互相独立**的文件（四个目录），用注释分开，方便对照着看：
+#   profiles/neko/profile.yaml   普通形态，scenes 下逐频道认领
+#   profiles/fused/profile.yaml  cross 形态，多个频道合成一块视窗
+#   profiles/v3/profile.yaml     从 YesImBot v3 迁过来的一套引擎
+#   profiles/jev/profile.yaml    唤醒交给 Jev（TypeSafe）判定
+#
+# 字段分两层：顶层是这份心智的基线，scenes 下的每一项可就地覆写基线（生效范围 = 自己的名单）。
+
+# ── profiles/neko/profile.yaml ──────────────────────────────────────────────
+name: neko # 可选，仅备注；内核不读它
 description: 示例人设 # 仅用于显示
 
-presets:
-  # Preset 是心智基线；scenes 挂在它名下，每个 scene 是一个生效单位，
-  # 可就地扩展基线（生效范围 = 自己的 matchlist）。
-  chat:
-    description: 日常聊天
-    model: openai:gpt-5.6-luna # provider:model，或 gateway 里定义的组名
-    failover:
-      attempts: 3 # 缺省跑完一轮候选
-      backoffMs: 500 # 逐次翻倍，封顶 8s，取半抖动
-      failoverOn: unavailable # 或 any
-    context:
-      # 上下文引擎：standard 线性增长，到上限后把最旧的一段压成摘要
-      # 引擎只写在 preset 上：上面这个 preset 认领的全部频道共用同一套引擎实例，
-      # 压缩水位与唤醒的冷却账本不会按频道分家。
-      engine: standard
-      standard:
-        maxChars: 32000 # 单轮模型输入的字符上限
-        refillRatio: 0.8 # 压缩后压到上限的多少，留出余量
-    wakeup:
-      # 唤醒引擎：standard 按下面几条判定一条消息要不要理
-      engine: standard
-      standard:
-        direct: true # 私聊必醒
-        atSelf: true # 被 @ 必醒
-        quoteSelf: true # 被引用回复必醒
-        keywords: [neko, 喵酱] # 提到这些词也醒
-    toolcall:
-      # 工具调用引擎：native 用模型原生 function call（缺省）；
-      # 其余按输出协议名取，由解析引擎从纯文本输出里提取调用，不需要模型原生支持 function call：
-      # v3（JSON OUTPUT，每步必带 thoughts 三段）/ hermes / qwen3coder / morph-xml / yaml-xml
-      engine: native
-    # 代码模式：模型改写一段程序，程序在沙箱里调工具，中间数据不出上下文。
-    # 与 toolcall 正交——toolcall 管输出协议，这里管工具面。默认关闭。
-    codemode:
-      enable: false
-      # 哪些工具能被谁调。没写进 direct 的工具收进沙箱、从模型目录里消失，
-      # 只有程序调得到；写进 direct 的工具只留模型目录，程序够不着它。
-      # send_message 固定两处都可达（直调发言省一层程序，程序里也要能说话），
-      # finish 固定只留目录（收尾由模型直调发起，程序里的收尾不该结束轮次）。
-      direct: []
-      timeoutMs: 30000 # 单次沙箱执行的总时限（毫秒）
-    # 发消息前等多久，模拟打字
+model: openai:gpt-5.6-luna # provider:model，或 gateway 里定义的组名
+failover:
+  attempts: 3 # 缺省跑完一轮候选
+  backoffMs: 500 # 逐次翻倍，封顶 8s，取半抖动
+  failoverOn: unavailable # 或 any
+
+context:
+  # 上下文引擎：standard 线性增长，到上限后把最旧的一段压成摘要。
+  # 引擎实例随每个频道实例各造一份，压缩水位不按频道分家也不会串台。
+  engine: standard
+  standard:
+    maxChars: 32000 # 单轮模型输入的字符上限
+    refillRatio: 0.8 # 压缩后压到上限的多少，留出余量
+
+wakeup:
+  # 唤醒引擎：standard 按下面几条判定一条消息要不要理
+  engine: standard
+  standard:
+    direct: true # 私聊必醒
+    atSelf: true # 被 @ 必醒
+    quoteSelf: true # 被引用回复必醒
+    keywords: [neko, 喵酱] # 提到这些词也醒
+
+toolcall:
+  # 工具调用引擎：native 用模型原生 function call（缺省）；
+  # 其余按输出协议名取，由解析引擎从纯文本输出里提取调用，不需要模型原生支持 function call：
+  # v3（JSON OUTPUT，每步必带 thoughts 三段）/ hermes / qwen3coder / morph-xml / yaml-xml
+  engine: native
+
+# 代码模式：模型改写一段程序，程序在沙箱里调工具，中间数据不出上下文。
+# 与 toolcall 正交——toolcall 管输出协议，这里管工具面。默认关闭。
+codemode:
+  enable: false
+  # 哪些工具能被谁调。没写进 direct 的工具收进沙箱、从模型目录里消失，
+  # 只有程序调得到；写进 direct 的工具只留模型目录，程序够不着它。
+  # send_message 固定两处都可达（直调发言省一层程序，程序里也要能说话），
+  # finish 固定只留目录（收尾由模型直调发起，程序里的收尾不该结束轮次）。
+  direct: []
+  timeoutMs: 30000 # 单次沙箱执行的总时限（毫秒）
+
+# 发消息前等多久，模拟打字
+typing:
+  baseDelay: 500
+  charPerSecond: 5
+  minDelay: 800
+  maxDelay: 4000
+
+# 扩展包：键是包名，值是这个 profile 给它的东西。extends 只启用包附加的能力，
+# 不决定引擎：某个引擎变体可不可用，只看 `ishiki.engine.<族>.<名字>` 这个 Koishi Service
+# 在不在，名字带不带包前缀都一样。变体名写在上面 context / wakeup / toolcall 三段里。
+# 只写包名即启用，enable: false 的在展开时就筛掉（静态）；剩下的每一项都是必需依赖，
+# profile 缺哪个就停在等待态并报一条。
+# 包交回的那个 handler 在每个实例的装配期被叫一次，能加的只有工具与提示词；
+# config 原样递给包，字段含义由包自己解释。
+# extends:
+#   neko-tools:
+#     config:
+#       maxResults: 20
+#   vision-pack:
+#     enable: false
+
+scenes:
+  # 一个 scene 绑定一个账号，认领该账号名下一组频道；
+  # 每个匹配到的频道各起一个独立的意识实例，历史互不相通。
+  groups:
+    description: 群聊
+    sid: onebot:10000 # 必填：该 scene 绑定的账号
+    whitelist:
+      - "group:*" # `*` 全部，尾随 `*` 按前缀，其余精确匹配
+      - "123456789"
+    blacklist:
+      - "987654321" # 排除的频道，写法同 whitelist
+    # 也可在 scene 上就地覆写基线（只作用于本 scene 认领的频道）
     typing:
-      baseDelay: 500
-      charPerSecond: 5
-      minDelay: 800
-      maxDelay: 4000
-    # 扩展包：键是包名，值是这个 preset 给它的东西。extends 只启用包附加的能力，
-    # 不决定引擎：某个引擎变体可不可用，只看 `ishiki.engine.<族>.<名字>` 这个 Koishi Service
-    # 在不在，名字带不带包前缀都一样。变体名写在下面 context / wakeup / toolcall 三段里。
-    # 只写包名即启用，enable: false 的在 preset 展开时就筛掉（静态）；剩下的每一项都是必需依赖，
-    # preset 缺哪个就停在等待态并报一条。
-    # 包交回的那个 handler 在每个实例的装配期被叫一次，能加的只有工具与提示词；
-    # config 原样递给包，字段含义由包自己解释。
-    # extends:
-    #   neko-tools:
-    #     config:
-    #       maxResults: 20
-    #   vision-pack:
-    #     enable: false
+      charPerSecond: 8
+  dms:
+    description: 私聊
+    sid: onebot:10000
+    whitelist:
+      - "private:*"
 
-    scenes:
-      # 一个 scene 绑定一个账号，认领该账号名下一组频道；
-      # 每个匹配到的频道各起一个独立的意识实例，历史互不相通。
-      groups:
-        description: 群聊
-        sid: onebot:10000 # 必填：该 scene 绑定的账号
-        whitelist:
-          - "group:*" # `*` 全部，尾随 `*` 按前缀，其余精确匹配
-          - "123456789"
-        blacklist:
-          - "987654321" # 排除的频道，写法同 whitelist
-        # 也可在 scene 上就地扩展 preset（只作用于本 scene 认领的频道）
-        typing:
-          charPerSecond: 8
-      dms:
-        description: 私聊
-        sid: onebot:10000
-        whitelist:
-          - "private:*"
+# ── profiles/fused/profile.yaml ─────────────────────────────────────────────
+# 多频道合成一块视窗：写 cross 的 profile 自己就是生效单位，claims 里的频道共享同一份事实流、
+# 同一套引擎实例。合流之后没有「当前频道」，所以出站要显式写坐标（send_message 的 target），
+# 每条事实行前也会多一个 `[#sid/频道号 | 发送者]` 的寻址头。
+# 代价在 token：认领的频道全部消息进同一块窗口，认领范围别铺太开。
+# claims 的键是 sid，写多节就把多个账号合流；同一个账号的同一批频道只能归一个 profile。
+#
+# description: 群聊与私聊共享一个心智
+# model: openai:gpt-5.6-luna
+# context:
+#   engine: standard
+#   standard:
+#     maxChars: 32000
+# wakeup:
+#   engine: standard
+#   standard:
+#     direct: true
+#     atSelf: true
+#     quoteSelf: true
+#     keywords: [neko, 喵酱]
+# toolcall:
+#   engine: native
+# typing:
+#   baseDelay: 500
+#   charPerSecond: 5
+# cross: true # 与 scenes 互斥：cross profile 不接受 scene，也不接受就地覆写
+# claims:
+#   "onebot:10000":
+#     whitelist:
+#       - "group:*" # 群聊
+#       - "private:*" # 与这个账号的私聊
+#     # blacklist: ["987654321"] # 不想合进来的频道照 scene 的写法排除
 
-  # 多频道合成一块视窗：写 cross 的 preset 自己就是生效单位，claims 里的频道共享同一份事实流、
-  # 同一套引擎实例。合流之后没有「当前频道」，所以出站要显式写坐标（send_message 的 target），
-  # 每条事实行前也会多一个 `[#sid/频道号 | 发送者]` 的寻址头。
-  # 代价在 token：认领的频道全部消息进同一块窗口，认领范围别铺太开。
-  # claims 的键是 sid，写多节就把多个账号合流；同一个账号的同一批频道只能归一个生效单位。
-  fused:
-    description: 群聊与私聊共享一个心智
-    model: openai:gpt-5.6-luna
-    context:
-      engine: standard
-      standard:
-        maxChars: 32000
-    wakeup:
-      engine: standard
-      standard:
-        direct: true
-        atSelf: true
-        quoteSelf: true
-        keywords: [neko, 喵酱]
-    toolcall:
-      engine: native
-    typing:
-      baseDelay: 500
-      charPerSecond: 5
-    cross: true # 与 scenes 互斥：cross preset 不接受 scene，也不接受就地扩展
-    claims:
-      "onebot:10000":
-        whitelist:
-          - "group:*" # 群聊
-          - "private:*" # 与这个账号的私聊
-        # blacklist: ["987654321"] # 不想合进来的频道照 scene 的写法排除
+# ── profiles/v3/profile.yaml ────────────────────────────────────────────────
+# 从 YesImBot v3 迁过来的一套：WorldState 上下文、JSON OUTPUT 工具协议、响应意愿唤醒。
+# 三者各自独立，也可以和别的引擎混搭。
+#
+# description: v3 迁移三件套
+# model: openai:gpt-5.6-luna
+# context:
+#   engine: v3
+#   v3:
+#     maxMessages: 50 # 单轮窗口内的消息条数上限
+#     keepFullTurnCount: 2 # 保留最近几轮的完整思考/行动/观察，更早的只留消息
+#     memoryBlocks: true # 把 <profileDir>/memory/*.md 当核心记忆块注入 system
+# wakeup:
+#   engine: v3
+#   v3:
+#     base: 12 # 一条普通消息的基础分
+#     atMention: 100 # 被 @ 的加成
+#     isQuote: 15 # 引用本账号的加成
+#     isDirectMessage: 40 # 私聊的加成
+#     keywords: [neko, 喵酱] # 命中任一即改用 keywordMultiplier
+#     keywordMultiplier: 1.2
+#     defaultMultiplier: 1
+#     maxWillingness: 100 # 意愿上限
+#     decayHalfLifeSeconds: 600 # 不被打扰时的衰减半衰期
+#     probabilityThreshold: 55 # 概率从这个阈值之上起跳
+#     probabilityAmplifier: 0.04
+#     replyCost: 35 # 一轮结束后扣掉的意愿
+# toolcall:
+#   engine: v3
+# scenes:
+#   # v3 的唤醒按频道攒意愿值，群聊与私聊各一个生效单位。
+#   groups:
+#     sid: onebot:10000
+#     whitelist: ["group:*"]
+#   dms:
+#     sid: onebot:10000
+#     whitelist: ["private:*"]
 
-  # 从 YesImBot v3 迁过来的一套：WorldState 上下文、JSON OUTPUT 工具协议、响应意愿唤醒。
-  # 三者各自独立，也可以和别的引擎混搭。
-  v3:
-    description: v3 迁移三件套
-    model: openai:gpt-5.6-luna
-    context:
-      engine: v3
-      v3:
-        maxMessages: 50 # 单轮窗口内的消息条数上限
-        keepFullTurnCount: 2 # 保留最近几轮的完整思考/行动/观察，更早的只留消息
-        memoryBlocks: true # 把 <profileDir>/memory/*.md 当核心记忆块注入 system
-    wakeup:
-      engine: v3
-      v3:
-        base: 12 # 一条普通消息的基础分
-        atMention: 100 # 被 @ 的加成
-        isQuote: 15 # 引用本账号的加成
-        isDirectMessage: 40 # 私聊的加成
-        keywords: [neko, 喵酱] # 命中任一即改用 keywordMultiplier
-        keywordMultiplier: 1.2
-        defaultMultiplier: 1
-        maxWillingness: 100 # 意愿上限
-        decayHalfLifeSeconds: 600 # 不被打扰时的衰减半衰期
-        probabilityThreshold: 55 # 概率从这个阈值之上起跳
-        probabilityAmplifier: 0.04
-        replyCost: 35 # 一轮结束后扣掉的意愿
-    toolcall:
-      engine: v3
-
-    scenes:
-      # v3 的唤醒按频道攒意愿值，群聊与私聊各一个生效单位。
-      groups:
-        sid: onebot:10000
-        whitelist: ["group:*"]
-      dms:
-        sid: onebot:10000
-        whitelist: ["private:*"]
-
-  # 唤醒交给 Jev（TypeSafe）判定：规则只兜私聊与 @，其余消息都问一次模型。
-  # 需要 apiKey，或环境变量 TYPESAFE_API_KEY；缺了这份 profile 会在装载时被跳过。
-  jev:
-    description: 规则兜底 + Jev 判定的唤醒
-    model: openai:gpt-5.6-luna
-    context:
-      engine: standard # 上下文与唤醒各自独立，这里只把唤醒换掉
-    wakeup:
-      engine: jev
-      jev:
-        # 三个问句各判一维，再合成一个量：
-        #   addressed  这条是不是在跟本 bot 说
-        #   interested  本 bot 对这个话题有没有话说（读下面的 interests）
-        #   others     是不是别人之间的对话
-        # 合成式 sqrt(max(addressed, interested) × (1 - others))，过 threshold 才开口。
-        # 拆成三维而不是一个数，是因为「没人在找它，但它正好有话想说」在单问句里只能给低分。
-
-        # 补充判据：语气、什么时候该闭嘴都写在这里。三个问句的 criteria 是判定下限，
-        # 这段在它之上加约束——写得好是加分，写漏了也不塌下限。身份与兴趣不进这里，见 interests。
-        instruction: |
-          neko，猫娘，话不多但会接梗。
-          只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
-          几个人互相寒暄时保持安静。
-        # 本 bot 关心的话题，逐条写。只 interested 那一维读它，也是它唯一的信息来源：
-        # 留空 = 不偏袒任何话题，判定只靠 addressed 与 others 两维。
-        interests:
-          - LLM 工程与调试
-          - 群聊 bot 的行为设计
-          - TypeScript
-        # 合成量的下限，不是单个问句的置信度：三个问句都给 0.5（都没证据）时合成恰好 0.5。
-        # 因此 0.5 是「毫无证据也开口」的临界值，调高它收紧的是合成量。
-        threshold: 0.5
-        cooldownMs: 30000 # 上次开口后的静默期（毫秒）；硬命中的规则不受它约束
-        historyMessages: 8 # 喂给模型的最近消息条数
-        timeoutMs: 1500 # 单次判定等待上限（毫秒），超时按不唤醒处理
-        # 兜底规则：命中即唤醒、不问模型。默认只开私聊与 @，其余交给模型。
-        # 只在 engine: jev 这一段里写——写成 jev 同级的 standard 段不会被读。
-        rules:
-          direct: true
-          atSelf: true
-          quoteSelf: false
-          keywords: []
-
-    scenes:
-      # 引擎配置在 scene 层可就地覆盖（context / wakeup / toolcall），未写的键沿用 preset；
-      # extends 不可在 scene 层覆写（那是 preset 级的承诺）。引擎实例随每个频道实例各造一份。
-      groups:
-        sid: onebot:10000
-        whitelist: ["group:*"]
-      dms:
-        sid: onebot:10000
-        whitelist: ["private:*"]
+# ── profiles/jev/profile.yaml ───────────────────────────────────────────────
+# 唤醒交给 Jev（TypeSafe）判定：规则只兜私聊与 @，其余消息都问一次模型。
+# 需要 apiKey，或环境变量 TYPESAFE_API_KEY；缺了这份 profile 会在装载时被跳过。
+#
+# description: 规则兜底 + Jev 判定的唤醒
+# model: openai:gpt-5.6-luna
+# context:
+#   engine: standard # 上下文与唤醒各自独立，这里只把唤醒换掉
+# wakeup:
+#   engine: jev
+#   jev:
+#     # 三个问句各判一维，再合成一个量：
+#     #   addressed  这条是不是在跟本 bot 说
+#     #   interested  本 bot 对这个话题有没有话说（读下面的 interests）
+#     #   others     是不是别人之间的对话
+#     # 合成式 sqrt(max(addressed, interested) × (1 - others))，过 threshold 才开口。
+#     # 拆成三维而不是一个数，是因为「没人在找它，但它正好有话想说」在单问句里只能给低分。
+#
+#     # 补充判据：语气、什么时候该闭嘴都写在这里。三个问句的 criteria 是判定下限，
+#     # 这段在它之上加约束——写得好是加分，写漏了也不塌下限。身份与兴趣不进这里，见 interests。
+#     instruction: |
+#       neko，猫娘，话不多但会接梗。
+#       只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
+#       几个人互相寒暄时保持安静。
+#     # 本 bot 关心的话题，逐条写。只 interested 那一维读它，也是它唯一的信息来源：
+#     # 留空 = 不偏袒任何话题，判定只靠 addressed 与 others 两维。
+#     interests:
+#       - LLM 工程与调试
+#       - 群聊 bot 的行为设计
+#       - TypeScript
+#     # 合成量的下限，不是单个问句的置信度：三个问句都给 0.5（都没证据）时合成恰好 0.5。
+#     # 因此 0.5 是「毫无证据也开口」的临界值，调高它收紧的是合成量。
+#     threshold: 0.5
+#     cooldownMs: 30000 # 上次开口后的静默期（毫秒）；硬命中的规则不受它约束
+#     historyMessages: 8 # 喂给模型的最近消息条数
+#     timeoutMs: 1500 # 单次判定等待上限（毫秒），超时按不唤醒处理
+#     # 兜底规则：命中即唤醒、不问模型。默认只开私聊与 @，其余交给模型。
+#     # 只在 engine: jev 这一段里写——写成 jev 同级的 standard 段不会被读。
+#     rules:
+#       direct: true
+#       atSelf: true
+#       quoteSelf: false
+#       keywords: []
+# scenes:
+#   # 引擎配置在 scene 层可就地覆写（context / wakeup / toolcall），未写的键沿用顶层；
+#   # extends 不可在 scene 层覆写（那是 profile 级的承诺）。引擎实例随每个频道实例各造一份。
+#   groups:
+#     sid: onebot:10000
+#     whitelist: ["group:*"]
+#   dms:
+#     sid: onebot:10000
+#     whitelist: ["private:*"]

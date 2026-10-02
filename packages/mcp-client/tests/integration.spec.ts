@@ -301,10 +301,10 @@ describe("MCP 客户端：接进 ishiki 视窗", () => {
     try {
       const handler = root.ishiki.getExtension("mcp-client");
       expect(handler).toBeDefined();
-      // handler 只读实例的 profileDirectory，其余字段这个用例用不上。运行体的类型从 handler 的
+      // handler 只读实例的 root，其余字段这个用例用不上。运行体的类型从 handler 的
       // 签名上取，不另行命名——内核的 src 与 lib 两份声明同名不兼容，注解取自哪边都会错配。
       type Runtime = Parameters<NonNullable<typeof handler>>[1];
-      const runtime = { profileDirectory: path.join(dir, "neko") } as Runtime;
+      const runtime = { root: path.join(dir, "neko") } as Runtime;
       const extension = handler?.({}, runtime) as Extension;
       // 钩子等握手收尾：第一次取就是完整目录，不必逐轮长出来。
       expect(Object.keys((await extension.extendTools?.()) ?? {})).toEqual(["echo-echo", "echo-shot"]);

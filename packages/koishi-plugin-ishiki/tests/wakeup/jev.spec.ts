@@ -571,8 +571,8 @@ describe("jev wakeup: 接进场景", () => {
     try {
       const scene = new AgentRuntime({
         label: "test/scene/room",
-        directory,
-        profileDirectory: directory,
+        home: directory,
+        root: directory,
         model,
         gateway: {} as Gateway,
         instructions: "",

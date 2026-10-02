@@ -38,9 +38,9 @@ export interface Extension {
  * 扩展包的挂载函数，由 `ctx.ishiki.provide(name, handler)` 登记。
  *
  * 内核在 `AgentRuntime` 构造期间、`createAgent` 之前对每个实例叫一次，同步。实例已初始化基础字段、
- * 尚未创建 `Agent`：坐标在 `ctx` / `domain` / `directory` 上。这个实例用不上这个包就返回 `undefined`。
+ * 尚未创建 `Agent`：坐标在 `ctx` / `domain` / `home` / `root` 上。这个实例用不上这个包就返回 `undefined`。
  *
  * 返回值是这次挂载的 {@link Extension}，它那两件加法每轮被取用，出错（含撞名）因此发生在轮次里。
  * 包若在返回之前打开了外部资源，失败路径的清理由包自己负责：内核只拆已经拿到 Extension 的那几次挂载。
  */
-export type ExtensionHandler = (presetConfig: unknown, runtime: AgentRuntime) => Extension | void;
+export type ExtensionHandler = (profileConfig: unknown, runtime: AgentRuntime) => Extension | void;

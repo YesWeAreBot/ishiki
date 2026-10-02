@@ -141,8 +141,8 @@ describe("code mode", () => {
     });
     scene = new AgentRuntime({
       label: "test/scene/dm",
-      directory,
-      profileDirectory: directory,
+      home: directory,
+      root: directory,
       model,
       gateway: {} as Gateway,
       instructions: "",
@@ -218,24 +218,20 @@ describe("codemode config", () => {
   it("defaults to off, and scene overrides field by field", () => {
     const spec = resolveProfile(
       {
-        id: "neko",
-        presets: {
-          base: {
-            model: "test:model",
-            codemode: { enable: true, direct: ["a"], timeoutMs: 1000 },
-            // 数组整体替换：scene 写下新的一份，`direct` 不与 preset 拼接。
-            scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"], codemode: { direct: ["b"], timeoutMs: 2000 } } },
-          },
-        },
+        model: "test:model",
+        codemode: { enable: true, direct: ["a"], timeoutMs: 1000 },
+        // 数组整体替换：scene 写下新的一份，`direct` 不与 profile 拼接。
+        scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"], codemode: { direct: ["b"], timeoutMs: 2000 } } },
       },
       "neko",
-    ).presets[0]!.specs[0]!;
+    ).specs[0]!;
 
     expect(spec.codemode).toEqual({ enable: true, direct: ["b"], timeoutMs: 2000 });
-    expect(
-      resolveProfile({ id: "neko", presets: { base: { model: "test:model", scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } } } }, "neko")
-        .presets[0]!.specs[0]!.codemode,
-    ).toEqual({ enable: false, direct: [], timeoutMs: 30_000 });
+    expect(resolveProfile({ model: "test:model", scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } } }, "neko").specs[0]!.codemode).toEqual({
+      enable: false,
+      direct: [],
+      timeoutMs: 30_000,
+    });
   });
 
   it("wires the scene's flag into the agent's caller table", async () => {
@@ -255,17 +251,12 @@ describe("codemode config", () => {
       },
     });
     const config = {
-      id: "neko",
-      presets: {
-        base: {
-          model: "test:model",
-          context: { engine: "standard", standard: { maxChars: 10_000 } },
-          typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
-          wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
-          codemode: { enable: true },
-          scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
-        },
-      },
+      model: "test:model",
+      context: { engine: "standard", standard: { maxChars: 10_000 } },
+      typing: { baseDelay: 0, charPerSecond: 0, minDelay: 0, maxDelay: 0 },
+      wakeup: { engine: "standard", standard: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+      codemode: { enable: true },
+      scenes: { dms: { sid: "onebot:1", whitelist: ["private:*"] } },
     };
     const gateway = { languageModel: () => model, groups: () => [] } as never;
     // 引擎 provider 立在这台真 ctx 上：运行时只按服务名取用；provider 在 ready 时登记，先启动。
@@ -274,8 +265,8 @@ describe("codemode config", () => {
     new StandardWakeupEngine(ctx);
     new NativeToolcallEngine(ctx);
     await ctx.start();
-    const runtime = new ProfileRuntime({ id: "neko", directory, ctx, gateway, logger });
-    for (const preset of resolveProfile(config, "neko").presets) runtime.activate(preset);
+    const resolved = resolveProfile(config, "neko");
+    const runtime = new ProfileRuntime({ id: "neko", root: directory, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
 
     try {
       await runtime.route(event("e"))!.deliver(event("e"));

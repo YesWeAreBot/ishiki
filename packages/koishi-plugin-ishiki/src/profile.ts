@@ -64,7 +64,7 @@ export interface TypingConfig {
 }
 
 /**
- * 唯一一份声明：preset 与 scene 共用它。
+ * 唯一一份声明：profile 与 scene 共用它。
  * 不给默认值——被它补上的值与用户写的值在合并层形状相同、无从分辨，覆写语义会因此失效；缺省值在 {@link FALLBACK}。
  */
 export const TypingConfig: Schema<Partial<TypingConfig>> = Schema.object({
@@ -94,7 +94,7 @@ export interface CodemodeConfig {
 }
 
 /**
- * 唯一一份声明：preset 与 scene 共用它。
+ * 唯一一份声明：profile 与 scene 共用它。
  * 不给默认值——被它补上的值与用户写的值在合并层形状相同、无从分辨，覆写语义会因此失效；缺省值在 {@link FALLBACK}。
  */
 export const CodemodeConfig: Schema<Partial<CodemodeConfig>> = Schema.object({
@@ -127,7 +127,7 @@ export const FailoverConfig: Schema<Partial<FailoverConfig>> = Schema.object({
 /**
  * ### 频道名单
  *
- * `whitelist` / `blacklist` 这一对字段在配置面出现两处：普通 scene 的认领清单与 cross preset 的 claim，
+ * `whitelist` / `blacklist` 这一对字段在配置面出现两处：普通 scene 的认领清单与 cross profile 的 claim，
  * 形状完全一致，声明只留一份。
  *
  * 两个数组的缺省层刻意取 undefined：schemastery 会为空缺的 array 物化出 `[]`，
@@ -160,12 +160,12 @@ export const ChannelClaim: Schema<ChannelClaim> = Schema.object({
 /**
  * ### 扩展包
  *
- * `extends` 是一张包名到配置的映射：键即包名，值是这个 preset 给它的东西。
+ * `extends` 是一张包名到配置的映射：键即包名，值是这个 profile 给它的东西。
  * 核心只解释三件事——包叫什么、要不要启用、`config` 归谁；`config` 里的字段含义、默认值与
  * 业务校验全归包自己，装载期原样递到 `provide()` 手里。
  *
  * 写 `enable: false` 是「这个包我认识，但这一档不要」：不建立依赖、不等待、不调用、不报错。
- * 写了却没装上，仍是必需依赖——preset 停在等待态，服务到了自动激活。
+ * 写了却没装上，仍是必需依赖——profile 停在等待态，服务到了自动激活。
  *
  * Example:
  * ```yaml
@@ -178,14 +178,14 @@ export const ChannelClaim: Schema<ChannelClaim> = Schema.object({
  *     enable: false # 认识但这一档不启用：不依赖、不等待
  * ```
  */
-export interface PresetExtensionConfig {
-  /** 是否启用；缺省即启用。`false` 时本 preset 不依赖这个包，也不调用它。 */
+export interface ProfileExtensionConfig {
+  /** 是否启用；缺省即启用。`false` 时本 profile 不依赖这个包，也不调用它。 */
   enable?: boolean;
   /** 原样递给 provider 的 `provide()`；字段含义由包自己解释，核心不校验。 */
   config?: unknown;
 }
 
-export const PresetExtensionConfig: Schema<PresetExtensionConfig> = Schema.object({
+export const ProfileExtensionConfig: Schema<ProfileExtensionConfig> = Schema.object({
   enable: Schema.boolean().description("是否启用；缺省即启用。false 表示不依赖、不等待、不调用该包"),
   config: Schema.any().description("原样递给扩展包，包自己解释字段与默认值"),
 });
@@ -193,28 +193,26 @@ export const PresetExtensionConfig: Schema<PresetExtensionConfig> = Schema.objec
 /**
  * ### Scene
  *
- * Scene 挂在 preset 下，是一份针对某组频道的扩展：语义是「在这个心智里，对这些频道再补一层」，
- * 不是覆写同 preset 的兄弟 scene。三层合并（内置缺省 ← preset ← scene）逐 scene 独立进行，
+ * Scene 挂在 profile 下，是一份针对某组频道的扩展：语义是「在这个心智里，对这些频道再补一层」，
+ * 不是覆写同 profile 的兄弟 scene。三层合并（内置缺省 ← profile ← scene）逐 scene 独立进行，
  * 生效范围被它自己的名单圈住，跨 scene 的配置冲突在结构上不可能发生，不需要任何合法性规则。
  *
  * Example:
  * ```yaml
-presets:
-  chat:
+model: <model-or-group-name>
+scenes:
+  rooms:
+    sid: onebot:12345 # 必填：绑定的 Bot 账号
+    whitelist: ["group:*"] # 也可逐个列出频道 id
+    blacklist: ["12345678"]
+    # 就地扩展 profile 基线；未写的字段沿用 profile，profile 也没写就用内置缺省
     model: <model-or-group-name>
-    scenes:
-      rooms:
-        sid: onebot:12345 # 必填：绑定的 Bot 账号
-        whitelist: ["group:*"] # 也可逐个列出频道 id
-        blacklist: ["12345678"]
-        # 就地扩展 preset 基线；未写的字段沿用 preset，preset 也没写就用内置缺省
-        model: <model-or-group-name>
-        wakeup: # 引擎变体也可就地覆盖；变体是否可用只看它对应的引擎服务在不在
-          engine: <wakeup-engine-b>
-          <wakeup-engine-b>:
-            paramA:
-        typing:
-          charPerSecond: 8
+    wakeup: # 引擎变体也可就地覆盖；变体是否可用只看它对应的引擎服务在不在
+      engine: <wakeup-engine-b>
+      <wakeup-engine-b>:
+        paramA:
+    typing:
+      charPerSecond: 8
  * ```
  */
 export interface SceneConfig extends ChannelClaim {
@@ -225,18 +223,18 @@ export interface SceneConfig extends ChannelClaim {
    */
   sid?: string;
   model?: string;
-  /** 降级与重试的局部扩展；未写的字段沿用 preset（若 preset 也没写，用内置缺省）。 */
+  /** 降级与重试的局部扩展；未写的字段沿用 profile（若 profile 也没写，用内置缺省）。 */
   failover?: Partial<FailoverConfig>;
-  /** 上下文引擎的局部覆盖；未写沿用 preset。引擎实例随 AgentRuntime 诞生，一个实例一份。 */
+  /** 上下文引擎的局部覆盖；未写沿用 profile。引擎实例随 AgentRuntime 诞生，一个实例一份。 */
   context?: ContextConfig;
-  /** 唤醒引擎的局部覆盖；未写沿用 preset。引擎实例随各自的 AgentRuntime 诞生，状态留在实例内。 */
+  /** 唤醒引擎的局部覆盖；未写沿用 profile。引擎实例随各自的 AgentRuntime 诞生，状态留在实例内。 */
   wakeup?: WakeupConfig;
   toolcall?: ToolcallConfig;
   /** 是否启用幕后通道：每个工具的参数表前置 inner_thoughts，think 工具退场。默认关闭。 */
   innerThoughts?: boolean;
-  /** 代码模式的局部覆盖；未写沿用 preset（若 preset 也没写，默认关闭）。 */
+  /** 代码模式的局部覆盖；未写沿用 profile（若 profile 也没写，默认关闭）。 */
   codemode?: Partial<CodemodeConfig>;
-  /** 打字节奏的局部扩展；未写的字段沿用 preset（若 preset 也没写，用内置缺省）。 */
+  /** 打字节奏的局部扩展；未写的字段沿用 profile（若 profile 也没写，用内置缺省）。 */
   typing?: Partial<TypingConfig>;
 }
 
@@ -256,21 +254,24 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
 });
 
 /**
- * ### Preset
+ * ### Profile
  *
- * Preset 是心智基线，也是树的分叉点：两种形态互斥，装载期即校验。
+ * 一个 profile.yaml 定义一个 profile：目录名就是它的全局唯一 id，两种形态互斥，装载期即校验。
  *
  * - 普通形态挂 `scenes`，每个 scene 是一个生效单位（一份按名单圈定频道集的装配清单），
  *   可在自己的频道上就地扩展这份基线。
- * - cross 形态以 `cross: true` 声明 preset 自身即生效单位，频道来自 `claims`：
- *   运行参数只有 preset 这一层，没有 scene 层可以扩展——共享实例下 per-channel 字段无从定义。
+ * - cross 形态以 `cross: true` 声明 profile 自身即生效单位，频道来自 `claims`：
+ *   运行参数只有 profile 这一层，没有 scene 层可以扩展——共享实例下 per-channel 字段无从定义。
  *
- * 形态与归属都写在结构里，不靠「哪个 scene 引用了我」反推：给已被多 scene 挂靠的 preset 打上 cross
+ * 形态与归属都写在结构里，不靠「哪个 scene 引用了我」反推：给已被多 scene 挂靠的 profile 打上 cross
  * 不可能顺带合流谁，合流范围就是写下 `claims` 的那几行。
+ *
+ * `name` 只给人看：内核不消费它，路由、日志与提示词都不读。
  *
  * Example:
  * ```yaml
- * description: <preset-description> # for display only
+ * name: <profile-name> # 可选，仅备注
+ * description: <profile-description> # for display only
  *
  * model: <model-or-group-name>
  *
@@ -310,15 +311,17 @@ export const SceneConfig: Schema<SceneConfig> = Schema.object({
  *     whitelist: [<channel-pattern>]
  * ```
  */
-export interface PresetConfig {
+export interface ProfileConfig {
+  /** 仅给人看的备注名；内核不消费，不参与路由、日志与提示词。 */
+  name?: string;
   description?: string;
   model: string;
   /**
-   * 选中的扩展包：包名到配置的映射，本 preset 依赖启用项的 `ishiki.ext.<包名>` 服务，
+   * 选中的扩展包：包名到配置的映射，本 profile 依赖启用项的 `ishiki.ext.<包名>` 服务，
    * 装配每个实例时把它们逐个 `provide()`。引擎变体不经这里准入——一个变体是否可用只看
    * 它对应的引擎服务在不在。空映射等于不选任何扩展，与不写等价。
    */
-  extends?: Record<string, PresetExtensionConfig>;
+  extends?: Record<string, ProfileExtensionConfig>;
   failover?: Partial<FailoverConfig>;
   /** 上下文引擎。缺省补成 `standard`；实例随 AgentRuntime 各造一份。 */
   context?: ContextConfig;
@@ -330,7 +333,7 @@ export interface PresetConfig {
   /** 代码模式。缺省关闭；启用后除收尾工具与 `direct` 列出的之外，全部工具收进沙箱。 */
   codemode?: Partial<CodemodeConfig>;
   typing?: Partial<TypingConfig>;
-  /** 声明本 preset 自身即生效单位（跨频道合流）；与 `scenes` 互斥。 */
+  /** 声明本 profile 自身即生效单位（跨频道合流）；与 `scenes` 互斥。 */
   cross?: boolean;
   /** 普通形态下挂靠的 scene 们。 */
   scenes?: Record<string, SceneConfig>;
@@ -338,10 +341,11 @@ export interface PresetConfig {
   claims?: Record<string, ChannelClaim>;
 }
 
-export const PresetConfig: Schema<PresetConfig> = Schema.object({
+export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
+  name: Schema.string().description("仅给人看的备注名，内核不读"),
   description: Schema.string(),
   model: Schema.string().required(),
-  extends: Schema.dict(PresetExtensionConfig).description("选中的扩展包：包名到 { enable, config } 的映射，config 原样递给包"),
+  extends: Schema.dict(ProfileExtensionConfig).description("选中的扩展包：包名到 { enable, config } 的映射，config 原样递给包"),
   failover: FailoverConfig,
   context: ContextConfig,
   wakeup: WakeupConfig,
@@ -349,74 +353,30 @@ export const PresetConfig: Schema<PresetConfig> = Schema.object({
   innerThoughts: Schema.boolean().description("将幕后念头挂到每个工具的参数表上（inner_thoughts），并移除 think 工具"),
   codemode: CodemodeConfig,
   typing: TypingConfig,
-  cross: Schema.boolean().description("声明本 preset 自身即生效单位（跨频道合流）；与 scenes 互斥"),
+  cross: Schema.boolean().description("声明本 profile 自身即生效单位（跨频道合流）；与 scenes 互斥"),
   scenes: Schema.dict(SceneConfig).description("普通形态下挂靠的 scene 们"),
   claims: Schema.dict(ChannelClaim).description("cross 形态下按 sid 认领的频道"),
 });
 
 /**
- * ### Profile
- *
- * Profile 是一份人设，也是一个通信域：事实与实例都不跨 Profile 流动。
- * preset 逐个解析与校验：某个 preset 坏掉只跳过它自己，其余照常展开。
- *
- * Example:
- * ```yaml
- * id: <profile-id> # 可选，缺省为所在目录名
- * description: <profile-description> # for display only
- *
- * presets:
- *   <preset-name-a>:
- *     <preset-config-a>
- *     scenes: # 或 cross: true + claims，二者互斥
- *       <scene-name-a>:
- *         description: <scene-description-a> # for display only
- *         sid: <bot-sid> # 该 Scene 绑定的 Bot 账号，必填
- *         whitelist:
- *           - <channel-pattern> # `*` 全部，`<前缀>*` 前缀匹配
- *         blacklist:
- *           - <channel-pattern>
- *         # 就地扩展 preset，未写的字段沿用 preset
- *         model: <model-or-group-name>
- * ```
- */
-export interface ProfileConfig {
-  id?: string;
-  description?: string;
-  /**
-   * 原始 preset 块：逐个交给 {@link PresetConfig} 解析，坏掉的只跳过自己。
-   * 根校验只保证它是个对象，preset 的形状错误留给各自的 Schema 报出。
-   */
-  presets: Record<string, unknown>;
-}
-
-export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
-  id: Schema.string(),
-  description: Schema.string(),
-  presets: Schema.dict(Schema.any()).required(),
-});
-
-/**
- * 展开后的装配清单，即一份工厂，Preset 已展开到本层。
+ * 展开后的装配清单，即一份工厂，profile 已展开到本层。
  * 它描述一个生效单位的运行参数；匹配到的每个频道各创建一个 `AgentRuntime`（一 Channel 一 Agent）。
  *
  * 引擎配置随三层合并落到本层：引擎实例在装配期按 spec 逐个诞生（一生效单位一份），
- * 配置与实例同层，不再有按 preset 归集的旁路。
+ * 配置与实例同层，不再有按 profile 归集的旁路。
  *
  * 两种形态共用一个形状而不是联合类型：运行参数与名单的读法完全一致，差别只在
  * `cross` 这一个判别位与「认领的频道集合怎么来」。多写一套联合会让每个读 spec 的人
  * 都要先分一次支，而分完之后做的事是同一件。
  */
 export interface SceneSpec {
-  /** 所属 Profile 的 id。 */
+  /** 所属 profile 的 id，即它的目录名；全局唯一。 */
   profile: string;
   /**
-   * Profile 内唯一的生效单位名：普通形态是 `scenes` 的键，cross 形态是 preset 名。
-   * 树内唯一性由位置保证——scene 挂在 preset 下，cross 用 preset 名，profile 内不重名。
+   * 本 profile 内的生效单位名：普通形态是 `scenes` 的键，cross 形态恒为 {@link CROSS_KEY}，
+   * 与它的数据目录同名。profile 内唯一性由 `scenes` 的键保证。
    */
   name: string;
-  /** 挂靠的 preset 名；两种形态都是它的心智基线。 */
-  preset: string;
   /**
    * 认领的频道模式。普通形态来自该 scene 自己的名单，cross 形态是 `claims` 各 sid 的并集。
    * 刻意不按 sid 拆分：现状里 scene 恒定绑一个账号，路由先比 sid 再比名单；
@@ -432,25 +392,28 @@ export interface SceneSpec {
   sid: string;
   /** cross 形态按 sid 认领的频道；普通形态为 undefined。 */
   claims?: Record<string, ChannelClaim>;
-  /** 该生效单位是否为 cross preset 自身（跨频道合流，共享一块视窗）。 */
+  /** 该生效单位是否为 cross profile 自身（跨频道合流，共享一块视窗）。 */
   cross: boolean;
   description?: string;
   model: string;
-  /** 降级与重试，Preset 与 Scene 的扩展已在此合并。 */
+  /** 降级与重试，profile 与 scene 的扩展已在此合并。 */
   failover: FailoverConfig;
-  /** 上下文引擎配置，内置缺省 ← preset ← scene 已在此合并；缺省补成 standard。 */
+  /** 上下文引擎配置，内置缺省 ← profile ← scene 已在此合并；缺省补成 standard。 */
   context: ContextConfig;
   /** 唤醒引擎配置，合并规则同 context；缺省补成 standard。 */
   wakeup: WakeupConfig;
-  /** 工具调用方式，Preset 与 Scene 的扩展已在此合并；缺省 native。 */
+  /** 工具调用方式，profile 与 scene 的扩展已在此合并；缺省 native。 */
   toolcall: ToolcallConfig;
-  /** 幕后通道是否启用，Preset 与 Scene 的扩展已在此合并；缺省关闭。 */
+  /** 幕后通道是否启用，profile 与 scene 的扩展已在此合并；缺省关闭。 */
   innerThoughts: boolean;
-  /** 代码模式配置，Preset 与 Scene 的扩展已在此合并；缺省关闭。 */
+  /** 代码模式配置，profile 与 scene 的扩展已在此合并；缺省关闭。 */
   codemode: CodemodeConfig;
-  /** 打字节奏，Preset 与 Scene 的扩展已在此合并。 */
+  /** 打字节奏，profile 与 scene 的扩展已在此合并。 */
   typing: TypingConfig;
 }
+
+/** cross 形态的生效单位名，同时是它的数据目录名：一个 profile 只有一个合流视窗。 */
+export const CROSS_KEY = "cross";
 
 /** 目录名安全化：生成由 sid 与 channelId 拼成的单段文件名时使用。 */
 export function sceneDirectoryName(name: string): string {
@@ -532,104 +495,63 @@ const FALLBACK: Pick<SceneSpec, "failover" | "context" | "wakeup" | "toolcall" |
   blacklist: [],
 };
 
-/** 一份 preset 的展开结果。 */
-export interface ResolvedPreset {
-  /** preset 名。 */
-  name: string;
-  /** 该 preset 的生效单位清单；引擎配置已随三层合并落进各 spec。 */
+/** 展开一份 profile.yaml 的结果：目录名即 id；加载后不再变化。 */
+export interface ResolvedProfile {
+  /** 目录名，全局唯一标识。 */
+  id: string;
+  /** 本 profile 的生效单位清单；引擎配置已随三层合并落进各 spec。 */
   specs: SceneSpec[];
   /**
    * 启用的扩展包，键是包名、值是 `config` 的原样内容，按配置里的书写顺序。
-   * 准入是 preset 级承诺，不随 scene 逐个覆写，因此挂在 preset 上而不是 spec 上。
+   * 准入是 profile 级承诺，不随 scene 逐个覆写，因此挂在这里而不是 spec 上。
    * `enable: false` 的包不进这里。
    */
   extensions: Record<string, unknown>;
 }
 
-/** 被跳过的 preset：名字与它出错的原因。 */
-export interface PresetSkip {
-  preset: string;
-  message: string;
-}
-
-/** 展开一份 profile 的结果：按 preset 分组，激活与失败都以 preset 为界。 */
-export interface ResolvedProfile {
-  /** 最终生效的 profile 标识：`id` 字段去空白后优先，否则用调用方给的目录名。 */
-  id: string;
-  /** 展开成功的 preset；加载后不再变化。 */
-  presets: ResolvedPreset[];
-  /** 被跳过的 preset 及原因；单个坏 preset 不影响同 profile 的其他 preset。 */
-  skipped: PresetSkip[];
-}
-
 /**
- * 解析并展开一份 profile：根结构错误（presets 缺失或非对象、id/description 类型不对）抛出，装载方跳过整个 profile；
- * preset 逐个解析与校验，坏掉的记进 {@link ResolvedProfile.skipped}、只跳过自己。
- * 频道归属在这里一次性判定：同一 preset 内的冲突让它被跳过；跨 preset 的冲突使整个 profile 无法装载——
- * 路由不能在同一频道上出现两个归属，让配置者猜归属的规则在树形结构下已无必要。
+ * 解析并展开一份 profile.yaml：结构错误（缺 scenes 又非 cross、scene 缺 sid 或 whitelist）抛出，
+ * 装载方跳过整个目录。`id` 由调用方给，就是所在目录名。
  * `raw` 是原始 YAML 的解析结果：Schema 在这里收口，装载方只管读文件。
  */
-export function resolveProfile(raw: unknown, fallbackId: string): ResolvedProfile {
+export function resolveProfile(raw: unknown, id: string): ResolvedProfile {
   // Schema 的入参类型就是解析结果本身；原始 YAML 的形状在这一点断言，校验交给 Schema。
   const profile = ProfileConfig(raw as ProfileConfig);
-  const id = profile.id?.trim() || fallbackId;
-  const presets: ResolvedPreset[] = [];
-  const skipped: PresetSkip[] = [];
-
-  for (const [presetName, presetRaw] of Object.entries(profile.presets)) {
-    try {
-      presets.push(resolvePreset(presetName, presetRaw, id));
-    } catch (error) {
-      skipped.push({ preset: presetName, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  assertNoOverlap(
-    presets.flatMap((preset) => preset.specs),
-    id,
-  );
-  return { id, presets, skipped };
-}
-
-/** 展开一个 preset：抛出的错误由 {@link resolveProfile} 收成该 preset 的跳过记录，不牵连兄弟。 */
-function resolvePreset(presetName: string, raw: unknown, id: string): ResolvedPreset {
-  const preset = PresetConfig(raw as PresetConfig);
   const specs: SceneSpec[] = [];
-  const scenes = preset.scenes ?? {};
+  const scenes = profile.scenes ?? {};
   const sceneNames = Object.keys(scenes);
-  // 形态开关与两处名单不是心智基线：不剥掉会随 preset 层并进每个 spec。
+  // 形态开关与两处名单不是心智基线：不剥掉会随 profile 层并进每个 spec。
   // 引擎块随 baseline 进三层合并——实例按 spec 逐个诞生，配置没有理由留在别处。
-  const { scenes: _scenes, claims: presetClaims, cross: _cross, extends: presetExtends, ...baseline } = preset;
+  const { scenes: _scenes, claims, cross: _cross, extends: profileExtends, ...baseline } = profile;
   // 只留启用的包：`enable: false` 是「这一档不要」，不建立依赖也不调用。config 原样带走，字段由包自己解释。
   const extensions: Record<string, unknown> = {};
-  for (const [pkg, conf] of Object.entries(presetExtends ?? {})) {
+  for (const [pkg, conf] of Object.entries(profileExtends ?? {})) {
     if (conf.enable === false) continue;
     extensions[pkg] = conf.config;
   }
 
-  // 形态互斥与空心智是一组判断：认不出这个 preset 以什么形态生效，就没法装配。
-  if (preset.cross === true) {
-    if (sceneNames.length !== 0) throw new Error(`Cross preset "${presetName}" of profile "${id}" must not have scenes`);
-    if (Object.keys(presetClaims ?? {}).length === 0) throw new Error(`Cross preset "${presetName}" of profile "${id}" needs "claims"`);
+  // 形态互斥与空心智是一组判断：认不出这个 profile 以什么形态生效，就没法装配。
+  if (profile.cross === true) {
+    if (sceneNames.length !== 0) throw new Error(`Cross profile "${id}" must not have scenes`);
+    if (Object.keys(claims ?? {}).length === 0) throw new Error(`Cross profile "${id}" needs "claims"`);
   } else if (sceneNames.length === 0) {
-    throw new Error(`Preset "${presetName}" of profile "${id}" has no scenes and is not cross`);
+    throw new Error(`Profile "${id}" has no scenes and is not cross`);
   }
 
   for (const name of sceneNames) {
     const scene = scenes[name]!;
     const sid = scene.sid?.trim();
-    if (!sid) throw new Error(`Scene "${presetName}/${name}" of profile "${id}" needs a "sid"`);
+    if (!sid) throw new Error(`Scene "${id}/${name}" needs a "sid"`);
     // whitelist 的键被 Schema 刻意留成 absent，好把「显式空数组」与「忘了写」分开。
-    if (scene.whitelist === undefined) throw new Error(`Scene "${presetName}/${name}" of profile "${id}" needs a "whitelist"`);
+    if (scene.whitelist === undefined) throw new Error(`Scene "${id}/${name}" needs a "whitelist"`);
 
     // 名单与 sid 只用于定位与认领，不参与配置合并。
     const { sid: _sid, whitelist: _whitelist, blacklist: _blacklist, ...overrides } = scene;
     specs.push({
-      // 三层：内置缺省 ← preset ← scene。model 由 PresetConfig 保证必填，先落进 base 定住结果类型。
+      // 三层：内置缺省 ← profile ← scene。model 由 ProfileConfig 保证必填，先落进 base 定住结果类型。
       ...merge({ ...FALLBACK, model: baseline.model, description: baseline.description }, baseline, overrides),
       profile: id,
       name,
-      preset: presetName,
       cross: false,
       sid,
       whitelist: scene.whitelist,
@@ -637,27 +559,23 @@ function resolvePreset(presetName: string, raw: unknown, id: string): ResolvedPr
     });
   }
 
-  // cross 形态：preset 自身即生效单位，运行参数只有这一层，频道集合是各 sid claim 的并集。
-  if (preset.cross === true) {
-    const claims = presetClaims!;
+  // cross 形态：profile 自身即生效单位，运行参数只有这一层，频道集合是各 sid claim 的并集。
+  if (profile.cross === true) {
     specs.push({
-      // 只有两层：内置缺省 ← preset。scene 层在这里不存在，跨频道合流不认 per-channel 的扩写。
+      // 只有两层：内置缺省 ← profile。scene 层在这里不存在，跨频道合流不认 per-channel 的扩写。
       ...merge({ ...FALLBACK, model: baseline.model, description: baseline.description }, baseline),
       profile: id,
-      name: presetName,
-      preset: presetName,
+      name: CROSS_KEY,
       cross: true,
       // 无单一账号：路由按 claims 逐 sid 判，sid 留空串表示此处不适用。
       sid: "",
       claims,
-      whitelist: Object.values(claims).flatMap((claim) => claim.whitelist ?? []),
-      blacklist: Object.values(claims).flatMap((claim) => claim.blacklist ?? []),
+      whitelist: Object.values(claims!).flatMap((claim) => claim.whitelist ?? []),
+      blacklist: Object.values(claims!).flatMap((claim) => claim.blacklist ?? []),
     });
   }
 
-  // 同一 preset 内的认领冲突：这个 preset 无法安全路由，错误由调用方收成跳过记录。
-  assertNoOverlap(specs, id);
-  return { name: presetName, specs, extensions };
+  return { id, specs, extensions };
 }
 
 /**
@@ -675,21 +593,20 @@ function listSids(spec: SceneSpec): string[] {
 }
 
 /**
- * 装载期的一次性冲突报出：同一 sid 下两个 spec 的白名单相交即冲突。
+ * 装载期的一次性冲突报出：同一 sid 下两份 spec 的白名单相交即冲突。
  * 只在共同覆盖的账号上比——不同账号的频道 id 空间互不相交，跨 sid 无从冲突。
  * 普通 scene 与 cross claim 走同一段判定：合流与独立都由这份名单说话，不另立规则。
- * 两处调用：preset 内部先查一次（冲突只跳过该 preset），跨 preset 再查一次（冲突使整个 profile 无法装载）。
+ * 由装载方在每展开一份 profile 后对全量清单调用一次：一个频道只能属于一个 spec，
+ * 同一 profile 内的两个 scene 撞上同一频道同样算冲突。
  */
-function assertNoOverlap(specs: readonly SceneSpec[], id: string): void {
+export function assertNoOverlap(specs: readonly SceneSpec[]): void {
   for (let left = 0; left < specs.length; left += 1) {
     for (let right = left + 1; right < specs.length; right += 1) {
       const first = specs[left]!;
       const second = specs[right]!;
       for (const sid of listSids(first).filter((account) => listSids(second).includes(account))) {
         if (listsOverlap(resolveClaim(first, sid).whitelist ?? [], resolveClaim(second, sid).whitelist ?? [])) {
-          throw new Error(
-            `Scene "${first.preset}/${first.name}" and scene "${second.preset}/${second.name}" of profile "${id}" both claim channels of "${sid}"`,
-          );
+          throw new Error(`Scene "${first.profile}/${first.name}" and scene "${second.profile}/${second.name}" both claim channels of "${sid}"`);
         }
       }
     }

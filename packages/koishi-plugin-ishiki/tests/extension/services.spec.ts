@@ -127,27 +127,17 @@ function message(channelId: string, id: string) {
 }
 
 interface ProfileOptions {
-  /** 该 preset 使用的上下文引擎；缺省即内置的 standard。 */
+  /** 该 profile 使用的上下文引擎；缺省即内置的 standard。 */
   context?: string;
 }
 
-/** 写一份 profile：preset 用一个（可能是社区包提供的）上下文引擎变体。 */
-function writeProfile(root: string, directory: string, id: string, options: ProfileOptions = {}): void {
+/** 写一份 profile：用一个（可能是社区包提供的）上下文引擎变体。 */
+function writeProfile(root: string, directory: string, options: ProfileOptions = {}): void {
   const { context = "standard" } = options;
   mkdirSync(path.join(root, directory), { recursive: true });
   writeFileSync(
     path.join(root, directory, "profile.yml"),
-    [
-      `id: ${id}`,
-      "presets:",
-      "  chat:",
-      "    model: test:model",
-      `    context: { engine: "${context}" }`,
-      "    scenes:",
-      "      dms:",
-      "        sid: onebot:1",
-      "        whitelist: ['private:*']",
-    ].join("\n"),
+    ["model: test:model", `context: { engine: "${context}" }`, "scenes:", "  dms:", "    sid: onebot:1", "    whitelist: ['private:*']"].join("\n"),
   );
 }
 
@@ -166,7 +156,7 @@ describe("内置引擎服务", () => {
     // 服务自己的 profiles 目录里放一份只用内置引擎的 profile：装载发生在 ready 期间，
     // 与内置 provider 的登记同一拍，缺服务会被记成 error——这两条断言就在这里守着。
     mkdirSync(path.join(dataDir, "profiles"), { recursive: true });
-    writeProfile(path.join(dataDir, "profiles"), "builtin", "builtin");
+    writeProfile(path.join(dataDir, "profiles"), "builtin");
     root = new Context();
     root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, logLevel: Logger.INFO });
     await root.start();
@@ -188,11 +178,11 @@ describe("内置引擎服务", () => {
     }
   });
 
-  it("只用内置引擎的 preset 立即激活，装载期不报缺失", async () => {
+  it("只用内置引擎的 profile 立即激活，装载期不报缺失", async () => {
     // load() 由 ready 触发、不与 start() 同步：等它把 profile 装载完，两条断言才有观测面。
     await vi.waitFor(() => expect(records.some((line) => line.includes('profile "builtin" loaded'))).toBe(true), { timeout: 5000 });
     expect(records.some((line) => line.includes("missing required service"))).toBe(false);
-    expect(records.some((line) => line.includes("[builtin/chat] preset active"))).toBe(true);
+    expect(records.some((line) => line.includes('profile "builtin" loaded: 1 scene spec(s)'))).toBe(true);
   });
 });
 
@@ -211,9 +201,9 @@ describe("社区扩展包提供的引擎 provider", () => {
     await root.stop();
   });
 
-  it("provider 缺席时 preset 等待并记 error；就位后自动激活，卸载则停止，重载再重建", async () => {
+  it("provider 缺席时 profile 等待并记 error；就位后自动激活，卸载则停止，重载再重建", async () => {
     const own = mkdtempSync(path.join(os.tmpdir(), "ishiki-ext-rolling-"));
-    writeProfile(own, "neko", "neko", { context: "neko-tools/rolling" });
+    writeProfile(own, "neko", { context: "neko-tools/rolling" });
     built.instances = 0;
 
     const profiles: ProfileRuntime[] = [];
@@ -221,26 +211,34 @@ describe("社区扩展包提供的引擎 provider", () => {
     activateProfiles(loadProfiles(own, logger), profiles, { ctx: root, gateway, logger });
     await sleep(20);
 
-    // 服务还没来：宿主立着，preset 停在非激活态；名字带包前缀也不再要求 extends 里写上包名
-    expect(profiles.map((profile) => profile.id)).toEqual(["neko"]);
-    expect(profiles[0]!.route(message("private:7", "hi"))).toBeUndefined();
-    expect(logs.some((line) => line.includes("missing required service") && line.includes('"ishiki.engine.context.neko-tools/rolling"'))).toBe(true);
+    // 服务还没来：这条 fiber 登记着等，运行体尚未诞生；名字带包前缀也不再要求 extends 里写上包名
+    expect(profiles).toHaveLength(0);
+    expect(
+      logs.some(
+        (line) =>
+          line.includes("[neko] missing required service") &&
+          line.includes('"ishiki.engine.context.neko-tools/rolling"') &&
+          line.includes("profile is waiting"),
+      ),
+    ).toBe(true);
 
     const pkg = root.plugin(extensionPackage());
     await sleep(20);
     // 实例随首个场景诞生，装配期不预建
     expect(built.instances).toBe(0);
+    expect(profiles.map((profile) => profile.id)).toEqual(["neko"]);
     const first = profiles[0]!.route(message("private:7", "hi"));
     expect(first).toBeDefined();
     expect(built.instances).toBe(1);
 
-    // provider 卸载：该 preset 的 fiber 复位，单元停止并摘出；宿主留着，包回来再重建
+    // provider 卸载：该 profile 的 fiber 复位，运行体停止并摘出路由表；包回来再重建
     pkg.dispose();
     await sleep(20);
-    expect(profiles[0]!.route(message("private:7", "hi"))).toBeUndefined();
+    expect(profiles).toHaveLength(0);
 
     const again = root.plugin(extensionPackage());
     await sleep(20);
+    expect(profiles.map((profile) => profile.id)).toEqual(["neko"]);
     expect(profiles[0]!.route(message("private:7", "hi"))).toBeDefined();
     expect(built.instances).toBe(2);
 
@@ -251,7 +249,7 @@ describe("社区扩展包提供的引擎 provider", () => {
 
   it("每个 AgentRuntime 各造一份运行体，provider 只做工厂", async () => {
     const own = mkdtempSync(path.join(os.tmpdir(), "ishiki-ext-instances-"));
-    writeProfile(own, "neko", "neko", { context: "neko-tools/rolling" });
+    writeProfile(own, "neko", { context: "neko-tools/rolling" });
     built.instances = 0;
 
     const pkg = root.plugin(extensionPackage());
@@ -272,7 +270,7 @@ describe("社区扩展包提供的引擎 provider", () => {
   });
 });
 
-describe("preset 的引擎依赖", () => {
+describe("profile 的引擎依赖", () => {
   let root: Context;
 
   beforeAll(async () => {
@@ -286,60 +284,56 @@ describe("preset 的引擎依赖", () => {
     await root.stop();
   });
 
-  it("scene 覆盖出的引擎计入依赖；缺的是它，兄弟 preset 照常运行", async () => {
+  it("scene 覆盖出的引擎计入依赖；缺的是它，兄弟 profile 照常运行", async () => {
     const own = mkdtempSync(path.join(os.tmpdir(), "ishiki-ext-scene-"));
-    mkdirSync(path.join(own, "neko"), { recursive: true });
+    // 两个 profile：mixed 里一个 scene 覆盖出 rolling，plain 只用内置引擎。
+    mkdirSync(path.join(own, "mixed"), { recursive: true });
     writeFileSync(
-      path.join(own, "neko", "profile.yml"),
+      path.join(own, "mixed", "profile.yml"),
       [
-        "id: neko",
-        "presets:",
-        "  mixed:",
-        "    model: test:model",
-        "    scenes:",
-        "      rooms:",
-        "        sid: onebot:1",
-        "        whitelist: ['group:9']",
-        "        context: { engine: rolling }",
-        "      dms:",
-        "        sid: onebot:1",
-        "        whitelist: ['private:7']",
-        "  plain:",
-        "    model: test:model",
-        "    scenes:",
-        "      rooms:",
-        "        sid: onebot:1",
-        "        whitelist: ['group:8']",
+        "model: test:model",
+        "scenes:",
+        "  rooms:",
+        "    sid: onebot:1",
+        "    whitelist: ['group:9']",
+        "    context: { engine: rolling }",
+        "  dms:",
+        "    sid: onebot:1",
+        "    whitelist: ['private:7']",
       ].join("\n"),
     );
+    mkdirSync(path.join(own, "plain"), { recursive: true });
+    writeFileSync(
+      path.join(own, "plain", "profile.yml"),
+      ["model: test:model", "scenes:", "  rooms:", "    sid: onebot:1", "    whitelist: ['group:8']"].join("\n"),
+    );
 
-    // 依赖从展开后的 spec 扫描：preset 默认的 standard 与 scene 覆盖出来的 rolling 都在
-    const [load] = loadProfiles(own, logger);
-    const mixed = load!.presets.find((preset) => preset.name === "mixed")!;
+    // 依赖从展开后的 spec 扫描：profile 默认的 standard 与 scene 覆盖出来的 rolling 都在
+    const loads = loadProfiles(own, logger);
+    const mixed = loads.find((load) => load.id === "mixed")!;
     expect(mixed.services).toContain(ContextEngine.GetName("standard"));
     expect(mixed.services).toContain(ContextEngine.GetName("rolling"));
 
     const profiles: ProfileRuntime[] = [];
     logs.length = 0;
-    activateProfiles([load!], profiles, { ctx: root, gateway, logger });
+    activateProfiles(loads, profiles, { ctx: root, gateway, logger });
     await sleep(20);
 
-    // 整个 mixed preset 在等 rolling：它两个频道都不路由；plain 不依赖它，照常工作
-    expect(profiles[0]!.route(message("group:9", "hi"))).toBeUndefined();
-    expect(profiles[0]!.route(message("private:7", "hi"))).toBeUndefined();
+    // 整个 mixed profile 在等 rolling：它没被激活，两个频道都不路由；plain 不依赖它，照常工作
+    expect(profiles.map((profile) => profile.id)).toEqual(["plain"]);
     expect(profiles[0]!.route(message("group:8", "hi"))).toBeDefined();
-    expect(logs.some((line) => line.includes("[neko/mixed] missing required service") && line.includes('"ishiki.engine.context.rolling"'))).toBe(true);
+    expect(logs.some((line) => line.includes("[mixed] missing required service") && line.includes('"ishiki.engine.context.rolling"'))).toBe(true);
 
     const pkg = root.plugin(extensionPackage());
     await sleep(20);
-    expect(profiles[0]!.route(message("group:9", "hi"))).toBeDefined();
-    expect(profiles[0]!.route(message("private:7", "hi"))).toBeDefined();
+    const active = profiles.find((profile) => profile.id === "mixed")!;
+    expect(active.route(message("group:9", "hi"))).toBeDefined();
+    expect(active.route(message("private:7", "hi"))).toBeDefined();
 
     // 包停用：只有依赖它的 mixed 复位，plain 不跟着停
     pkg.dispose();
     await sleep(20);
-    expect(profiles[0]!.route(message("group:9", "hi"))).toBeUndefined();
-    expect(profiles[0]!.route(message("private:7", "hi"))).toBeUndefined();
+    expect(profiles.some((profile) => profile.id === "mixed")).toBe(false);
     expect(profiles[0]!.route(message("group:8", "hi"))).toBeDefined();
 
     await profiles[0]!.stop();
@@ -354,7 +348,7 @@ describe("preset 的引擎依赖", () => {
     expect(first).not.toBe(second);
     expect((first as RollingContextInstance).endpoint).toBe("provider-value");
     expect((first as RollingContextInstance).config.timeout).toBe(1000);
-    // 同一个 provider 供两个 preset 用：插件资源一份，运行参数各是各的
+    // 同一个 provider 供两个 profile 用：插件资源一份，运行参数各是各的
     expect((second as RollingContextInstance).config.timeout).toBe(2000);
     // 参数缺省时由引擎自己补，不拿插件配置冒充
     expect((provider.create({}) as RollingContextInstance).config.timeout).toBe(0);

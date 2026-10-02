@@ -3,7 +3,7 @@
 状态: 已定
 日期: 2026-09-23
 来源: 上下文分区设计、主心智模式与渲染机制收敛讨论
-已被取代: 本文的两扇门（`peek_channel_history` / `dispatch_stimulus`）已删除，取而代之的是 cross 合并频道，见 [02-cross-channel-preset-architecture.md](./02-cross-channel-preset-architecture.md)。本文保留为决策记录，不再是现状描述。
+已被取代: 本文的两扇门（`peek_channel_history` / `dispatch_stimulus`）已删除，取而代之的是 cross profile 合并频道，见 [02-cross-channel-profile-architecture.md](./02-cross-channel-profile-architecture.md)。本文保留为决策记录，不再是现状描述。
 
 ## 结论
 
@@ -40,8 +40,8 @@
 ### 4. “事实存储必须与 yesimagent 会话存储彻底分离”
 
 - **原假设**：会话文件等同于模型可见台词本，因此必须在外部另建独立的中性事实数据库（Fact Store），以防会话污染事实。
-- **为什么站不住**：yesimagent 底层落盘的 `AgentStorage`（`messages.jsonl`）本身就是时序、不可篡改的 `AgentEntry`（原生事实流）；而送入模型的 `ModelMessage[]` 本就是内存中即用即弃的投影。
-- **推翻依据**：此前产生“事实被污染”的唯一根源是单心智把多场景混入同一个 JSONL 导致需要 Notification 遮盖。一旦场景物理隔离，每个场景的 `messages.jsonl` 就是该场景最纯净、无损的专属事实流，无需额外引入双层存储开销。
+- **为什么站不住**：yesimagent 底层落盘的 `AgentStorage`（`events.jsonl`）本身就是时序、不可篡改的 `AgentEntry`（原生事实流）；而送入模型的 `ModelMessage[]` 本就是内存中即用即弃的投影。
+- **推翻依据**：此前产生“事实被污染”的唯一根源是单心智把多场景混入同一个 JSONL 导致需要 Notification 遮盖。一旦场景物理隔离，每个场景的 `events.jsonl` 就是该场景最纯净、无损的专属事实流，无需额外引入双层存储开销。
 
 ---
 
@@ -53,7 +53,7 @@
 │  ┌─────────────────────────┐   ┌─────────────────────────┐  │
 │  │   Scene A (Group Chat)  │   │     Scene X (Game)      │  │
 │  │  - AgentRuntime A       │   │  - AgentRuntime X       │  │
-│  │  - messages.jsonl (A)   │   │  - messages.jsonl (X)   │  │
+│  │  - events.jsonl (A)     │   │  - events.jsonl (X)     │  │
 │  │  - Prefix Cache ~100%   │   │  - Independent Loop     │  │
 │  └───────────▲─────────────┘   └────────────┬────────────┘  │
 │              │                              │               │
@@ -68,7 +68,7 @@
 
 ### 1. 场景物理隔离（One Agent Per Scene）
 
-- 每个场景（群聊、私聊、游戏、直播）拥有独立的 `AgentRuntime` 实例与独立的 `AgentStorage`（`messages.jsonl`）。
+- 每个场景（群聊、私聊、游戏、直播）拥有独立的 `AgentRuntime` 实例与独立的 `AgentStorage`（`events.jsonl`）。
 - 每个场景独立维护 Append-only 历史，不与其他场景交织。
 - 各场景的 System Prompt 与历史前缀天然冻结，**Prompt 缓存命中率趋近 100%**。
 - 并发请求被天然分散到各自独立的执行流，解开横向扩展与吞吐量瓶颈。
