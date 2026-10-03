@@ -7,7 +7,7 @@ import { parse } from "yaml";
 
 import { StandardContextEngine, V3ContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
-import { type Extension, type ExtensionHandler } from "./extension.js";
+import { type RuntimePlugin, type RuntimePluginFactory, type RuntimeScope } from "./extension.js";
 import * as runtime from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -134,48 +134,44 @@ class Ishiki extends Service<Ishiki.Config> {
   }
 
   /**
-   * 登记一个扩展包，启用 `ishiki.ext.<name>` 服务。
+   * 扩展包的登记面：`ctx.ishiki.agent.use(name, factory)` 启用 `ishiki.ext.<name>` 服务。
    *
-   * `handler` 在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步；它返回这次挂载的
-   * `Extension`（工具与提示词两个加法钩子），实例停止时逆序执行它的 `dispose`。坐标在
-   * `runtime.ctx` / `runtime.domain` / `runtime.home` / `runtime.root` 上。这个实例用不上就返回 `undefined`。
+   * `factory` 在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步；它返回这次挂载的
+   * {@link RuntimePlugin}（工具与提示词两个加法钩子，加一个停止时的 `stop`），坐标见 {@link RuntimeScope}。
+   * 这个实例用不上就返回 `undefined`。返回对象上出现名单之外的键，装配期当即抛错，不静默忽略。
    *
-   * 服务本身就是那个 handler：`[Service.invoke]` 把它做成可调用的服务（`ctx.logger` 同款），
-   * `ctx.get()` 取出来直接调用，不再包一层 `{ handler }`。它依旧是货真价实的 Service——能被 `inject`
+   * 服务本身就是那个工厂：`[Service.invoke]` 把它做成可调用的服务（`ctx.logger` 同款），
+   * `ctx.get()` 取出来直接调用，不再包一层 `{ factory }`。它依旧是货真价实的 Service——能被 `inject`
    * 声明为依赖，fiber 停掉时服务随之消失。
    *
-   * 返回值是**注册**拆卸函数，移除这个包的服务——与 `handler` 的返回是两件事，别混。
+   * 返回值是**注册**拆卸函数，移除这个包的服务——与工厂返回的 `stop` 是两件事，别混。
    * 服务挂在这条 fiber 上，归属由调用方声明：`ctx.on("dispose", dispose)`。漏绑不会立刻泄漏，
-   * 但服务会跟着 Ishiki 走完，不随调用方那条 fiber 消失。
+   * 但服务会跟着 Ishiki 走完，不随调用方那条 fiber 消失。已在跑的实例也不由这里收尾：服务消失，
+   * 依赖它的 profile fiber 复位，实例停止时逆序执行各包的 `stop`。
    */
-  public provide(name: string, handler: ExtensionHandler): () => void {
-    const fiber = this.ctx.plugin(
-      class extends Service {
-        // 呼叫即转交给 handler：cordis 用 `[Service.invoke]` 把服务实例做成函数，`ctx.logger` 同款。
-        [Service.invoke](profileConfig: unknown, agentRuntime: runtime.AgentRuntime): Extension | undefined {
-          return handler(profileConfig, agentRuntime);
-        }
-        constructor(ctx: Context) {
-          super(ctx, `ishiki.ext.${name}`, true);
-        }
-      },
-    );
-    // `dispose()` 返回的是这条 fiber 状态是否变了，调用方不关心：它要的是「这个包的服务没了」。
-    return () => {
-      fiber.dispose();
-    };
-  }
-
-  /**
-   * 取某个扩展包挂上来的 handler；`undefined` 表示这个包没挂上。
-   *
-   * 服务名只在这里拼一次，顺带把类型收窄成模板字面量：`ctx.get` 因此选中 cordis 那条类型化重载，
-   * 属性类型由 `extension.ts` 的模块增强给出，不必断言。
-   */
-  public getExtension(pkg: string): ExtensionHandler | undefined {
-    const service: `ishiki.ext.${string}` = `ishiki.ext.${pkg}`;
-    return this.ctx.get(service);
-  }
+  public readonly agent = {
+    use: (name: string, factory: RuntimePluginFactory): (() => void) => {
+      const service: `ishiki.ext.${string}` = `ishiki.ext.${name}`;
+      // 重名要让调用方当场看见：cordis 的重复注册在 fiber 应用里才失败，调用方拿到的是一个没生效的
+      // disposer，现场只有一行日志。预检查与随后的注册在同一个同步帧，不存在中间态。
+      if (this.ctx.get(service) !== undefined) throw new Error(`extension "${name}" is already registered`);
+      const fiber = this.ctx.plugin(
+        class extends Service {
+          // 呼叫即转交给工厂：cordis 用 `[Service.invoke]` 把服务实例做成函数，`ctx.logger` 同款。
+          [Service.invoke](scope: RuntimeScope): RuntimePlugin | undefined {
+            return factory(scope);
+          }
+          constructor(ctx: Context) {
+            super(ctx, service, true);
+          }
+        },
+      );
+      // `dispose()` 返回的是这条 fiber 状态是否变了，调用方不关心：它要的是「这个包的服务没了」。
+      return () => {
+        fiber.dispose();
+      };
+    },
+  };
 }
 
 namespace Ishiki {
@@ -198,13 +194,13 @@ declare module "koishi" {
 }
 
 // 社区包需要的东西：扩展挂载面、运行体契约，以及 `declare module` 增强用的参数表接口。
-// 扩展走 `ctx.ishiki.provide(name, handler)`；引擎走继承 provider 基类，服务名由基类的静态 `GetName` 给出。
+// 扩展走 `ctx.ishiki.agent.use(name, factory)`；引擎走继承 provider 基类，服务名由基类的静态 `GetName` 给出。
 // core 的数据面在这里整体重导出：社区包要的 `ToolSet` / `ToolResultOutput` / `jsonSchema` / `tool` 全在那里，
 // 逐个转发既漏得出来也记不全，索性让一个入口说完。core 的版本由本包的依赖锁住。
 export * from "@yesimagent/core";
 export { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
 export type { ClaimedAccount, InstanceDomain } from "./domain.js";
-export { type Extension, type ExtensionHandler } from "./extension.js";
+export type { RuntimePlugin, RuntimePluginFactory, RuntimeScope } from "./extension.js";
 export type { EngineConfig } from "./profile.js";
 export type { AgentRuntime } from "./runtime.js";
 export { ToolcallEngine, type ToolcallEngineInstance, type ToolcallEngines } from "./toolcall/index.js";

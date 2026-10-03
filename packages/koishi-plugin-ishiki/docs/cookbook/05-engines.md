@@ -159,11 +159,11 @@ failover:
 
 引擎是「选一个」，贡献物是「加一些」：包对某一个 AgentRuntime 提供工具与提示词，不抢决策。
 
-1. 建一个 Koishi 插件（`static inject = ["ishiki"]`），在构造器里调 `ctx.ishiki.provide("<包名>", handler)`。它内部开一条 fiber 建 `ishiki.ext.<包名>` 服务，返回值就是那条 fiber 的 disposer——`ctx.on("dispose", disposer)` 把服务挂在自己这条 fiber 上，这是归属声明，不是可选的卫生习惯。
-2. 写 handler `(profileConfig, runtime) => Extension | void`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。拿到的实例尚无 `Agent`，包交回一个 `Extension`——`extendTools` / `extendInstructions` 两个钩子，返回 `Awaitable`，由 core 每轮第一步取一次，内核按 `extends` 顺序逐个 await；坐标在 `runtime.ctx` / `runtime.domain` / `runtime.home` / `runtime.root` 上。返回值里的 `dispose` 在实例停止时逆序执行。钩子里的错误落在轮次里。这个实例用不上这个包就返回 `undefined`。
+1. 建一个 Koishi 插件（`static inject = ["ishiki"]`），在构造器里调 `ctx.ishiki.agent.use("<包名>", factory)`。它内部开一条 fiber 建 `ishiki.ext.<包名>` 服务，返回值就是那条 fiber 的 disposer——`ctx.on("dispose", disposer)` 把服务挂在自己这条 fiber 上，这是归属声明，不是可选的卫生习惯；重名登记当场抛错，不覆盖。
+2. 写工厂 `(scope: RuntimeScope) => RuntimePlugin | undefined`：内核在 AgentRuntime 构造期间、`createAgent` 之前对每个实例叫一次，同步。包交回一个 `RuntimePlugin`——`AgentPlugin` 的白名单子集，`name` / `extendTools` / `extendInstructions` / `stop` 四个键；两个加法钩子返回 `Awaitable`，由 core 每轮第一步取一次，内核按 `extends` 顺序逐个 await；坐标收在一个 `scope` 里（`config` / `domain` / `home` / `root`，不含 `ctx`，包要用的 Koishi 服务在构造期取好闭包进来）。返回值里的 `stop` 在实例停止时逆序执行。名单之外的键（含改名前的 `dispose`）装配期当即抛错；钩子里的错误落在轮次里。这个实例用不上这个包就返回 `undefined`。
 3. 在 profile 的 `extends` 里写上包名；需要参数就写 `config:`，字段含义由包自己解释。`extends` 是唯一的准入处与依赖声明处；工具不另起名字，撞名抛 `ToolConflictError`。`enable: false` 表示这一档不要：不依赖、不等待、不调用。
 4. 内核不缓存这两样：每一轮第一步现取现算，工具面的顺序是内核工具 + 各包增量（按 `extends` 的顺序），之后 `innerThoughts`，再之后代码模式收窄；提示词接在内核那一段之后。要跨轮稳定就由包自己在闭包里缓存。
 
-两个 disposer 是两件事，别混：`ctx.ishiki.provide()` 返回的那个移除的是**服务**（连同这条 fiber），由扩展插件自己绑在生命周期上；返回值里的 `dispose` 清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。
+两个 disposer 是两件事，别混：`ctx.ishiki.agent.use()` 返回的那个移除的是**服务**（连同这条 fiber），由扩展插件自己绑在生命周期上；返回值里的 `stop` 清理的是**这一个 AgentRuntime 上的挂载**，由 AgentRuntime 停止时逆序执行。
 
-坐标里没有的东西不要从别处推：`channel.type` 要用自己从 Koishi 取；包自己发的消息不结束轮次（停轮只认 `finish` 与 `send_message`）。完整契约与刻意的缺失项见 [03-community-extension-mechanism.md](../03-community-extension-mechanism.md)。
+坐标里没有的东西不要从别处推：`ctx` 与 `channel.type` 要用自己从 Koishi 取；包自己发的消息不结束轮次（停轮只认 `finish` 与 `send_message`）。完整契约与刻意的缺失项见 [03-community-extension-mechanism.md](../03-community-extension-mechanism.md)。

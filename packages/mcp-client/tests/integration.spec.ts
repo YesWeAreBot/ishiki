@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Context, sleep, type Logger } from "koishi";
-import Ishiki, { type Extension } from "koishi-plugin-ishiki";
+import Ishiki, { type RuntimePlugin } from "koishi-plugin-ishiki";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import IshikiMcpClient from "../src/index.js";
@@ -299,17 +299,17 @@ describe("MCP 客户端：接进 ishiki 视窗", () => {
   it("挂到实例上之后，工具面与提示词增量都从那组连接出", async () => {
     const dir = writeConfig("neko", { mcpServers: { echo: stdio({ env: { MCP_ECHO_INSTRUCTIONS: "这个 server 用来回显。" } }) } });
     try {
-      const handler = root.ishiki.getExtension("mcp-client");
-      expect(handler).toBeDefined();
-      // handler 只读实例的 root，其余字段这个用例用不上。运行体的类型从 handler 的
-      // 签名上取，不另行命名——内核的 src 与 lib 两份声明同名不兼容，注解取自哪边都会错配。
-      type Runtime = Parameters<NonNullable<typeof handler>>[1];
-      const runtime = { root: path.join(dir, "neko") } as Runtime;
-      const extension = handler?.({}, runtime) as Extension;
+      const factory = root.ishiki.getExtension("mcp-client");
+      expect(factory).toBeDefined();
+      // 工厂只读坐标里的 root，其余字段这个用例用不上。坐标的类型从工厂的签名上取，
+      // 不另行命名——内核的 src 与 lib 两份声明同名不兼容，注解取自哪边都会错配。
+      type Scope = Parameters<NonNullable<typeof factory>>[0];
+      const scope = { config: {}, root: path.join(dir, "neko") } as unknown as Scope;
+      const plugin = factory?.(scope) as RuntimePlugin;
       // 钩子等握手收尾：第一次取就是完整目录，不必逐轮长出来。
-      expect(Object.keys((await extension.extendTools?.()) ?? {})).toEqual(["echo-echo", "echo-shot"]);
-      expect(await extension.extendInstructions?.()).toBe("这个 server 用来回显。");
-      await extension.dispose?.();
+      expect(Object.keys((await plugin.extendTools?.()) ?? {})).toEqual(["echo-echo", "echo-shot"]);
+      expect(await plugin.extendInstructions?.()).toBe("这个 server 用来回显。");
+      await plugin.stop?.();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

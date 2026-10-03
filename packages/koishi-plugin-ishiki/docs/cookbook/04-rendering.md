@@ -77,7 +77,7 @@
 | 一种上下文策略   | 继承 `ContextEngine` 提供一个 Koishi 服务，见 [05-engines](./05-engines.md)                                        |
 | 一种唤醒判定     | 继承 `WakeupEngine` 提供一个 Koishi 服务                                                                           |
 | 一种工具调用协议 | 继承 `ToolcallEngine` 提供一个 Koishi 服务                                                                         |
-| 新工具           | 扩展包经 `ctx.ishiki.provide()` 挂到某个 profile，交回 `extendTools` / `extendInstructions`，每轮由 core 取一次    |
+| 新工具           | 扩展包经 `ctx.ishiki.agent.use()` 挂到某个 profile，交回 `extendTools` / `extendInstructions`，每轮由 core 取一次  |
 | 一种新事件类型   | 在受体（`src/session-handler.ts`）里归一化，在渲染规则（`src/context/standard.engine.ts` 的 `renderLine`）里加一条 |
 
 事件渲染目前由上下文引擎自己做（`standard` 折行合并，`v3` 渲染成 `<world_state>`），没有独立的 renderer 服务，也不承诺这样一条注册机制。`ctx.ishiki` 不提供 `registerReceptor` / `registerTransform` 这类钩子：等第二种受体或第二种渲染策略真的出现时再说——现在加只会得到只有一个实现、无人实现的接口。

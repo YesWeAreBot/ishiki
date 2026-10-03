@@ -20,7 +20,7 @@ import { parse } from "yaml";
 
 import { ContextEngine, type ContextEngineInstance } from "./context/index.js";
 import { claimLines, type InstanceDomain } from "./domain.js";
-import { type Extension, type ExtensionHandler } from "./extension.js";
+import { type RuntimePlugin, type RuntimePluginFactory } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { assertNoOverlap, CROSS_KEY, matchSceneSpec, resolveProfile, sceneDirectoryName, type CodemodeConfig, type SceneSpec } from "./profile.js";
 import { ToolcallEngine } from "./toolcall/index.js";
@@ -71,10 +71,10 @@ export interface AgentRuntimeConfig {
   /** 内核工具面（`send_message` 与 `finish`）。扩展包的增量每轮加在它之上。 */
   tools: ToolSet;
   /**
-   * 本实例启用的扩展包，按 profile 配置里的书写顺序。包名到 handler 的解析由所属生效单位完成，
-   * 这里只按顺序各叫一次这个 handler。
+   * 本实例启用的扩展包，按 profile 配置里的书写顺序。包名到工厂的解析由所属生效单位完成，
+   * 这里只把工厂连同包名与这份配置交给装配。
    */
-  extensions: Array<{ handler: ExtensionHandler; config: unknown }>;
+  extensions: Array<{ factory: RuntimePluginFactory; config: unknown }>;
   /** 是否给整份工具面前置 `inner_thoughts`；扩展包加的工具一并覆盖。 */
   innerThoughts: boolean;
   /** 代码模式配置；收窄每轮在扩展增量之后进行，所以包这一轮给的工具照样进沙箱表。 */
@@ -99,7 +99,10 @@ function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
   if (usage === undefined) return "usage=?";
   const parts = [`in=${usage.inputTokens ?? "?"}`, `out=${usage.outputTokens ?? "?"}`, `total=${usage.totalTokens ?? "?"}`];
   const cached = usage.inputTokenDetails?.cacheReadTokens;
-  if (cached !== undefined) parts.push(`cached=${cached}`);
+  if (cached !== undefined) {
+    parts.push(`cached=${cached}`);
+    parts.push(`rate=${cached / (usage.inputTokens ?? 1)}%`);
+  }
   const reasoning = usage.outputTokenDetails?.reasoningTokens;
   if (reasoning !== undefined) parts.push(`reasoning=${reasoning}`);
   return `usage(${parts.join(" ")})`;
@@ -127,8 +130,8 @@ export class AgentRuntime {
   private readonly wakeup: WakeupEngineInstance;
   private readonly context: ContextEngineInstance;
   private readonly agent: Agent;
-  /** 本实例挂上的扩展包：它们的钩子每轮现取，这里只留着贡献物本身。 */
-  private readonly extensions: Extension[] = [];
+  /** 本实例挂上的运行体插件：钩子每轮现取，这里只留着它们本身。 */
+  private readonly plugins: RuntimePlugin[] = [];
   /** 扩展包各自交回的拆卸函数，按挂载先后入队；停止时逆序执行，先挂的后拆。 */
   private readonly disposers: Array<() => void> = [];
   /** 事件自身不带时间戳，跨度只能在这一侧相减：起点由对应的 start 事件记下。 */
@@ -148,18 +151,18 @@ export class AgentRuntime {
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
 
-    // 扩展包在 Agent 诞生之前挂上：每个包交回一个有限的加法贡献物，这里只登记、不取用。
-    // 取用发生在 core 每轮第一步的那两个钩子里（见下面的 extendTools / extendInstructions）。
-    for (const { handler, config: profileConfig } of config.extensions) {
+    // 扩展包在 Agent 诞生之前挂上：每个包交回一组有限的加法钩子与拆卸函数，这里只登记、不取用。
+    // 取用发生在 core 每轮第一步的那些钩子里（见下面的 extendTools / extendInstructions）。
+    for (const { factory, config: profileConfig } of config.extensions) {
       try {
-        const extension = handler(profileConfig, this);
-        if (extension === undefined) continue;
-        this.extensions.push(extension);
-        const { dispose } = extension;
-        if (dispose !== undefined) this.disposers.push(() => dispose());
+        const plugin = factory({ config: profileConfig, domain: this.domain, home: this.home, root: this.root });
+        if (plugin === undefined) continue;
+        this.plugins.push(plugin);
+        const { stop } = plugin;
+        if (stop !== undefined) this.disposers.push(() => stop());
       } catch (error) {
         // 装配失败就等于这个实例从未存在：已登记的挂载按逆序拆掉，不给包留悬挂的引用。
-        // 包自己在返回 Extension 之前开的资源由它自己负责——内核拿不到 Extension 就拆不了。
+        // 包自己在返回 RuntimePlugin 之前开的资源由它自己负责——内核拿不到 RuntimePlugin 就拆不了。
         for (const dispose of this.disposers.splice(0).reverse()) dispose();
         throw error;
       }
@@ -192,8 +195,8 @@ export class AgentRuntime {
           // → 上下文引擎那一段。空段不占位，免得拼出一串空行。
           extendInstructions: async () => {
             const parts = [config.instructions];
-            for (const extension of this.extensions) {
-              const contributed = await extension.extendInstructions?.();
+            for (const plugin of this.plugins) {
+              const contributed = await plugin.extendInstructions?.();
               if (contributed !== undefined && contributed.length > 0) parts.push(contributed);
             }
             const extended = (await this.context.instructions?.()) ?? "";
@@ -205,8 +208,8 @@ export class AgentRuntime {
           // 跨轮稳定由包自己在钩子里保证。逐个 await：顺序就是拼装顺序，也是撞名的判定顺序。
           extendTools: async () => {
             const merged: ToolSet = { ...config.tools };
-            for (const extension of this.extensions) {
-              const contributed = await extension.extendTools?.();
+            for (const plugin of this.plugins) {
+              const contributed = await plugin.extendTools?.();
               if (contributed === undefined) continue;
               for (const [name, tool] of Object.entries(contributed)) {
                 if (name in merged) throw new ToolConflictError(name);
@@ -442,9 +445,9 @@ export class ProfileRuntime {
     const extensions = Object.entries(this.extensions).map(([pkg, config]) => {
       // 这里的 `this.ctx` 是 Ishiki 插件自己的 ctx，它的 inject 链里没有 `ishiki`（就是它提供的），
       // 属性访问 `ctx.ishiki` 因此每次都被 cordis 记一条 not-registered 警告。取法与同类处一致：走 `ctx.get`。
-      const handler = this.ctx.get("ishiki")?.getExtension(pkg);
-      if (handler === undefined) throw new Error(`extension service "ishiki.ext.${pkg}" is not available`);
-      return { handler, config };
+      const factory = this.ctx.get(`ishiki.ext.${pkg}`);
+      if (factory === undefined) throw new Error(`extension service "ishiki.ext.${pkg}" is not available`);
+      return { factory, config };
     });
 
     // 引擎在这里从各自的 provider 诞生，随本实例同生共死：provider 只管造，运行状态都在运行体里，

@@ -154,7 +154,7 @@ export const ChannelClaim: Schema<ChannelClaim> = Schema.object({
  *
  * `extends` 是一张包名到配置的映射：键即包名，值是这个 profile 给它的东西。
  * 核心只解释三件事——包叫什么、要不要启用、`config` 归谁；`config` 里的字段含义、默认值与
- * 业务校验全归包自己，装载期原样递到 `provide()` 手里。
+ * 业务校验全归包自己，装载期原样递到 `agent.use()` 的工厂手里。
  *
  * 写 `enable: false` 是「这个包我认识，但这一档不要」：不建立依赖、不等待、不调用、不报错。
  * 写了却没装上，仍是必需依赖——profile 停在等待态，服务到了自动激活。
@@ -164,7 +164,7 @@ export const ChannelClaim: Schema<ChannelClaim> = Schema.object({
  * extends:
  *   community-tools: # 只写包名即启用
  *   memory-pack:
- *     config: # 原样递到 provide()，字段含义由包自己解释
+ *     config: # 原样递到 agent.use() 的工厂，字段含义由包自己解释
  *       backend: sqlite
  *   vision-pack:
  *     enable: false # 认识但这一档不启用：不依赖、不等待
@@ -173,7 +173,7 @@ export const ChannelClaim: Schema<ChannelClaim> = Schema.object({
 export interface ProfileExtensionConfig {
   /** 是否启用；缺省即启用。`false` 时本 profile 不依赖这个包，也不调用它。 */
   enable?: boolean;
-  /** 原样递给 provider 的 `provide()`；字段含义由包自己解释，核心不校验。 */
+  /** 原样递给扩展包的工厂（`agent.use()`）；字段含义由包自己解释，核心不校验。 */
   config?: unknown;
 }
 
@@ -310,7 +310,7 @@ export interface ProfileConfig {
   model: string;
   /**
    * 选中的扩展包：包名到配置的映射，本 profile 依赖启用项的 `ishiki.ext.<包名>` 服务，
-   * 装配每个实例时把它们逐个 `provide()`。引擎变体不经这里准入——一个变体是否可用只看
+   * 装配每个实例时把它们逐个交给工厂。引擎变体不经这里准入——一个变体是否可用只看
    * 它对应的引擎服务在不在。空映射等于不选任何扩展，与不写等价。
    */
   extends?: Record<string, ProfileExtensionConfig>;

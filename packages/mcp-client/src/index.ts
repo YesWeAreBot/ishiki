@@ -15,7 +15,7 @@ import type { OutputLimits } from "./server.js";
  * 插件不再另配一份——两份路径迟早会有一份过期。形状见包内
  * `resources/mcp.schema.json`，字段语义见 `resources/README.md`。
  *
- * 连接按 profile 建立，同 profile 的所有频道实例共享一组。handler 是同步的（内核的约定），
+ * 连接按 profile 建立，同 profile 的所有频道实例共享一组。工厂是同步的（内核的约定），
  * 建池同步完成、握手并发进行；两个加法钩子是 async 的，等握手收尾再交工具面与提示词，
  * 所以模型第一次开口时就看到完整目录，不必逐轮生长。
  */
@@ -38,8 +38,8 @@ class IshikiMcpClient {
 
     // 连接的建立不挂在 ready 上：扩展服务要在 profile 的 fiber 里就位，
     // 挂 ready 会让它比 profile 装载晚一拍。
-    const dispose = ctx.ishiki.provide("mcp-client", (_profileConfig, runtime) => {
-      const { root } = runtime;
+    const dispose = ctx.ishiki.agent.use("mcp-client", (scope) => {
+      const { root } = scope;
       this.logger.info(`mcp-client mounted for ${root}`);
       let pool = this.pools.get(root);
       if (pool === undefined) {
@@ -48,6 +48,7 @@ class IshikiMcpClient {
       }
       pool.hold();
       return {
+        name: "ishiki.mcp-client",
         // 等握手收尾再交工具面：模型第一次开口时就该看到完整目录，而不是逐轮长出来。
         // `connecting` 是建池那一刻开跑的那个 Promise，settled 之后再等只是一个微任务；
         // 它不 reject（每个 server 的成败在池里各自 catch），上限是 SDK 的默认请求超时（60 秒）。
@@ -59,7 +60,7 @@ class IshikiMcpClient {
           await pool.connecting;
           return pool.instructions();
         },
-        dispose: () => {
+        stop: () => {
           this.pools.delete(root);
           return pool.release();
         },

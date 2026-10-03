@@ -17,7 +17,7 @@ import { Context, Service, sleep, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "../../src/context/engine.js";
-import type { Extension, ExtensionHandler } from "../../src/extension.js";
+import type { RuntimePlugin, RuntimePluginFactory, RuntimeScope } from "../../src/extension.js";
 import Ishiki from "../../src/index.js";
 import { activateProfiles, loadProfiles, type AgentRuntime, type ProfileRuntime } from "../../src/runtime.js";
 
@@ -30,8 +30,8 @@ declare module "../../src/context/engine.js" {
 
 // ── 社区扩展包 ──
 
-/** 每次 `provide()` 收到的坐标与配置：内核实际交出去的东西，断言只落在这些事实上。 */
-const calls: Array<{ domain: AgentRuntime["domain"]; home: string; config: unknown; ctx: Context }> = [];
+/** 每次工厂收到的坐标与配置：内核实际交出去的东西，断言只落在这些事实上。 */
+const calls: Array<{ domain: AgentRuntime["domain"]; home: string; config: unknown }> = [];
 
 /** 拆卸记录：实例停止时按逆序执行，每个包一条。 */
 const disposed: string[] = [];
@@ -44,22 +44,23 @@ const lookup = tool({
 });
 
 /**
- * 一个只记账的扩展包：`ctx.ishiki.provide()` 登记 `ishiki.ext.neko-tools`，handler 在每个实例诞生时
+ * 一个只记账的扩展包：`ctx.ishiki.agent.use()` 登记 `ishiki.ext.neko-tools`，工厂在每个实例诞生时
  * 被叫一次。包自己解释 `config`，内核只负责原样递过来。
  */
-function extensionPackage(pkg = "neko-tools", contribute?: (runtime: AgentRuntime) => Extension) {
+function extensionPackage(pkg = "neko-tools", contribute?: (scope: RuntimeScope) => Pick<RuntimePlugin, "extendTools" | "extendInstructions">) {
   function nekoTools(ctx: Context) {
-    const handler: ExtensionHandler = (profileConfig, runtime) => {
-      calls.push({ domain: runtime.domain, home: runtime.home, config: profileConfig, ctx: runtime.ctx });
+    const factory: RuntimePluginFactory = (scope) => {
+      calls.push({ domain: scope.domain, home: scope.home, config: scope.config });
       return {
-        ...contribute?.(runtime),
-        dispose: () => {
+        ...contribute?.(scope),
+        name: `ishiki.${pkg}`,
+        stop: () => {
           disposed.push(pkg);
         },
       };
     };
     // 归属声明：服务随这条 fiber 走。漏绑的话服务会活到 ishiki 自己 dispose。
-    ctx.on("dispose", ctx.ishiki.provide(pkg, handler));
+    ctx.on("dispose", ctx.ishiki.agent.use(pkg, factory));
   }
   // 用了 ctx.ishiki 就得在 inject 里写明，否则 cordis 每次取用都记一条 not-registered 警告。
   nekoTools.inject = ["ishiki"];
@@ -160,7 +161,7 @@ async function close(rig: Stand, dir: string): Promise<void> {
   rmSync(dir, { recursive: true, force: true });
 }
 
-describe("扩展包的挂载：provide、拆卸与准入", () => {
+describe("扩展包的挂载：agent.use、拆卸与准入", () => {
   let dataDir: string;
   let root: Context;
 
@@ -189,7 +190,7 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     return { prompts, profiles, dispose: () => fork?.dispose() };
   }
 
-  it("provide 收到 profile 的 config 与实例坐标", async () => {
+  it("agent.use 收到 profile 的 config 与实例坐标", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-plain-"));
     writePlain(dir, "neko", ["extends:", "  neko-tools:", "    config:", "      label: plain-pack"]);
     calls.length = 0;
@@ -200,7 +201,6 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]!.config).toEqual({ label: "plain-pack" });
       expect(calls[0]!.domain).toEqual({ form: "channel", platform: "onebot", selfId: "1", channelId: "private:9" });
-      expect(calls[0]!.ctx).toBe(root);
       // 目录是本实例的：包自己的文件放这儿，随实例生灭。
       expect(calls[0]!.home).toBe(scene.home);
 
@@ -345,10 +345,10 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     const holder = root.plugin(
       Object.assign(
         (ctx: Context) => {
-          holds.unregister = ctx.ishiki.provide("first", () => undefined);
+          holds.unregister = ctx.ishiki.agent.use("first", () => undefined);
           ctx.on(
             "dispose",
-            ctx.ishiki.provide("second", () => undefined),
+            ctx.ishiki.agent.use("second", () => undefined),
           );
         },
         { inject: ["ishiki"] },
@@ -364,7 +364,7 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     // 两个包都在位，profile 照常激活。
     expect(profiles[0]!.route(message("private:9", "hi"))).toBeDefined();
 
-    // 服务本身可调用：没有 `{ handler }` 包装，取出来直接就是 handler。
+    // 服务本身可调用：没有 `{ factory }` 包装，取出来直接就是工厂。
     expect(typeof root.get("ishiki.ext.first")).toBe("function");
     holds.unregister!();
     holds.unregister!();
@@ -380,7 +380,7 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("handler 中途抛错：已收到的拆卸函数逆序回滚，实例不落表", async () => {
+  it("工厂中途抛错：已收到的停止函数逆序回滚，实例不落表", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-rollback-"));
     writePlain(dir, "neko", ["extends:", "  first:", "  second:", "  third:"]);
     disposed.length = 0;
@@ -390,23 +390,25 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
         (ctx: Context) => {
           ctx.on(
             "dispose",
-            ctx.ishiki.provide("first", () => ({
-              dispose: () => {
+            ctx.ishiki.agent.use("first", () => ({
+              name: "ishiki.first",
+              stop: () => {
                 disposed.push("first");
               },
             })),
           );
           ctx.on(
             "dispose",
-            ctx.ishiki.provide("second", () => ({
-              dispose: () => {
+            ctx.ishiki.agent.use("second", () => ({
+              name: "ishiki.second",
+              stop: () => {
                 disposed.push("second");
               },
             })),
           );
           ctx.on(
             "dispose",
-            ctx.ishiki.provide("third", () => {
+            ctx.ishiki.agent.use("third", () => {
               throw new Error("这个包装不上");
             }),
           );

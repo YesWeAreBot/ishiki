@@ -81,10 +81,10 @@ class PlainContextEngine extends ContextEngine<"rolling"> {
  */
 function extensionPackage(plugin: RollingPluginConfig = { endpoint: "provider-value" }) {
   function nekoTools(ctx: Context) {
-    // 这个包没有 `extends` 加法，只有引擎 provider：服务上挂一个什么都不做的 handler。
+    // 这个包没有 `extends` 加法，只有引擎 provider：服务上挂一个什么都不做的工厂。
     ctx.on(
       "dispose",
-      ctx.ishiki.provide("neko-tools", () => undefined),
+      ctx.ishiki.agent.use("neko-tools", () => undefined),
     );
     new RollingContextEngine(ctx, plugin);
     new PlainContextEngine(ctx, plugin);

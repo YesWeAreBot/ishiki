@@ -11,8 +11,8 @@ import { createWorkspaceTools } from "./tools.js";
 /**
  * 工作区扩展包：按实例给一个宿主目录支撑的沙箱，以及沙箱内的文件读写、编辑与 bash。
  *
- * 只做加法（工具与提示词），装配点在内核的 `provide` 上。装配分两段：静态部分（配置、挂载、技能、
- * 目录）在 handler 里同步落定，写错就在这一实例诞生时报出来；解释器的装载是异步的，放在两个钩子里等。
+ * 只做加法（工具与提示词），装配点在内核的 `agent.use` 上。装配分两段：静态部分（配置、挂载、技能、
+ * 目录）在工厂里同步落定，写错就在这一实例诞生时报出来；解释器的装载是异步的，放在两个钩子里等。
  * 配置写在 profile 的 `extends.workspace.config` 里，见 ./config.ts。
  */
 class IshikiWorkspace {
@@ -28,13 +28,14 @@ class IshikiWorkspace {
     const dataPath = ctx.ishiki.dataPath;
 
     // 扩展服务要在 profile 的 fiber 里就位，所以不挂 ready。
-    const dispose = ctx.ishiki.provide("workspace", (profileConfig, runtime) => {
-      const layout = resolveLayout({ config: parseWorkspaceConfig(profileConfig), home: runtime.home, root: runtime.root, dataPath, logger });
+    const dispose = ctx.ishiki.agent.use("workspace", (scope) => {
+      const layout = resolveLayout({ config: parseWorkspaceConfig(scope.config), home: scope.home, root: scope.root, dataPath, logger });
       // 解释器只装一次；失败也留在同一个 promise 上，不反复重试——装不起来就是配置或依赖的问题。
       let sandbox: Promise<WorkspaceSandbox> | undefined;
       let tools: ReturnType<typeof createWorkspaceTools> | undefined;
-      const box = (): Promise<WorkspaceSandbox> => (sandbox ??= createSandbox(layout, runtime.home));
+      const box = (): Promise<WorkspaceSandbox> => (sandbox ??= createSandbox(layout, scope.home));
       return {
+        name: "ishiki.workspace",
         extendTools: async () => (tools ??= createWorkspaceTools(await box())),
         extendInstructions: async () => {
           const built = await box();
