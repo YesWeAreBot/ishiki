@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ContextEngines } from "../src/context/index.js";
-import { engineParams, resolveProfile, type SceneSpec } from "../src/profile.js";
+import { resolveProfile, type SceneSpec } from "../src/profile.js";
 
 /** 展开一份配置，断言只看首个 spec —— 三层合并（内置缺省 ← profile ← scene）的全部字段。 */
 function makeSpec(profile: Record<string, unknown>, scene: Record<string, unknown> = {}): SceneSpec {
@@ -69,10 +69,9 @@ describe("engine config precedence", () => {
     expect(makeSpec({}, { context: { engine: "plain" } }).context.engine).toBe("plain");
   });
 
-  it("引擎参数按引擎名分键取用，未写即空", () => {
-    const spec = makeSpec({ context: { engine: "v3", v3: { maxMessages: 7 } } });
-    expect(engineParams<ContextEngines>(spec.context)).toEqual({ maxMessages: 7 });
-    expect(engineParams<ContextEngines>(makeSpec({}).context)).toEqual({});
+  it("完整引擎配置保留引擎名与参数块，未写参数块即缺席", () => {
+    expect(makeSpec({ context: { engine: "v3", v3: { maxMessages: 7 } } }).context).toEqual({ engine: "v3", v3: { maxMessages: 7 } });
+    expect(makeSpec({}).context).toEqual({ engine: "standard" });
   });
 
   it("toolcall 的覆盖：没写时沿用 profile，显式写回默认引擎时不退回", () => {

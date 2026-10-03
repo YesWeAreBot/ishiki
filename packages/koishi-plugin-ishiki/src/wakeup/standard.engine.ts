@@ -1,7 +1,8 @@
-import type { Context } from "koishi";
+import { Service, type Context } from "koishi";
 
+import type { EngineConfig } from "../profile.js";
 import type { IshikiEvent } from "../types.js";
-import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance } from "./engine.js";
+import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
 const DEFAULT_WAKEUP: StandardWakeupConfig = { direct: true, atSelf: true, quoteSelf: true, keywords: [] };
 
@@ -45,7 +46,7 @@ export class StandardWakeupEngine extends WakeupEngine<"standard"> {
     super(ctx, "standard");
   }
 
-  create(config: Partial<StandardWakeupConfig>): WakeupEngineInstance {
-    return new StandardWakeupInstance(config);
+  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "standard">>): WakeupEngineInstance {
+    return new StandardWakeupInstance(config.standard ?? {});
   }
 }

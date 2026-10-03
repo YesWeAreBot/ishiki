@@ -18,6 +18,7 @@ import type { IshikiMessageCreated } from "../../src/types.js";
 import { contextOptions, contextPlugin } from "../context-stub.js";
 
 const app = new Context();
+new V3ToolcallEngine(app);
 const logger = { debug: () => undefined, warn: () => undefined, error: () => undefined } as unknown as Logger;
 const USAGE = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
 
@@ -65,6 +66,7 @@ function incoming(content: string) {
 describe("v3 三件套跑一轮真实轮次", () => {
   beforeAll(async () => {
     await loadParser();
+    await app.start();
   });
 
   it("system 里是契约、工具目录与 v3 的世界观说明；world_state 每步重建", async () => {
@@ -90,7 +92,7 @@ describe("v3 三件套跑一轮真实轮次", () => {
     const context = new V3ContextInstance({}, contextOptions(logger));
     const agent = createAgent({
       id: "v3-trio",
-      model: new V3ToolcallEngine(app).create().wrap(model),
+      model: V3ToolcallEngine.GetService(app, "v3")({ engine: "v3" }).wrap(model),
       instructions: "You are Ishiki.",
       storage: createMemoryStorage(),
       plugins: [contextPlugin(context)],

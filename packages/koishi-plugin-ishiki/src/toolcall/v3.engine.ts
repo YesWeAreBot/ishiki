@@ -7,9 +7,10 @@ import type {
   LanguageModelV4ToolCall,
   ToolResultPart,
 } from "@yesimagent/core";
-import type { Context } from "koishi";
+import { Service, type Context } from "koishi";
 
-import { ToolcallEngine, ToolcallEngineInstance } from "./engine.js";
+import type { EngineConfig } from "../profile.js";
+import { ToolcallEngine, ToolcallEngineInstance, type ToolcallEngines } from "./engine.js";
 import { JsonParser } from "./json-parser.js";
 import { parser, type TCMProtocol, type ToolResponsePromptTemplateResult } from "./parser.js";
 
@@ -353,7 +354,7 @@ export class V3ToolcallEngine extends ToolcallEngine<"v3"> {
     super(ctx, "v3");
   }
 
-  create(): ToolcallEngineInstance {
+  public [Service.invoke](_config: EngineConfig<Pick<ToolcallEngines, "v3">>): ToolcallEngineInstance {
     return new V3ToolcallInstance();
   }
 }

@@ -4,11 +4,12 @@ import path from "node:path";
 
 import { createCustomMessage, MockLanguageModelV4 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import { Context, Logger, sleep } from "koishi";
+import { Context, Logger, Service, sleep } from "koishi";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { ContextEngine, type ContextEngineInstance } from "../../src/context/engine.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngines, type ContextEngineOptions } from "../../src/context/engine.js";
 import Ishiki from "../../src/index.js";
+import type { EngineConfig } from "../../src/profile.js";
 import { activateProfiles, loadProfiles, type ProfileRuntime } from "../../src/runtime.js";
 import { ToolcallEngine } from "../../src/toolcall/engine.js";
 import { WakeupEngine } from "../../src/wakeup/engine.js";
@@ -53,9 +54,9 @@ class RollingContextEngine extends ContextEngine<"neko-tools/rolling"> {
     super(ctx, "neko-tools/rolling");
   }
 
-  create(config: Partial<RollingRuntimeConfig>): ContextEngineInstance {
+  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "neko-tools/rolling">>, _options: ContextEngineOptions): ContextEngineInstance {
     built.instances += 1;
-    return new RollingContextInstance({ timeout: config.timeout ?? 0 }, this.plugin.endpoint);
+    return new RollingContextInstance({ timeout: config["neko-tools/rolling"]?.timeout ?? 0 }, this.plugin.endpoint);
   }
 }
 
@@ -68,9 +69,9 @@ class PlainContextEngine extends ContextEngine<"rolling"> {
     super(ctx, "rolling");
   }
 
-  create(config: Partial<RollingRuntimeConfig>): ContextEngineInstance {
+  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "rolling">>, _options: ContextEngineOptions): ContextEngineInstance {
     built.instances += 1;
-    return new RollingContextInstance({ timeout: config.timeout ?? 0 }, this.plugin.endpoint);
+    return new RollingContextInstance({ timeout: config.rolling?.timeout ?? 0 }, this.plugin.endpoint);
   }
 }
 
@@ -341,9 +342,11 @@ describe("profile 的引擎依赖", () => {
   });
 
   it("provider 插件配置与 profile 配置各归各的，运行体不共享", async () => {
-    const provider = new RollingContextEngine(root, { endpoint: "provider-value" });
-    const first = provider.create({ timeout: 1000 });
-    const second = provider.create({ timeout: 2000 });
+    new RollingContextEngine(root, { endpoint: "provider-value" });
+    await sleep(20);
+    const provider = ContextEngine.GetService(root, "neko-tools/rolling");
+    const first = provider({ engine: "neko-tools/rolling", "neko-tools/rolling": { timeout: 1000 } }, {} as ContextEngineOptions);
+    const second = provider({ engine: "neko-tools/rolling", "neko-tools/rolling": { timeout: 2000 } }, {} as ContextEngineOptions);
 
     expect(first).not.toBe(second);
     expect((first as RollingContextInstance).endpoint).toBe("provider-value");
@@ -351,6 +354,6 @@ describe("profile 的引擎依赖", () => {
     // 同一个 provider 供两个 profile 用：插件资源一份，运行参数各是各的
     expect((second as RollingContextInstance).config.timeout).toBe(2000);
     // 参数缺省时由引擎自己补，不拿插件配置冒充
-    expect((provider.create({}) as RollingContextInstance).config.timeout).toBe(0);
+    expect((provider({ engine: "neko-tools/rolling" }, {} as ContextEngineOptions) as RollingContextInstance).config.timeout).toBe(0);
   });
 });

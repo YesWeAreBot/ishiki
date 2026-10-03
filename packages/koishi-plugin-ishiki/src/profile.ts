@@ -9,9 +9,9 @@ import { WakeupEngines } from "./wakeup/index.js";
  * 参数声明为可选而非改用索引签名，以保证 `config[config.engine]` 仍能推导出具体类型。
  * 未登记的引擎名只可能出现在 YAML 中，运行时按参数缺失处理。
  */
-type EngineConfig<E> = [keyof E] extends [never]
+export type EngineConfig<E> = [keyof E] extends [never]
   ? { engine: string; [k: string]: unknown }
-  : { [K in keyof E]: { engine: K } & Partial<Record<K, E[K]>> }[keyof E];
+  : { [K in keyof E]: { engine: K } & Partial<Record<K, Partial<E[K]>>> }[keyof E];
 
 export type ContextConfig = EngineConfig<ContextEngines>;
 
@@ -39,14 +39,6 @@ export const ToolcallConfig: Schema<ToolcallConfig> = Schema.intersect([
   }).required(),
   Schema.union([Schema.any()]),
 ]);
-
-/**
- * 取配置块里与引擎名同键的参数段：引擎参数不参与 Schema 校验（各引擎形状不同），
- * 在这里收窄一次，交给 provider.create()。未写即空——引擎自己的默认值在那边补。
- */
-export function engineParams<E>(config: EngineConfig<E>): Partial<E[keyof E]> {
-  return (config as Record<string, Partial<E[keyof E]>>)[String(config.engine)] ?? {};
-}
 
 /**
  * 模拟打字节奏的参数：每条消息发出前等多久。
@@ -472,7 +464,7 @@ function overlay(current: unknown, override: unknown): unknown {
 /**
  * 按层合并配置：后一层覆盖前一层，未写的键沿用前一层。
  * `undefined` 与不含键的对象都算「未写」——Schema 会为空缺的块物化出空对象，这里不必特判。
- * 引擎参数按引擎名分键，换引擎后旧引擎的参数会留在结果里；消费端只读 `config[config.engine]`，那些键不会被读到。
+ * 引擎参数按引擎名分键，换引擎后旧引擎的参数会留在结果里；消费端只读 `config[config.engine]`，那些键不会被读到。完整配置原样传给 provider，由 provider 取自己的参数键。
  */
 function merge<T>(base: T, ...layers: readonly unknown[]): T {
   // 入参已过 Schema 校验，故按 base 的形状断言：这一层只管结构，不管取值合法性。

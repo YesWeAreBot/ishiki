@@ -31,7 +31,7 @@ export interface Extension {
   /** 本实例这一轮的提示词增量，接在内核那一段之后；缺席表示这一轮不加。 */
   extendInstructions?(): Awaitable<string | void>;
   /** 这次挂载的拆卸函数，实例停止时逆序执行。工具与提示词不撤销——它们每轮从钩子现取。 */
-  dispose?(): void | Promise<void>;
+  dispose?(): Awaitable<void>;
 }
 
 /**
@@ -43,4 +43,4 @@ export interface Extension {
  * 返回值是这次挂载的 {@link Extension}，它那两件加法每轮被取用，出错（含撞名）因此发生在轮次里。
  * 包若在返回之前打开了外部资源，失败路径的清理由包自己负责：内核只拆已经拿到 Extension 的那几次挂载。
  */
-export type ExtensionHandler = (profileConfig: unknown, runtime: AgentRuntime) => Extension | void;
+export type ExtensionHandler = (profileConfig: unknown, runtime: AgentRuntime) => Extension | undefined;

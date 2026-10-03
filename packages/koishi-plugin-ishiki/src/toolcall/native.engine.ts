@@ -1,6 +1,7 @@
-import type { Context } from "koishi";
+import { Service, type Context } from "koishi";
 
-import { ToolcallEngine, ToolcallEngineInstance } from "./engine.js";
+import type { EngineConfig } from "../profile.js";
+import { ToolcallEngine, ToolcallEngineInstance, type ToolcallEngines } from "./engine.js";
 
 declare module "./engine.js" {
   interface ToolcallEngines {
@@ -19,7 +20,7 @@ export class NativeToolcallEngine extends ToolcallEngine<"native"> {
     super(ctx, "native");
   }
 
-  create(): ToolcallEngineInstance {
+  public [Service.invoke](_config: EngineConfig<Pick<ToolcallEngines, "native">>): ToolcallEngineInstance {
     return new NativeToolcallInstance();
   }
 }

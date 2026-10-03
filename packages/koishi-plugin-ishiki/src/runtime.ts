@@ -18,27 +18,18 @@ import type { Gateway } from "@yesimagent/gateway";
 import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
-import { ContextEngine, type ContextEngineInstance, type ContextEngines } from "./context/index.js";
+import { ContextEngine, type ContextEngineInstance } from "./context/index.js";
 import { claimLines, type InstanceDomain } from "./domain.js";
 import { type Extension, type ExtensionHandler } from "./extension.js";
 import { FailoverModel } from "./failover.js";
-import {
-  assertNoOverlap,
-  CROSS_KEY,
-  engineParams,
-  matchSceneSpec,
-  resolveProfile,
-  sceneDirectoryName,
-  type CodemodeConfig,
-  type SceneSpec,
-} from "./profile.js";
-import { ToolcallEngine, type ToolcallEngines } from "./toolcall/index.js";
+import { assertNoOverlap, CROSS_KEY, matchSceneSpec, resolveProfile, sceneDirectoryName, type CodemodeConfig, type SceneSpec } from "./profile.js";
+import { ToolcallEngine } from "./toolcall/index.js";
 import { CODE_MODE, createCodemode } from "./tools/codemode.js";
 import { createFinish } from "./tools/finish.js";
 import { withInnerThoughts } from "./tools/inner-thoughts.js";
 import { createSendMessage } from "./tools/send-message.js";
 import type { IshikiEvent } from "./types.js";
-import { WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./wakeup/index.js";
+import { WakeupEngine, type WakeupEngineInstance } from "./wakeup/index.js";
 
 /** 实例键，同时是目录名的来源：sid 与 channelId 一并编码，避免不同账号下的同名频道冲突。 */
 function channelKey(sid: string, channelId: string): string {
@@ -57,16 +48,6 @@ function resourcePath(...segments: string[]): string {
     here = __dirname;
   }
   return path.resolve(here, "..", "resources", ...segments);
-}
-
-/**
- * 从 Service 取引擎 provider。profile 的 fiber 已把这些服务声明为依赖，取不到只有一种可能：
- * 装配次序错了（instances 先于服务诞生，或服务被卸载后旧引用还在用）。抛错而不回退到内置实现。
- */
-function engineProvider<T>(ctx: Context, service: string): T {
-  const provider = ctx.get(service) as T | undefined;
-  if (provider === undefined) throw new Error(`engine service "${service}" is not available`);
-  return provider;
 }
 
 /** 一个频道实例的完整运行配置：落址、目录，以及已就绪的构造件。 */
@@ -471,10 +452,11 @@ export class ProfileRuntime {
     // provider 都已由 profile 的 fiber 声明为依赖，这里取一次即可。
     const failover = this.gateway.groups().includes(spec.model) || (spec.failover.attempts ?? 1) > 1;
     const raw = failover ? new FailoverModel(this.gateway, spec.model, spec.failover, this.logger) : this.gateway.languageModel(spec.model);
-    const toolcall = engineProvider<ToolcallEngine>(this.ctx, ToolcallEngine.GetName(spec.toolcall.engine));
-    const model = toolcall.create(engineParams<ToolcallEngines>(spec.toolcall)).wrap(raw);
+    const toolcall = ToolcallEngine.GetService(this.ctx, spec.toolcall.engine);
+    const model = toolcall(spec.toolcall).wrap(raw);
 
-    const context = engineProvider<ContextEngine>(this.ctx, ContextEngine.GetName(spec.context.engine)).create(engineParams<ContextEngines>(spec.context), {
+    const contextProvider = ContextEngine.GetService(this.ctx, spec.context.engine);
+    const context = contextProvider(spec.context, {
       logger: this.logger,
       gateway: this.gateway,
       // 引擎的数据目录是 profile 目录，不是实例目录：记忆块这类 profile 级资料在这里读写。
@@ -483,7 +465,8 @@ export class ProfileRuntime {
       domain: domain,
     });
 
-    const wakeup = engineProvider<WakeupEngine>(this.ctx, WakeupEngine.GetName(spec.wakeup.engine)).create(engineParams<WakeupEngines>(spec.wakeup), {
+    const wakeupProvider = WakeupEngine.GetService(this.ctx, spec.wakeup.engine);
+    const wakeup = wakeupProvider(spec.wakeup, {
       logger: this.logger,
     });
 
@@ -620,7 +603,7 @@ export function loadProfiles(root: string, logger: Logger): ProfileLoad[] {
  * 门控与拆卸都由 cordis 管，这里只写「建」与「停」。
  *
  * 服务此刻缺席只记一条 error 就放行：缺席是可恢复的等待态，不是装配失败——后加载的服务
- * 一到，cordis 自己会把这条 fiber 拉起来。装配失败是另一回事（provider 在，`create()` 抛错），
+ * 一到，cordis 自己会把这条 fiber 拉起来。装配失败是另一回事（provider 在，调用 provider 抛错），
  * 那一条留给 cordis 的 fiber 报。
  *
  * 建出的运行体推进调用方给的数组：调用方（`Ishiki`）按同一个引用做路由。

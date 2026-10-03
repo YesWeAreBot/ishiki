@@ -1,8 +1,9 @@
 import type { Agent } from "@yesimagent/core";
-import type { Context } from "koishi";
+import { Service, type Context } from "koishi";
 
+import type { EngineConfig } from "../profile.js";
 import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../types.js";
-import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance } from "./engine.js";
+import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
 /**
  * v3 唤醒引擎：响应意愿（Willingness，YesImBot v3 形状）。
@@ -215,7 +216,7 @@ export class V3WakeupEngine extends WakeupEngine<"v3"> {
     super(ctx, "v3");
   }
 
-  create(config: Partial<V3WakeupConfig>): WakeupEngineInstance {
-    return new V3WakeupInstance(config);
+  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "v3">>): WakeupEngineInstance {
+    return new V3WakeupInstance(config.v3 ?? {});
   }
 }

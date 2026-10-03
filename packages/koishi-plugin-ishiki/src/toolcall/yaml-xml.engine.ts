@@ -1,6 +1,7 @@
-import type { Context } from "koishi";
+import { Service, type Context } from "koishi";
 
-import { ToolcallEngine, ToolcallEngineInstance } from "./engine.js";
+import type { EngineConfig } from "../profile.js";
+import { ToolcallEngine, ToolcallEngineInstance, type ToolcallEngines } from "./engine.js";
 import { parser } from "./parser.js";
 
 declare module "./engine.js" {
@@ -27,7 +28,7 @@ export class YamlXmlToolcallEngine extends ToolcallEngine<"yaml-xml"> {
     super(ctx, "yaml-xml");
   }
 
-  create(): ToolcallEngineInstance {
+  public [Service.invoke](_config: EngineConfig<Pick<ToolcallEngines, "yaml-xml">>): ToolcallEngineInstance {
     return new YamlXmlToolcallInstance();
   }
 }

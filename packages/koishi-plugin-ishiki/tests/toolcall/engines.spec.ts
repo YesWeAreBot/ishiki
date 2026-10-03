@@ -7,6 +7,9 @@ import { loadParser } from "../../src/toolcall/parser.js";
 import { v3Protocol, v3SystemPromptTemplate, v3ToolResponse } from "../../src/toolcall/v3.engine.js";
 
 const app = new Context();
+new NativeToolcallEngine(app);
+new HermesToolcallEngine(app);
+new V3ToolcallEngine(app);
 
 const TOOL = {
   type: "function" as const,
@@ -68,21 +71,22 @@ describe("toolcall engine", () => {
   // 协议引擎经 `parser()` 取解析库，与插件装载时一样先把它装好。
   beforeAll(async () => {
     await loadParser();
+    await app.start();
   });
 
   it("native 不接管模型", () => {
     const { model } = stubModel("");
-    expect(new NativeToolcallEngine(app).create().wrap(model)).toBe(model);
+    expect(NativeToolcallEngine.GetService(app, "native")({ engine: "native" }).wrap(model)).toBe(model);
   });
 
   it("非 v4 模型原样返回", () => {
     const v3 = { specificationVersion: "v3" } as unknown as LanguageModel;
-    expect(new HermesToolcallEngine(app).create().wrap(v3)).toBe(v3);
+    expect(HermesToolcallEngine.GetService(app, "hermes")({ engine: "hermes" }).wrap(v3)).toBe(v3);
   });
 
   it("v3 引擎注入契约与工具目录，并把 actions 解析成 tool-call", async () => {
     const { model, seen } = stubModel(answer('[{"function":"peek_channel_history","params":{"limit":5}}]'));
-    const wrapped = new V3ToolcallEngine(app).create().wrap(model) as LanguageModelV4;
+    const wrapped = V3ToolcallEngine.GetService(app, "v3")({ engine: "v3" }).wrap(model) as LanguageModelV4;
 
     const result = await wrapped.doGenerate(callOptions());
 
@@ -105,8 +109,8 @@ describe("toolcall engine", () => {
     const empty = stubModel(answer("[]"));
     const dropped = stubModel(answer('[{"function":"没这个工具","params":{}}]'));
 
-    const emptyResult = await (new V3ToolcallEngine(app).create().wrap(empty.model) as LanguageModelV4).doGenerate(callOptions());
-    const droppedResult = await (new V3ToolcallEngine(app).create().wrap(dropped.model) as LanguageModelV4).doGenerate(callOptions());
+    const emptyResult = await (V3ToolcallEngine.GetService(app, "v3")({ engine: "v3" }).wrap(empty.model) as LanguageModelV4).doGenerate(callOptions());
+    const droppedResult = await (V3ToolcallEngine.GetService(app, "v3")({ engine: "v3" }).wrap(dropped.model) as LanguageModelV4).doGenerate(callOptions());
 
     expect(emptyResult.content.filter((part) => part.type === "tool-call")).toHaveLength(0);
     expect(droppedResult.content.filter((part) => part.type === "tool-call")).toHaveLength(0);
@@ -121,8 +125,8 @@ describe("toolcall engine", () => {
   it("每个协议接的是自己的模板", async () => {
     const v3 = stubModel("随便一段话");
     const hermes = stubModel("随便一段话");
-    await (new V3ToolcallEngine(app).create().wrap(v3.model) as LanguageModelV4).doGenerate(callOptions());
-    await (new HermesToolcallEngine(app).create().wrap(hermes.model) as LanguageModelV4).doGenerate(callOptions());
+    await (V3ToolcallEngine.GetService(app, "v3")({ engine: "v3" }).wrap(v3.model) as LanguageModelV4).doGenerate(callOptions());
+    await (HermesToolcallEngine.GetService(app, "hermes")({ engine: "hermes" }).wrap(hermes.model) as LanguageModelV4).doGenerate(callOptions());
 
     expect(systemText(v3.seen[0]!)).toContain(CONTRACT);
     expect(systemText(hermes.seen[0]!)).not.toContain(CONTRACT);
@@ -147,8 +151,8 @@ describe("toolcall engine", () => {
     const first = stubModel(answer('[{"function":"peek_channel_history","params":{}}]'));
     const second = stubModel(answer('[{"function":"peek_channel_history","params":{}}]'));
 
-    const firstResult = await (new V3ToolcallEngine(app).create().wrap(first.model) as LanguageModelV4).doGenerate(callOptions());
-    const secondResult = await (new V3ToolcallEngine(app).create().wrap(second.model) as LanguageModelV4).doGenerate(callOptions());
+    const firstResult = await (V3ToolcallEngine.GetService(app, "v3")({ engine: "v3" }).wrap(first.model) as LanguageModelV4).doGenerate(callOptions());
+    const secondResult = await (V3ToolcallEngine.GetService(app, "v3")({ engine: "v3" }).wrap(second.model) as LanguageModelV4).doGenerate(callOptions());
 
     expect(firstResult.content.filter((part) => part.type === "tool-call").map((part) => part.toolCallId)).toEqual(["v3-1"]);
     expect(secondResult.content.filter((part) => part.type === "tool-call").map((part) => part.toolCallId)).toEqual(["v3-1"]);

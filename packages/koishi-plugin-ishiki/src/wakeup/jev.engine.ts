@@ -1,8 +1,9 @@
 import type { Agent, AgentEntry, AgentMessage } from "@yesimagent/core";
-import type { Context, Logger } from "koishi";
+import { Service, type Context, type Logger } from "koishi";
 
+import type { EngineConfig } from "../profile.js";
 import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../types.js";
-import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngineInstance } from "./engine.js";
+import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 import { StandardWakeupInstance, type StandardWakeupConfig } from "./standard.engine.js";
 
 /**
@@ -522,7 +523,7 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
     super(ctx, "jev");
   }
 
-  create(config: Partial<JevWakeupConfig>, deps: WakeupEngineDeps): WakeupEngineInstance {
-    return new JevWakeupInstance(config, deps);
+  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "jev">>, deps: WakeupEngineDeps): WakeupEngineInstance {
+    return new JevWakeupInstance(config.jev ?? {}, deps);
   }
 }

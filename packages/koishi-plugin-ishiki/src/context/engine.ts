@@ -3,6 +3,7 @@ import type { Gateway } from "@yesimagent/gateway";
 import { Awaitable, Service, type Context, type Logger } from "koishi";
 
 import type { InstanceDomain } from "../domain.js";
+import type { EngineConfig } from "../profile.js";
 
 /**
  * 上下文引擎：管一件事——这次请求的上下文长什么样。
@@ -83,15 +84,29 @@ export interface ContextEngineOptions {
   domain: InstanceDomain;
 }
 
+declare module "koishi" {
+  interface Context {
+    /** 上下文引擎服务：一个变体一个，名字即准入。 */
+    [name: `ishiki.engine.context.${string}`]: (ContextEngine & ContextEngine[typeof Service.invoke]) | undefined;
+  }
+}
+
 /**
  * 引擎 provider：Koishi 服务，一个变体一个，构造即登记。
  *
  * 服务名是唯一的事实来源——profile 依赖这个名字，取用也从这里取；插件级配置由子类自己持有，
- * 与 profile/scene 配置在 `create()` 处汇合，不做深合并。
+ * 与完整的 profile/scene 引擎配置在服务调用时汇合，不做深合并。
  */
 export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> extends Service {
-  static GetName(name: string): string {
+  static GetName(name: string): `ishiki.engine.context.${string}` {
     return `ishiki.engine.context.${name}`;
+  }
+
+  static GetService(ctx: Context, name: string): ContextEngine & ContextEngine[typeof Service.invoke] {
+    const service = ContextEngine.GetName(name);
+    const provider = ctx.get(service);
+    if (provider === undefined) throw new Error(`engine service "${service}" is not available`);
+    return provider;
   }
 
   public constructor(ctx: Context, name: K) {
@@ -99,8 +114,9 @@ export abstract class ContextEngine<K extends keyof ContextEngines = keyof Conte
   }
 
   /**
-   * 造一个运行体。`config` 是 profile/scene 合并后该引擎名下的参数块，可能为空；
+   * 每次调用创建独立运行体。接收完整引擎配置，变体只消费自己的参数键；
    * 默认值由引擎自己补，provider 的插件级配置与它互不覆盖。
+   * 使用原型方法，确保 Service 构造期间即可识别可调用性。
    */
-  public abstract create(config: Partial<ContextEngines[K]>, options: ContextEngineOptions): ContextEngineInstance;
+  public abstract [Service.invoke](config: EngineConfig<Pick<ContextEngines, K>>, options: ContextEngineOptions): ContextEngineInstance;
 }

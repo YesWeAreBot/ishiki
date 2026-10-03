@@ -152,7 +152,7 @@ class Ishiki extends Service<Ishiki.Config> {
     const fiber = this.ctx.plugin(
       class extends Service {
         // 呼叫即转交给 handler：cordis 用 `[Service.invoke]` 把服务实例做成函数，`ctx.logger` 同款。
-        [Service.invoke](profileConfig: unknown, agentRuntime: runtime.AgentRuntime): Extension | void {
+        [Service.invoke](profileConfig: unknown, agentRuntime: runtime.AgentRuntime): Extension | undefined {
           return handler(profileConfig, agentRuntime);
         }
         constructor(ctx: Context) {
@@ -205,6 +205,7 @@ export * from "@yesimagent/core";
 export { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./context/index.js";
 export type { ClaimedAccount, InstanceDomain } from "./domain.js";
 export { type Extension, type ExtensionHandler } from "./extension.js";
+export type { EngineConfig } from "./profile.js";
 export type { AgentRuntime } from "./runtime.js";
 export { ToolcallEngine, type ToolcallEngineInstance, type ToolcallEngines } from "./toolcall/index.js";
 export { WakeupEngine, type WakeupDecision, type WakeupEngineDeps, type WakeupEngineInstance, type WakeupEngines } from "./wakeup/index.js";

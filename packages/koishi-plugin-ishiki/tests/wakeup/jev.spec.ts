@@ -519,13 +519,16 @@ describe("jev wakeup: 决策日志", () => {
 });
 
 describe("jev wakeup: 配置", () => {
-  it("provider 按 profile 配置造出运行体", () => {
+  it("provider 按完整配置造出运行体", async () => {
     vi.stubEnv("TYPESAFE_API_KEY", "from-env");
-    const engine = new JevWakeupEngine(app).create({ threshold: 0.8 }, {});
+    new JevWakeupEngine(app);
+    await app.start();
+    const engine = JevWakeupEngine.GetService(app, "jev")({ engine: "jev", jev: { threshold: 0.8 } }, {});
 
     expect(engine).toBeInstanceOf(JevWakeupInstance);
     expect((engine as JevWakeupInstance).config.apiKey).toBe("from-env");
     expect((engine as JevWakeupInstance).config.threshold).toBe(0.8);
+    await app.stop();
   });
 
   it("缺 apiKey 时装配即抛错，不静默退化", () => {

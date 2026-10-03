@@ -15,7 +15,7 @@ import {
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import { Context, sleep, type Logger } from "koishi";
+import { Context, Service, sleep, type Logger } from "koishi";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { StandardContextEngine } from "../src/context/standard.engine.js";
@@ -55,7 +55,7 @@ class CountingWakeupEngine extends WakeupEngine<"counting"> {
     super(ctx, "counting");
   }
 
-  create(): WakeupEngineInstance {
+  public [Service.invoke](_config: { engine: "counting"; counting?: Record<string, never> }): WakeupEngineInstance {
     return new CountingWakeupInstance();
   }
 }

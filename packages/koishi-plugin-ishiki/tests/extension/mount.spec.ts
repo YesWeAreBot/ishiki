@@ -13,7 +13,7 @@ import {
   type LanguageModelV4StreamPart,
 } from "@yesimagent/core";
 import type { Gateway } from "@yesimagent/gateway";
-import { Context, sleep, type Logger } from "koishi";
+import { Context, Service, sleep, type Logger } from "koishi";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "../../src/context/engine.js";
@@ -473,7 +473,10 @@ describe("扩展包的挂载：provide、拆卸与准入", () => {
         super(c, "neko-tools/spy");
       }
 
-      create(_config: Partial<ContextEngines["neko-tools/spy"]>, options: ContextEngineOptions): ContextEngineInstance {
+      public [Service.invoke](
+        _config: { engine: "neko-tools/spy"; "neko-tools/spy"?: Partial<ContextEngines["neko-tools/spy"]> },
+        options: ContextEngineOptions,
+      ): ContextEngineInstance {
         seen.push(options);
         return {};
       }

@@ -3,12 +3,13 @@ import path from "node:path";
 
 import { Template } from "@huggingface/jinja";
 import { type AgentEntry, type AgentMessage, createUserMessage } from "@yesimagent/core";
-import type { Context, Logger } from "koishi";
+import { Service, type Context, type Logger } from "koishi";
 import { parse } from "yaml";
 
+import type { EngineConfig } from "../profile.js";
 import { actionBlock, observationBlock } from "../toolcall/v3.engine.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions } from "./engine.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./engine.js";
 
 /**
  * v3 上下文引擎：WorldState 投影（YesImBot v3 形状）。
@@ -339,7 +340,7 @@ export class V3ContextEngine extends ContextEngine<"v3"> {
     super(ctx, "v3");
   }
 
-  create(config: Partial<V3ContextConfig>, options: ContextEngineOptions): ContextEngineInstance {
-    return new V3ContextInstance(config, options);
+  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "v3">>, options: ContextEngineOptions): ContextEngineInstance {
+    return new V3ContextInstance(config.v3 ?? {}, options);
   }
 }

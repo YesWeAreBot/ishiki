@@ -1,6 +1,7 @@
 import type { Agent } from "@yesimagent/core";
 import { h, Service, type Context, type Logger } from "koishi";
 
+import type { EngineConfig } from "../profile.js";
 import type { IshikiEvent } from "../types.js";
 
 /**
@@ -58,20 +59,34 @@ export function atSelf(content: string, selfId: string): boolean {
   }
 }
 
+declare module "koishi" {
+  interface Context {
+    /** 唤醒引擎服务：一个变体一个，名字即准入。 */
+    [name: `ishiki.engine.wakeup.${string}`]: (WakeupEngine & WakeupEngine[typeof Service.invoke]) | undefined;
+  }
+}
+
 /**
  * 引擎 provider：Koishi 服务，一个变体一个，构造即登记。
  *
- * 插件级配置由子类自己持有，profile/scene 配置从 `create()` 进——两层各管各的，不做深合并。
+ * 插件级配置由子类自己持有，完整的 profile/scene 引擎配置从服务调用进入，两层不做深合并。
  */
 export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupEngines> extends Service {
-  static GetName(name: string): string {
+  static GetName(name: string): `ishiki.engine.wakeup.${string}` {
     return `ishiki.engine.wakeup.${name}`;
+  }
+
+  static GetService(ctx: Context, name: string): WakeupEngine & WakeupEngine[typeof Service.invoke] {
+    const service = WakeupEngine.GetName(name);
+    const provider = ctx.get(service);
+    if (provider === undefined) throw new Error(`engine service "${service}" is not available`);
+    return provider;
   }
 
   public constructor(ctx: Context, name: K) {
     super(ctx, WakeupEngine.GetName(String(name)));
   }
 
-  /** 造一个运行体。`config` 是 profile/scene 合并后该引擎名下的参数块，可能为空，默认值由引擎自己补。 */
-  public abstract create(config: Partial<WakeupEngines[K]>, deps: WakeupEngineDeps): WakeupEngineInstance;
+  /** 接收完整引擎配置并创建独立运行体，变体只消费自己的参数键，默认值由引擎自己补。 */
+  public abstract [Service.invoke](config: EngineConfig<Pick<WakeupEngines, K>>, deps: WakeupEngineDeps): WakeupEngineInstance;
 }

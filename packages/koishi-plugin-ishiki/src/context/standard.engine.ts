@@ -1,9 +1,10 @@
 import { createEntry, createUserMessage, generateText, type Agent, type AgentEntry, type AgentMessage } from "@yesimagent/core";
-import type { Context, Logger } from "koishi";
+import { Service, type Context, type Logger } from "koishi";
 
 import type { InstanceDomain } from "../domain.js";
+import type { EngineConfig } from "../profile.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions } from "./engine.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./engine.js";
 
 declare module "@yesimagent/core" {
   interface AgentCustomEntry {
@@ -547,7 +548,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     super(ctx, "standard");
   }
 
-  create(config: Partial<StandardContextConfig>, options: ContextEngineOptions): ContextEngineInstance {
-    return new StandardContextInstance(config, options);
+  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "standard">>, options: ContextEngineOptions): ContextEngineInstance {
+    return new StandardContextInstance(config.standard ?? {}, options);
   }
 }

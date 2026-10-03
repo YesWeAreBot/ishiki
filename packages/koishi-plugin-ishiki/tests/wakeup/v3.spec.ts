@@ -10,13 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { StandardContextInstance } from "../../src/context/standard.engine.js";
 import { AgentRuntime } from "../../src/runtime.js";
 import type { IshikiMessageCreated } from "../../src/types.js";
-import type { WakeupEngineInstance } from "../../src/wakeup/engine.js";
-import { StandardWakeupEngine, StandardWakeupInstance } from "../../src/wakeup/standard.engine.js";
+import { WakeupEngine, type WakeupEngineInstance } from "../../src/wakeup/engine.js";
+import { StandardWakeupEngine } from "../../src/wakeup/standard.engine.js";
 import { V3WakeupEngine, V3WakeupInstance } from "../../src/wakeup/v3.engine.js";
 import { contextOptions } from "../context-stub.js";
-
-/** provider 只需要一个 Koishi Context，不需要 start；只有 `ctx.get(服务名)` 才要求 start。 */
-const app = new Context();
 
 const logs: string[] = [];
 const logger = {
@@ -47,11 +44,23 @@ function engineWith(overrides: Partial<ConstructorParameters<typeof V3WakeupInst
 }
 
 describe("v3 wakeup: 配置", () => {
-  it("provider 按 profile 配置造出运行体", () => {
-    const v3 = new V3WakeupEngine(app).create({ maxWillingness: 42 });
-    expect(v3).toBeInstanceOf(V3WakeupInstance);
-    expect((v3 as V3WakeupInstance).config.maxWillingness).toBe(42);
-    expect(new StandardWakeupEngine(app).create({ direct: false })).toBeInstanceOf(StandardWakeupInstance);
+  it("可调用 provider 从完整配置读取本变体参数，运行体独立", async () => {
+    const app = new Context();
+    new V3WakeupEngine(app);
+    new StandardWakeupEngine(app);
+    await app.start();
+    try {
+      const provider = WakeupEngine.GetService(app, "v3");
+      const limited = provider({ engine: "v3", v3: { maxWillingness: 42 } }, {});
+      const normal = provider({ engine: "v3" }, {});
+      const mentioned = message({ content: '<at id="bot"/>在吗' });
+      expect(limited.decide(mentioned)).toBe("wait");
+      expect(normal.decide(mentioned)).toBe("trigger");
+      const standard = WakeupEngine.GetService(app, "standard")({ engine: "standard", standard: { direct: false } }, {});
+      expect(standard.decide(message({ isDirect: true }))).toBe("wait");
+    } finally {
+      await app.stop();
+    }
   });
 
   it("越界的数值回落到默认值，不把 NaN 放进概率", () => {
