@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import type { ContextEngines } from "../src/context/index.js";
 import { resolveProfile, type SceneSpec } from "../src/profile.js";
 
 /** 展开一份配置，断言只看首个 spec —— 三层合并（内置缺省 ← profile ← scene）的全部字段。 */

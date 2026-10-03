@@ -241,6 +241,7 @@ describe("v3 wakeup: 轮末回执由场景侧送进来", () => {
         innerThoughts: false,
         codemode: { enable: false, direct: [], timeoutMs: 30_000 },
         wakeup,
+        debugStream: false,
         logger,
       });
 
@@ -291,6 +292,7 @@ describe("v3 wakeup: 轮末回执由场景侧送进来", () => {
         innerThoughts: false,
         codemode: { enable: false, direct: [], timeoutMs: 30_000 },
         wakeup,
+        debugStream: false,
         logger,
       });
 

@@ -284,7 +284,7 @@ describe("MCP 客户端：接进 ishiki 视窗", () => {
   beforeAll(async () => {
     dataDir = mkdtempSync(path.join(os.tmpdir(), "ishiki-mcp-kernel-"));
     root = new Context();
-    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, logLevel: 0 });
+    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, debugStream: false, logLevel: 0 });
     root.plugin(IshikiMcpClient, { limits: LIMITS, logLevel: 0 });
     await root.start();
     // 插件声明了 inject，构造被排在内核之后：扩展服务要等它那一拍才登记上。
@@ -299,7 +299,7 @@ describe("MCP 客户端：接进 ishiki 视窗", () => {
   it("挂到实例上之后，工具面与提示词增量都从那组连接出", async () => {
     const dir = writeConfig("neko", { mcpServers: { echo: stdio({ env: { MCP_ECHO_INSTRUCTIONS: "这个 server 用来回显。" } }) } });
     try {
-      const factory = root.ishiki.getExtension("mcp-client");
+      const factory = root.get(`ishiki.ext.mcp-client`);
       expect(factory).toBeDefined();
       // 工厂只读坐标里的 root，其余字段这个用例用不上。坐标的类型从工厂的签名上取，
       // 不另行命名——内核的 src 与 lib 两份声明同名不兼容，注解取自哪边都会错配。

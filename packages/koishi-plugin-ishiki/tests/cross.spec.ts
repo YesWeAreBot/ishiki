@@ -165,7 +165,16 @@ function rig(resolved: ResolvedProfile): Rig {
   const script: LanguageModelV4StreamPart[][] = [];
   const model = scripted(() => script, prompts);
   const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
-  const runtime = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
+  const runtime = new ProfileRuntime({
+    id: resolved.id,
+    root,
+    specs: resolved.specs,
+    extensions: resolved.extensions,
+    ctx,
+    gateway,
+    debugStream: false,
+    logger,
+  });
   return { root, prompts, script, runtime, scenesDir: path.join(root, "scenes") };
 }
 

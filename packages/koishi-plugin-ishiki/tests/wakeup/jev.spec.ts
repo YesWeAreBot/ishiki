@@ -595,6 +595,7 @@ describe("jev wakeup: 接进场景", () => {
         innerThoughts: false,
         codemode: { enable: false, direct: [], timeoutMs: 30_000 },
         wakeup,
+        debugStream: false,
         logger,
       });
 

@@ -59,7 +59,7 @@ beforeAll(async () => {
 /** 装载并实例化：测试直连生产里的「宿主 + 逐个 profile fiber」两步——解析出可装载项，再逐个激活。 */
 function load(root: string): ProfileRuntime[] {
   return loadProfiles(root, logger).map(
-    (item) => new ProfileRuntime({ id: item.id, root: item.root, specs: item.specs, extensions: item.extensions, ctx, gateway, logger }),
+    (item) => new ProfileRuntime({ id: item.id, root: item.root, specs: item.specs, extensions: item.extensions, ctx, gateway, debugStream: false, logger }),
   );
 }
 
@@ -94,7 +94,7 @@ describe("profile runtime", () => {
   beforeAll(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "ishiki-runtime-"));
     const resolved = resolveProfile(config, "neko");
-    runtime = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
+    runtime = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, debugStream: false, logger });
   });
 
   afterAll(async () => {
@@ -152,7 +152,16 @@ describe("profile runtime", () => {
       },
       "neko",
     );
-    const missing = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
+    const missing = new ProfileRuntime({
+      id: resolved.id,
+      root,
+      specs: resolved.specs,
+      extensions: resolved.extensions,
+      ctx,
+      gateway,
+      debugStream: false,
+      logger,
+    });
 
     // 这台 ctx 上注册着 native 与其余内置变体，唯独没有这个社区变体。
     expect(() => missing.route(message("direct", "private:88", "absent"))).toThrow(/ishiki\.engine\.toolcall\.neko-tools\/absent/);
@@ -424,8 +433,40 @@ function makeRuntime(directory: string, model: string, gateway: Gateway, failove
     },
     "failover",
   );
-  return new ProfileRuntime({ id: resolved.id, root: directory, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
+  return new ProfileRuntime({
+    id: resolved.id,
+    root: directory,
+    specs: resolved.specs,
+    extensions: resolved.extensions,
+    ctx,
+    gateway,
+    debugStream: false,
+    logger,
+  });
 }
+
+/** 一台会抖的端点：前 `failTimes` 次调用连不上，之后照常作答。 */
+const flakyEndpoint = (failTimes: number) => {
+  let calls = 0;
+  return new MockLanguageModelV4({
+    provider: "stub",
+    modelId: "m",
+    doStream: async () => {
+      calls += 1;
+      if (calls <= failTimes) {
+        // 线上那一次的形状：连不上端点，没有 statusCode，`isRetryable` 为 true。
+        throw new APICallError({
+          message: "Cannot connect to API: ",
+          url: "https://stub.invalid/v1/models/m:streamGenerateContent?alt=sse",
+          requestBodyValues: {},
+          isRetryable: true,
+          cause: new Error("connect ETIMEDOUT"),
+        });
+      }
+      return { stream: textStream("在") };
+    },
+  });
+};
 
 describe("failover wiring", () => {
   it("model 是组名时第一个候选失败由第二个顶上；普通引用没有这一层", async () => {
@@ -460,29 +501,6 @@ describe("failover wiring", () => {
       unmute();
     }
   });
-
-  /** 一台会抖的端点：前 `failTimes` 次调用连不上，之后照常作答。 */
-  const flakyEndpoint = (failTimes: number) => {
-    let calls = 0;
-    return new MockLanguageModelV4({
-      provider: "stub",
-      modelId: "m",
-      doStream: async () => {
-        calls += 1;
-        if (calls <= failTimes) {
-          // 线上那一次的形状：连不上端点，没有 statusCode，`isRetryable` 为 true。
-          throw new APICallError({
-            message: "Cannot connect to API: ",
-            url: "https://stub.invalid/v1/models/m:streamGenerateContent?alt=sse",
-            requestBodyValues: {},
-            isRetryable: true,
-            cause: new Error("connect ETIMEDOUT"),
-          });
-        }
-        return { stream: textStream("在") };
-      },
-    });
-  };
 
   it("单候选配了 attempts：线上那种连不上端点，重试一次就救回来了", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "ishiki-failover-"));

@@ -14,7 +14,7 @@
  * instance 是运行体，一个 AgentRuntime 一份，装配时包一次模型。引擎不进 `AgentPlugin` 体系：
  * 它作用于装配期的模型值，不参与 turn 内的钩子。
  */
-import type { LanguageModel, LanguageModelV4, LanguageModelV4Middleware } from "@yesimagent/core";
+import type { LanguageModelV4, LanguageModelV4Middleware } from "@yesimagent/core";
 import { wrapLanguageModel } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
 
@@ -23,20 +23,15 @@ import type { EngineConfig } from "../profile.js";
 /** 协议参数表：键即 `toolcall.<engine>` 的参数键。各引擎文件用 `declare module` 增强它。 */
 export interface ToolcallEngines {}
 
-/** 模型是否带 v4 规格；网关没解析出 v4 provider 时模型是别的形态，中间件对它不适用。 */
-function isV4(model: LanguageModel): model is LanguageModelV4 {
-  return typeof model === "object" && model.specificationVersion === "v4";
-}
-
 /** 工具调用引擎的运行体：一个 AgentRuntime 一份，装配时用一次。 */
 export abstract class ToolcallEngineInstance {
   /** 本引擎的中间件；`undefined` 表示不接管模型（native）。 */
   protected abstract middleware(): LanguageModelV4Middleware | undefined;
 
   /** 包装模型：接上请求改写、提示词注入与流解析。不接管的模型原样返回。 */
-  wrap(model: LanguageModel): LanguageModel {
+  wrap(model: LanguageModelV4): LanguageModelV4 {
     const middleware = this.middleware();
-    if (middleware === undefined || !isV4(model)) return model;
+    if (middleware === undefined) return model;
     return wrapLanguageModel({ model, middleware });
   }
 }

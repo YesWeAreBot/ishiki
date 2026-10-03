@@ -169,7 +169,7 @@ describe("扩展包的挂载：agent.use、拆卸与准入", () => {
     dataDir = mkdtempSync(path.join(os.tmpdir(), "ishiki-contrib-"));
     // 服务自己的 profiles 目录留空：这个用例自己装载、自己实例化。
     root = new Context();
-    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, logLevel: 0 });
+    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, debugStream: false, logLevel: 0 });
     await root.start();
   });
 
@@ -185,7 +185,7 @@ describe("扩展包的挂载：agent.use、拆卸与准入", () => {
     const prompts: string[] = [];
     const gateway = { languageModel: () => scripted(prompts), groups: () => [] } as unknown as Gateway;
     const profiles: ProfileRuntime[] = [];
-    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, logger });
+    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, debugStream: false, logger });
     await sleep(20);
     return { prompts, profiles, dispose: () => fork?.dispose() };
   }
@@ -304,7 +304,7 @@ describe("扩展包的挂载：agent.use、拆卸与准入", () => {
     const prompts: string[] = [];
     const gateway = { languageModel: () => scripted(prompts), groups: () => [] } as unknown as Gateway;
     const profiles: ProfileRuntime[] = [];
-    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, logger });
+    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, debugStream: false, logger });
     await sleep(20);
     // 服务还没来：这条 fiber 登记着等，运行体尚未诞生。
     expect(profiles).toHaveLength(0);
@@ -359,7 +359,7 @@ describe("扩展包的挂载：agent.use、拆卸与准入", () => {
     const profiles: ProfileRuntime[] = [];
     const prompts: string[] = [];
     const gateway = { languageModel: () => scripted(prompts), groups: () => [] } as unknown as Gateway;
-    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, logger });
+    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, debugStream: false, logger });
     await sleep(20);
     // 两个包都在位，profile 照常激活。
     expect(profiles[0]!.route(message("private:9", "hi"))).toBeDefined();
@@ -420,7 +420,7 @@ describe("扩展包的挂载：agent.use、拆卸与准入", () => {
 
     const profiles: ProfileRuntime[] = [];
     const gateway = { languageModel: () => scripted([]), groups: () => [] } as unknown as Gateway;
-    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, logger });
+    activateProfiles(loadProfiles(dir, logger), profiles, { ctx: root, gateway, debugStream: false, logger });
     await sleep(20);
 
     expect(() => profiles[0]!.route(message("private:9", "hi"))).toThrow(/这个包装不上/);

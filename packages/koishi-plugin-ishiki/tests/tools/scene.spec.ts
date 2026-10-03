@@ -216,7 +216,16 @@ describe("tools through a real agent", () => {
     });
     const gateway = { languageModel: () => model, groups: () => [] } as unknown as Gateway;
     const resolved = resolveProfile(config, "neko");
-    runtime = new ProfileRuntime({ id: resolved.id, root, specs: resolved.specs, extensions: resolved.extensions, ctx: app, gateway, logger });
+    runtime = new ProfileRuntime({
+      id: resolved.id,
+      root,
+      specs: resolved.specs,
+      extensions: resolved.extensions,
+      ctx: app,
+      gateway,
+      debugStream: false,
+      logger,
+    });
   });
 
   afterAll(async () => {

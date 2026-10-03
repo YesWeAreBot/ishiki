@@ -107,7 +107,7 @@ class Ishiki extends Service<Ishiki.Config> {
 
     try {
       const profiles = runtime.loadProfiles(profilesRoot, this.logger);
-      runtime.activateProfiles(profiles, this.profiles, { ctx: this.ctx, gateway: this.gateway, logger: this.logger });
+      runtime.activateProfiles(profiles, this.profiles, { ctx: this.ctx, gateway: this.gateway, debugStream: this.config.debugStream, logger: this.logger });
     } catch (error) {
       this.logger.error(`profile loading failed, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -178,11 +178,13 @@ namespace Ishiki {
   export interface Config {
     dataPath: string;
     dumpRequests: boolean;
+    debugStream: boolean;
     logLevel: number;
   }
   export const Config: Schema<Ishiki.Config> = Schema.object({
     dataPath: Schema.string().role("path").description("数据存储路径").default("data/ishiki"),
     dumpRequests: Schema.boolean().description("是否将请求数据保存到本地").default(false),
+    debugStream: Schema.boolean().description("是否将模型流的分片实时输出到控制台（开发调试用）").default(false),
     logLevel: Schema.union([0, 1, 2, 3]).description("日志级别").default(Logger.INFO) as Schema<number>,
   });
 }

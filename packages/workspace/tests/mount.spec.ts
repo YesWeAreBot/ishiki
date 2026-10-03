@@ -15,7 +15,7 @@ describe("挂进 ishiki 视窗", () => {
   beforeAll(async () => {
     dataPath = mkdtempSync(path.join(os.tmpdir(), "ishiki-workspace-kernel-"));
     context = new Context();
-    context.plugin(Ishiki, { dataPath, dumpRequests: false, logLevel: 0 });
+    context.plugin(Ishiki, { dataPath, dumpRequests: false, debugStream: false, logLevel: 0 });
     context.plugin(IshikiWorkspace, { logLevel: 0 });
     await context.start();
     // 插件声明了 inject，构造被排在内核之后：扩展服务要等它那一拍才登记上。
@@ -28,7 +28,7 @@ describe("挂进 ishiki 视窗", () => {
   });
 
   it("工厂交回的四件工具与两段提示词都出得来", async () => {
-    const factory = context.ishiki.getExtension("workspace");
+    const factory = context.get("ishiki.ext.workspace");
     expect(factory).toBeDefined();
     // 工厂只读坐标里的 home 与 root，其余字段这个用例用不上。坐标类型从工厂的签名上取。
     type Scope = Parameters<NonNullable<typeof factory>>[0];
@@ -54,7 +54,7 @@ describe("挂进 ishiki 视窗", () => {
   });
 
   it("配置写错的 profile 在实例诞生时就报错", () => {
-    const factory = context.ishiki.getExtension("workspace");
+    const factory = context.get("ishiki.ext.workspace");
     type Scope = Parameters<NonNullable<typeof factory>>[0];
     expect(() => factory?.({ config: { mounts: ["x:/home/workspace/sub"] }, home: dataPath, root: dataPath } as unknown as Scope)).toThrow(/保留/);
   });

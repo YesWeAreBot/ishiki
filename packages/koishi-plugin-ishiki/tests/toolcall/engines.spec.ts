@@ -1,8 +1,8 @@
-import type { LanguageModel, LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4GenerateResult } from "@yesimagent/core";
+import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4GenerateResult } from "@yesimagent/core";
 import { Context } from "koishi";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { V3ToolcallEngine, HermesToolcallEngine, NativeToolcallEngine } from "../../src/toolcall/index.js";
+import { HermesToolcallEngine, NativeToolcallEngine, V3ToolcallEngine } from "../../src/toolcall/index.js";
 import { loadParser } from "../../src/toolcall/parser.js";
 import { v3Protocol, v3SystemPromptTemplate, v3ToolResponse } from "../../src/toolcall/v3.engine.js";
 
@@ -77,11 +77,6 @@ describe("toolcall engine", () => {
   it("native 不接管模型", () => {
     const { model } = stubModel("");
     expect(NativeToolcallEngine.GetService(app, "native")({ engine: "native" }).wrap(model)).toBe(model);
-  });
-
-  it("非 v4 模型原样返回", () => {
-    const v3 = { specificationVersion: "v3" } as unknown as LanguageModel;
-    expect(HermesToolcallEngine.GetService(app, "hermes")({ engine: "hermes" }).wrap(v3)).toBe(v3);
   });
 
   it("v3 引擎注入契约与工具目录，并把 actions 解析成 tool-call", async () => {

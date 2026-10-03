@@ -157,6 +157,7 @@ describe("code mode", () => {
       codemode: config,
       // 唤醒引擎不参与这个用例的断言：直接送事实行，起轮次靠的是引擎存在即可。
       wakeup: new StandardWakeupInstance({ direct: true, atSelf: false, quoteSelf: false, keywords: [] }),
+      debugStream: false,
       logger,
     });
     return scene;
@@ -266,7 +267,16 @@ describe("codemode config", () => {
     new NativeToolcallEngine(ctx);
     await ctx.start();
     const resolved = resolveProfile(config, "neko");
-    const runtime = new ProfileRuntime({ id: "neko", root: directory, specs: resolved.specs, extensions: resolved.extensions, ctx, gateway, logger });
+    const runtime = new ProfileRuntime({
+      id: "neko",
+      root: directory,
+      specs: resolved.specs,
+      extensions: resolved.extensions,
+      ctx,
+      gateway,
+      debugStream: false,
+      logger,
+    });
 
     try {
       await runtime.route(event("e"))!.deliver(event("e"));

@@ -24,10 +24,10 @@
   },
   "dependencies": {
     "@ai-sdk-tool/parser": "5.1.6",
-    "@ai-sdk/code-mode": "1.0.54",
+    "@ai-sdk/code-mode": "1.0.84",
     "@huggingface/jinja": "^0.5.10",
-    "@yesimagent/core": "0.0.5",
-    "@yesimagent/gateway": "0.0.5",
+    "@yesimagent/core": "0.0.6",
+    "@yesimagent/gateway": "0.0.6",
     "jsonrepair": "^3.15.0",
     "yaml": "^2.9.0"
   },

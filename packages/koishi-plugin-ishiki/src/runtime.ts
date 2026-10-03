@@ -5,11 +5,11 @@ import { Template } from "@huggingface/jinja";
 import {
   createAgent,
   createJsonlStorage,
+  LanguageModelV4,
   ToolConflictError,
   type Agent,
   type AgentEvent,
   type AgentStorage,
-  type LanguageModel,
   type LanguageModelUsage,
   type ToolCallers,
   type ToolSet,
@@ -19,6 +19,7 @@ import type { Context, Logger } from "koishi";
 import { parse } from "yaml";
 
 import { ContextEngine, type ContextEngineInstance } from "./context/index.js";
+import { createDebugStreamPlugin } from "./debugger.js";
 import { claimLines, type InstanceDomain } from "./domain.js";
 import { type RuntimePlugin, type RuntimePluginFactory } from "./extension.js";
 import { FailoverModel } from "./failover.js";
@@ -58,7 +59,7 @@ export interface AgentRuntimeConfig {
   home: string;
   /** 所属 profile 的目录：`profile.yaml` 与人设都在这一层，`home` 是它的下属。 */
   root: string;
-  model: LanguageModel;
+  model: LanguageModelV4;
   /** 平台能力与其它 Koishi 服务的入口；扩展包挂载期间经它取用别的服务。 */
   ctx: Context;
   /** 本实例的可见域。 */
@@ -79,6 +80,8 @@ export interface AgentRuntimeConfig {
   innerThoughts: boolean;
   /** 代码模式配置；收窄每轮在扩展增量之后进行，所以包这一轮给的工具照样进沙箱表。 */
   codemode: CodemodeConfig;
+  /** 是否把 `stream` 通道的分片原样打到标准输出；开发调试用，与 logger 无关。 */
+  debugStream: boolean;
   /** 唤醒引擎运行体：本实例一份，账本只记本视窗的事实流。 */
   wakeup: WakeupEngineInstance;
   logger: Logger;
@@ -101,7 +104,7 @@ function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
   const cached = usage.inputTokenDetails?.cacheReadTokens;
   if (cached !== undefined) {
     parts.push(`cached=${cached}`);
-    parts.push(`rate=${cached / (usage.inputTokens ?? 1)}%`);
+    parts.push(`rate=${((cached / (usage.inputTokens ?? 1)) * 100).toFixed(2)}%`);
   }
   const reasoning = usage.outputTokenDetails?.reasoningTokens;
   if (reasoning !== undefined) parts.push(`reasoning=${reasoning}`);
@@ -275,6 +278,8 @@ export class AgentRuntime {
             return undefined;
           },
         },
+        // 调试面单列一个插件：它只订阅 `stream` 通道写标准输出，不碰上下文、工具面与停轮判定。
+        ...(config.debugStream ? [createDebugStreamPlugin()] : []),
       ],
       // core 的配置字段叫 toolCallers；它转发给 streamText 时才改名为 experimental_toolCallers。
       // 传的是那个可变对象本身：表每轮被重填，core 读的是引用。
@@ -366,6 +371,8 @@ export interface ProfileRuntimeOptions {
   extensions: Record<string, unknown>;
   ctx: Context;
   gateway: Gateway;
+  /** 是否把 `stream` 通道的分片原样打到标准输出；开发调试用，与 logger 无关。 */
+  debugStream: boolean;
   logger: Logger;
 }
 
@@ -384,6 +391,8 @@ export class ProfileRuntime {
   private readonly ctx: Context;
   private readonly logger: Logger;
   private readonly gateway: Gateway;
+  /** 是否把 `stream` 通道的分片原样打到标准输出；每个实例装配时各取一份。 */
+  private readonly debugStream: boolean;
   private readonly scenes: Record<string, AgentRuntime | undefined> = {};
   /** 提示词源码按 profile 缓存一次；当前频道在渲染时注入。 */
   private persona?: string;
@@ -397,6 +406,7 @@ export class ProfileRuntime {
     this.ctx = options.ctx;
     this.logger = options.logger;
     this.gateway = options.gateway;
+    this.debugStream = options.debugStream;
   }
 
   /** 按事件定位其归属频道实例，未创建时按需创建。 */
@@ -507,6 +517,7 @@ export class ProfileRuntime {
       extensions,
       innerThoughts: spec.innerThoughts,
       codemode: spec.codemode,
+      debugStream: this.debugStream,
       wakeup: wakeup,
       logger: this.logger,
     });
@@ -611,7 +622,11 @@ export function loadProfiles(root: string, logger: Logger): ProfileLoad[] {
  *
  * 建出的运行体推进调用方给的数组：调用方（`Ishiki`）按同一个引用做路由。
  */
-export function activateProfiles(loads: readonly ProfileLoad[], profiles: ProfileRuntime[], deps: { ctx: Context; gateway: Gateway; logger: Logger }): void {
+export function activateProfiles(
+  loads: readonly ProfileLoad[],
+  profiles: ProfileRuntime[],
+  deps: { ctx: Context; gateway: Gateway; debugStream: boolean; logger: Logger },
+): void {
   for (const load of loads) {
     const apply = (fiber: Context) => {
       const profile = new ProfileRuntime({ id: load.id, root: load.root, specs: load.specs, extensions: load.extensions, ...deps });

@@ -159,7 +159,7 @@ describe("内置引擎服务", () => {
     mkdirSync(path.join(dataDir, "profiles"), { recursive: true });
     writeProfile(path.join(dataDir, "profiles"), "builtin");
     root = new Context();
-    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, logLevel: Logger.INFO });
+    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, debugStream: false, logLevel: Logger.INFO });
     await root.start();
   });
 
@@ -194,7 +194,7 @@ describe("社区扩展包提供的引擎 provider", () => {
     // 服务自己的 profiles 目录留空：这些用例自己装载、自己实例化。
     const dataDir = mkdtempSync(path.join(os.tmpdir(), "ishiki-ext-load-"));
     root = new Context();
-    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, logLevel: 0 });
+    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, debugStream: false, logLevel: 0 });
     await root.start();
   });
 
@@ -209,7 +209,7 @@ describe("社区扩展包提供的引擎 provider", () => {
 
     const profiles: ProfileRuntime[] = [];
     logs.length = 0;
-    activateProfiles(loadProfiles(own, logger), profiles, { ctx: root, gateway, logger });
+    activateProfiles(loadProfiles(own, logger), profiles, { ctx: root, gateway, debugStream: false, logger });
     await sleep(20);
 
     // 服务还没来：这条 fiber 登记着等，运行体尚未诞生；名字带包前缀也不再要求 extends 里写上包名
@@ -256,7 +256,7 @@ describe("社区扩展包提供的引擎 provider", () => {
     const pkg = root.plugin(extensionPackage());
     await sleep(20);
     const profiles: ProfileRuntime[] = [];
-    activateProfiles(loadProfiles(own, logger), profiles, { ctx: root, gateway, logger });
+    activateProfiles(loadProfiles(own, logger), profiles, { ctx: root, gateway, debugStream: false, logger });
     await sleep(20);
 
     const first = profiles[0]!.route(message("private:7", "hi"));
@@ -277,7 +277,7 @@ describe("profile 的引擎依赖", () => {
   beforeAll(async () => {
     const dataDir = mkdtempSync(path.join(os.tmpdir(), "ishiki-ext-deps-"));
     root = new Context();
-    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, logLevel: 0 });
+    root.plugin(Ishiki, { dataPath: dataDir, dumpRequests: false, debugStream: false, logLevel: 0 });
     await root.start();
   });
 
@@ -317,7 +317,7 @@ describe("profile 的引擎依赖", () => {
 
     const profiles: ProfileRuntime[] = [];
     logs.length = 0;
-    activateProfiles(loads, profiles, { ctx: root, gateway, logger });
+    activateProfiles(loads, profiles, { ctx: root, gateway, debugStream: false, logger });
     await sleep(20);
 
     // 整个 mixed profile 在等 rolling：它没被激活，两个频道都不路由；plain 不依赖它，照常工作

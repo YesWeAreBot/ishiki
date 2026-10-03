@@ -44,6 +44,7 @@ data/ishiki/
 | -------------- | ------------- | ------------------------------------------ |
 | `dataPath`     | `data/ishiki` | 数据存储路径                               |
 | `dumpRequests` | `false`       | 把每次模型请求与响应原样落盘到 `requests/` |
+| `debugStream`  | `false`       | 把模型流的分片实时打到控制台（开发调试用） |
 | `logLevel`     | `2`（info）   | 日志级别                                   |
 
 ## 最小 profile
