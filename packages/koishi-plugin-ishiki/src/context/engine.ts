@@ -1,102 +1,29 @@
 import type { Agent, AgentEntry, AgentMessage } from "@yesimagent/core";
-import type { Gateway } from "@yesimagent/gateway";
-import { Awaitable, Service, type Context, type Logger } from "koishi";
+import { Awaitable, Service, type Context } from "koishi";
 
-import type { InstanceDomain } from "../domain.js";
-import type { EngineConfig } from "../profile.js";
+import type { ExtensionContext } from "../extension.js";
+import type { EngineConfig } from "../profile/index.js";
 
-/**
- * 上下文引擎：管一件事——这次请求的上下文长什么样。
- *
- * 引擎分两层：provider 是 Koishi 服务，一个变体一个，名字即准入；instance 是运行体，
- * 一个 AgentRuntime 一份，配置与实例状态都留在它里面。provider 只做两件事：持有自己的
- * 插件级配置、按运行时配置造 instance，不携带任何运行状态。
- *
- * instance 拥有自己的方法名，不实现 core 的插件契约：`transformEntries` / `transformMessages`
- * 这类名字属于 core 的接线端，由装配点（`runtime.ts` 的 `createAgentPlugin`）转发过来。
- * core 的 `AgentPlugin` 类型只在 `runtime.ts` 出现过一次，引擎这一侧看得见的是 core 的具体数据类型
- * （`AgentEntry` / `AgentMessage` / `Agent`），不是它的钩子形状。
- *
- * 实例拿到的是 core 的插件契约允许的一切，止于此：core 在 entries 之前就调 `extendInstructions()`，
- * 所以 {@link ContextEngineInstance.instructions} 拿不到本轮的 entries；`prepareStep` 之后只给
- * `ModelMessage`，跨步上下文无处可取。真正原子的「指令 + 消息 + 工具」一次成型需要 core 加钩子，
- * 本阶段不做，也不伪装成已经做到。
- */
-
-/** 上下文引擎参数表：键即 `context.<engine>` 的参数键。各引擎文件用 `declare module` 增强它。 */
 export interface ContextEngines {}
 
-/**
- * 上下文引擎的运行体：一个 AgentRuntime 一份。
- *
- * 方法按需实现；未实现的那一步表示不改，原样放行。名字是引擎自己的，装配器按同一份接口转发。
- * 与决策点有关的事（`onStepFinish` / `prepareStep` / `beforeToolCall` / `afterToolCall`）不在这里——
- * 它们是内核独占的，引擎管上下文，不管 Agent 的循环决策。
- *
- * 加工有先后两步，是因为 core 的数据流本身就是两段：可见条目先裁剪，再组织成消息。
- * `prepareEntries` 拿到事件流里的 `AgentEntry[]`，`renderMessages` 拿到组织好的 `AgentMessage[]`；
- * 往后 core 才把它们转成 `ModelMessage[]`。这不是两个插件，是同一份上下文的两段加工。
- */
 export interface ContextEngineInstance {
-  /**
-   * 挂载到 agent 上：core 建好 agent 之后调它一次，返回拆卸函数，agent 停止时再调一次。
-   *
-   * 这是引擎拿到运行资源的唯一入口（storage、模型都从 agent 上取），也是它自己订阅事件的时机——
-   * 订阅退订不用另外操心，拆卸函数里一并做掉。不用 `init` + `stop` 两个钩子的原因就在这儿：
-   * 挂了东西就得能一次拆干净，两个钩子拆不出这个配对。
-   */
   attach?: (agent: Agent) => () => void;
-  /** 事件流改写：裁窗口、提摘要、分段。拿不到就原样放行。 */
   prepareEntries?: (entries: readonly AgentEntry[], request: ContextRequest) => Awaitable<readonly AgentEntry[]>;
-  /** 消息行渲染：把条目变成模型真正读到的那几行。拿不到就原样放行。 */
   renderMessages?: (messages: AgentMessage[], request: ContextRequest) => Awaitable<AgentMessage[]>;
-  /**
-   * 实例级上下文提示词：追加在内核拼好的那一段之后。
-   * 拿不到本轮 entries——core 在流裁剪之前就问一次，所以这段只能是与轮次无关的常驻内容。
-   */
   instructions?: () => Awaitable<string | undefined>;
 }
 
-/**
- * 本次请求引擎能看到的东西：就这两样。
- *
- * 没有 stepNumber：core 的 `transformEntries` / `transformMessages` 收的是 `TurnOptions`，
- * 步号在更靠后的 `prepareStep` 才出现，那里只有 `ModelMessage`。要步号就得改 core，本阶段不改，
- * 于是不占这个位——留一个恒为 undefined 的字段比没有它更糟。
- */
 export interface ContextRequest {
   readonly turnId: string;
   readonly signal: AbortSignal;
 }
 
-/** 装配一个上下文引擎所需的运行态依赖：随 scene 而变，不来自配置。 */
-export interface ContextEngineOptions {
-  logger: Logger;
-  gateway: Gateway;
-  /** 本 profile 的数据目录：需要自有文件的引擎（记忆块等）在这里读写。 */
-  directory: string;
-  /** 包内 `resources/` 的绝对路径：需要模板的引擎在这里找。 */
-  resources: string;
-  /**
-   * 本实例的可见域。渲染事实行要它：聚合视窗一块吃下多个频道，不带坐标就分不清谁说的，于是每段
-   * 带一个寻址头；单频道视窗行自带出处，不带头。缺省即按单频道视窗渲染。
-   */
-  domain: InstanceDomain;
-}
-
 declare module "koishi" {
   interface Context {
-    /** 上下文引擎服务：一个变体一个，名字即准入。 */
     [name: `ishiki.engine.context.${string}`]: (ContextEngine & ContextEngine[typeof Service.invoke]) | undefined;
   }
 }
 
-/**
- * 引擎 provider：Koishi 服务，一个变体一个，构造即登记。
- *
- * 服务名是唯一的事实来源——profile 依赖这个名字，取用也从这里取；插件级配置由子类自己持有，
- * 与完整的 profile/scene 引擎配置在服务调用时汇合，不做深合并。
- */
 export abstract class ContextEngine<K extends keyof ContextEngines = keyof ContextEngines> extends Service {
   static GetName(name: string): `ishiki.engine.context.${string}` {
     return `ishiki.engine.context.${name}`;
@@ -113,10 +40,5 @@ export abstract class ContextEngine<K extends keyof ContextEngines = keyof Conte
     super(ctx, ContextEngine.GetName(String(name)));
   }
 
-  /**
-   * 每次调用创建独立运行体。接收完整引擎配置，变体只消费自己的参数键；
-   * 默认值由引擎自己补，provider 的插件级配置与它互不覆盖。
-   * 使用原型方法，确保 Service 构造期间即可识别可调用性。
-   */
-  public abstract [Service.invoke](config: EngineConfig<Pick<ContextEngines, K>>, options: ContextEngineOptions): ContextEngineInstance;
+  public abstract [Service.invoke](config: EngineConfig<Pick<ContextEngines, K>>, context: ExtensionContext): ContextEngineInstance;
 }

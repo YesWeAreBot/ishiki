@@ -6,42 +6,22 @@ import { type AgentEntry, type AgentMessage, createUserMessage } from "@yesimage
 import { Service, type Context, type Logger } from "koishi";
 import { parse } from "yaml";
 
-import type { EngineConfig } from "../profile.js";
+import type { ExtensionContext } from "../extension.js";
+import type { EngineConfig } from "../profile/index.js";
+import { resourcePath } from "../resource.js";
 import { actionBlock, observationBlock } from "../toolcall/v3.engine.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, type ContextEngineInstance, type ContextEngineOptions, type ContextEngines } from "./engine.js";
+import { ContextEngine, type ContextEngineInstance, type ContextEngines } from "./engine.js";
 
-/**
- * v3 上下文引擎：WorldState 投影（YesImBot v3 形状）。
- *
- * 每轮把窗口内的事件流渲染成一条 `<world_state>` user 消息：频道、成员、以及切成
- * `processed_events` / `new_events` 的工作记忆。切点是**最后一条 assistant 条目**
- * （v3 的「最后一次 agent_thought / agent_action」）：它之后的观察与新消息都算「新到」，
- * 于是模型每一步都能在 `new_events` 里先看到上一步的工具结果。
- *
- * 与 v3 的差异（都是刻意的）：
- * - 没有 L2 向量检索与 L3 日记，`<retrieved_memories>` / `<diary_entries>` 两节随之去掉。
- * - 没有 `<trigger_context>`：v3 那节用 `{{#triggerContext.length}}` 判断普通对象，取不到
- *   `length`，实际上从不渲染。
- * - 不调平台接口取频道名与成员资料，只用事件流里带的信息。
- *
- * 本引擎只读事件流：不写存储、不起后台任务、不持有跨轮状态（模板的编译结果除外）。
- */
-
-/** 未配置时的窗口上限：单轮最多送进多少条消息。 */
 const DEFAULT_MAX_MESSAGES = 50;
 const DEFAULT_KEEP_FULL_TURNS = 2;
 
 export interface V3ContextConfig {
-  /** 单轮窗口内的消息条数上限，至少 1；更旧的整条退出模型视野。 */
   maxMessages: number;
-  /** 保留最近多少轮的完整思考/行动/观察；更早的轨迹只留消息。0 表示不降级。 */
   keepFullTurnCount: number;
-  /** 是否把 `<profileDir>/memory/*.md` 当作核心记忆块注入 system。 */
   memoryBlocks: boolean;
 }
 
-/** 一个核心记忆块；`label` 同时是可编辑文件里的 frontmatter 键与渲染出的标签名。 */
 interface MemoryBlock {
   label: string;
   title: string;
@@ -49,14 +29,12 @@ interface MemoryBlock {
   content: string;
 }
 
-/** 频道视图：v3 的 `channel`，字段只来自事件流。 */
 interface ChannelView {
   id: string;
   type: string;
   platform: string;
 }
 
-/** 用 type 而不是 interface：匿名对象类型才带隐式索引签名，能直接交给 `Template.render`。 */
 type WorldStateView = {
   channel: ChannelView;
   users: Array<{ id: string; name: string }>;
@@ -64,34 +42,28 @@ type WorldStateView = {
   new_events: string[];
 };
 
-/** 两位补零。 */
 function pad(value: number): string {
   return value.toString().padStart(2, "0");
 }
 
-/** 时间戳的 `MM-DD HH:mm`，与 v3 的 `_formatDate` 一致。 */
 function formatStamp(timestamp: number): string {
   const date = new Date(timestamp);
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** 配置是手写 YAML：越界或非数就回落到默认值。 */
 function atLeast(value: number | undefined, floor: number, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value >= floor ? value : fallback;
 }
 
-/** 落到文本：非字符串一律 JSON，免得渲染出 `[object Object]`。 */
 function text(value: unknown): string {
   if (typeof value === "string") return value;
   return value === undefined || value === null ? "" : JSON.stringify(value);
 }
 
-/** 一条系统侧记录；v3 的 `system_event` 行。 */
 function systemLine(timestamp: number, message: string): string {
   return `<system_event>[${formatStamp(timestamp)}|System] ${message}</system_event>`;
 }
 
-/** 把一条消息渲染成上下文中的一行；返回 undefined 表示它不进上下文。 */
 function renderLine(message: AgentMessage): string | undefined {
   switch (message.role) {
     case "assistant": {
@@ -145,12 +117,10 @@ function renderLine(message: AgentMessage): string | undefined {
   }
 }
 
-/** 记忆块标签要当 XML 标签名用，收窄到安全字符集；不合规的文件直接跳过。 */
 function safeLabel(label: string): string | undefined {
   return /^[A-Za-z][A-Za-z0-9_-]*$/.test(label) ? label : undefined;
 }
 
-/** 解析一个记忆块文件：`---` 围出的 frontmatter 给 label（必填）/ title / description，其余是正文。 */
 function parseBlock(source: string): MemoryBlock | undefined {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(source);
   if (match === null) return undefined;
@@ -171,7 +141,6 @@ function parseBlock(source: string): MemoryBlock | undefined {
   return { label: safe, title: text(title), description: text(description), content: source.slice(match[0].length).trim() };
 }
 
-/** 读 `<profileDir>/memory` 下的全部记忆块；标签重复时保留先读到的那个。 */
 function readMemoryBlocks(directory: string): MemoryBlock[] {
   const root = path.join(directory, "memory");
   if (!existsSync(root)) return [];
@@ -195,36 +164,26 @@ export class V3ContextInstance implements ContextEngineInstance {
   private readonly logger: Logger;
   private readonly directory: string;
   private readonly resources: string;
-  /** 模板在包内只读，编译一次就够；记忆块是用户文件，每轮重读。 */
   private worldTemplate?: Template;
   private instructionTemplate?: Template;
 
-  constructor(config: Partial<V3ContextConfig>, options: ContextEngineOptions) {
+  constructor(config: Partial<V3ContextConfig>, context: ExtensionContext) {
     this.config = {
       maxMessages: atLeast(config.maxMessages, 1, DEFAULT_MAX_MESSAGES),
       keepFullTurnCount: atLeast(config.keepFullTurnCount, 0, DEFAULT_KEEP_FULL_TURNS),
       memoryBlocks: config.memoryBlocks ?? true,
     };
 
-    const { directory, resources } = options;
-    if (directory === undefined || resources === undefined) {
-      throw new Error('context engine "v3" needs ContextEngineOptions.directory and .resources');
-    }
-    this.logger = options.logger;
-    this.directory = directory;
-    this.resources = resources;
+    this.logger = context.logger;
+    this.directory = context.root;
+    this.resources = resourcePath();
   }
 
-  /** v3 系统提示词里 ishiki 基础提示词没覆盖的部分：核心记忆块的用法与 `<working_memory>` 的读法。 */
   instructions = (): string => {
     const blocks = this.config.memoryBlocks ? readMemoryBlocks(this.directory) : [];
     return this.instructionTpl().render({ blocks }).trim();
   };
 
-  /**
-   * 前台窗口：按条数截尾，再对更早的轮次做优雅降级——v3 只保留最近几轮的完整
-   * 思考/行动/观察，更早的只留消息，免得旧轨迹把上下文撑满。
-   */
   prepareEntries = (entries: readonly AgentEntry[]): readonly AgentEntry[] => {
     const messages = entries.filter((entry) => entry.type === "message");
     const windowed = new Set(messages.slice(-this.config.maxMessages));
@@ -235,11 +194,9 @@ export class V3ContextInstance implements ContextEngineInstance {
     return kept.filter((entry) => !this.isStaleTrace(entry, turns));
   };
 
-  /** 把窗口渲染成单条 `<world_state>` user 消息：v3 每步都重建整份世界状态。 */
   renderMessages = (messages: readonly AgentMessage[]): AgentMessage[] => {
     const lines = messages.map((message) => renderLine(message));
 
-    // 切点：最后一条 assistant。它之后的观察与新消息都算「新到」。
     let cut = 0;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       if (messages[index]?.role === "assistant") {
@@ -258,7 +215,6 @@ export class V3ContextInstance implements ContextEngineInstance {
     return [createUserMessage(this.world().render(this.buildView(messages, processed, fresh)))];
   };
 
-  /** 最近 `keepFullTurnCount` 轮的轮次号；0 表示不降级，返回 undefined。 */
   private recentTurns(entries: readonly AgentEntry[]): ReadonlySet<string> | undefined {
     const count = this.config.keepFullTurnCount;
     if (count <= 0) return undefined;
@@ -274,7 +230,6 @@ export class V3ContextInstance implements ContextEngineInstance {
     return new Set(kept);
   }
 
-  /** 更早轮次的 agent 轨迹：消息一律保留，思考与工具轨迹整段剔除。 */
   private isStaleTrace(entry: AgentEntry, turns: ReadonlySet<string>): boolean {
     if (entry.type !== "message" || entry.turnId === undefined) return false;
     const role = entry.data.role;
@@ -282,7 +237,6 @@ export class V3ContextInstance implements ContextEngineInstance {
     return !turns.has(entry.turnId);
   }
 
-  /** 事件流里能读到的频道与成员信息：取最后一条带地址的事件。 */
   private buildView(messages: readonly AgentMessage[], processed: string[], fresh: string[]): WorldStateView {
     const channel: ChannelView = { id: "", type: "", platform: "" };
     const users: Array<{ id: string; name: string }> = [];
@@ -311,7 +265,6 @@ export class V3ContextInstance implements ContextEngineInstance {
     return this.worldTemplate;
   }
 
-  /** 指令模板。方法名与公开的 `instructions` 段隔开：后者是这段上下文，前者是它的来源。 */
   private instructionTpl(): Template {
     this.instructionTemplate ??= this.load("instructions.jinja");
     return this.instructionTemplate;
@@ -334,13 +287,12 @@ declare module "./engine.js" {
   }
 }
 
-/** v3 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
 export class V3ContextEngine extends ContextEngine<"v3"> {
   constructor(ctx: Context) {
     super(ctx, "v3");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "v3">>, options: ContextEngineOptions): ContextEngineInstance {
-    return new V3ContextInstance(config.v3 ?? {}, options);
+  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "v3">>, context: ExtensionContext): ContextEngineInstance {
+    return new V3ContextInstance(config.v3 ?? {}, context);
   }
 }

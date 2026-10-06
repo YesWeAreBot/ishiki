@@ -1,11 +1,6 @@
 import { HOME_MOUNT, SKILLS_MOUNT, WORKSPACE_MOUNT } from "./mounts.js";
 import type { WorkspaceSandbox } from "./sandbox.js";
 
-/**
- * 工作区事实段：模型在哪里、什么能做、什么会被挡住。
- * 环境边界必须写明（不是宿主机 shell、状态不跨调用、输出有上限），
- * 否则模型按宿主 shell 的直觉试错，代价落在每一轮里。
- */
 export function workspaceInstructions(sandbox: WorkspaceSandbox): string {
   return [
     "## 工作区",

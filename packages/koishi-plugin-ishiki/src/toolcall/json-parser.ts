@@ -2,7 +2,6 @@ import { JSONRepairError, jsonrepair } from "jsonrepair";
 import type { Logger } from "koishi";
 
 export interface JsonParserOptions {
-  /** 打开后把诊断逐条写进 logger；无论开关，诊断都留在 `ParseResult.logs` 里。 */
   debug?: boolean;
   logger?: Logger;
 }
@@ -13,24 +12,12 @@ export interface ParseResult<T> {
   logs: string[];
 }
 
-/** 诊断文本里报错位置的行列号；`position` 是 0 基偏移。 */
 function locateAt(source: string, position: number): { line: string; pointer: string } {
   const before = source.slice(0, position).split("\n");
   const line = before[before.length - 1];
   return { line, pointer: `${" ".repeat(line.length)}^` };
 }
 
-/**
- * 从模型输出里抠出一个 JSON 对象。完整的 YesImBot v3 `shared/utils/json-parser.ts`。
- *
- * 容错按固定顺序推进，每一步只解决「模型把 JSON 包进散文或代码块」这一件事：
- * 1. 命中 ```json 且整串不以 JSON 开场时优先取代码块内；结尾的 ``` 缺失就取到串尾（截断容错）。
- * 2. 丢弃第一个 `{` / `[` 之前的文字。
- * 3. 只在括号完全平衡时才丢弃最后一个 `}` / `]` 之后的文字——不平衡意味着 JSON 被截断，留着交给修复器。
- * 4. `JSON.parse` 失败交给 `jsonrepair` 再试一次。
- *
- * `data === null` 时 `error` 说明为什么失败，`logs` 记下每一步的判定。
- */
 export class JsonParser<T> {
   private readonly debug: boolean;
   private readonly logger?: Logger;
@@ -52,10 +39,9 @@ export class JsonParser<T> {
     if (codeBlockStart !== -1 && !startsAsJson) {
       this.log("检测到 Markdown 代码块，且原始字符串不以 JSON 开头，优先提取块内容");
       const codeBlockEnd = processed.lastIndexOf("```");
-      // 结尾的 ``` 缺失（输出被截断）时取到串尾，而不是放弃整段。
+
       let content = codeBlockEnd > codeBlockStart ? processed.substring(codeBlockStart + 3, codeBlockEnd) : processed.substring(codeBlockStart + 3);
 
-      // 剥掉首行的语言标识或前导文字，但首行本身就是 JSON 开头时保留。
       const firstNewline = content.indexOf("\n");
       if (firstNewline !== -1) {
         const firstLine = content.substring(0, firstNewline).trim();
@@ -119,7 +105,6 @@ export class JsonParser<T> {
         data = JSON.parse(jsonrepair(processed)) as T;
       }
 
-      // 修完只是个字符串或数字，而原始输入里又没有明确的括号起点：那不是我们要的 JSON 值。
       if (typeof data !== "object" && startIndex === -1) {
         this.log("解析结果为非对象类型，但原始输入不像独立的 JSON 值，判定为解析失败");
         return { data: null, error: "无法解析为有效的 JSON 对象或数组", logs: this.logs };
@@ -139,10 +124,6 @@ export class JsonParser<T> {
     }
   }
 
-  /**
-   * 整串是否看起来以 JSON 结构开场。解决 `[OBSERVE]` 这类文字被当成 JSON 数组的问题：
-   * `[` 之后必须紧跟值（对象、字符串、`t`/`f`/`n`、数字）或 `]`，否则不认。
-   */
   private isLikelyJsonStart(str: string): boolean {
     const trimmed = str.trim();
     if (trimmed.startsWith("{")) return true;

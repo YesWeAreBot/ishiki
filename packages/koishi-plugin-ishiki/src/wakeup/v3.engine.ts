@@ -1,24 +1,11 @@
-import type { Agent } from "@yesimagent/core";
+import type { Agent, AgentMessage } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
 
-import type { EngineConfig } from "../profile.js";
-import { readChannelId, type IshikiEvent, type IshikiMessageCreated } from "../types.js";
+import type { ExtensionContext } from "../extension.js";
+import type { EngineConfig } from "../profile/index.js";
+import { type IshikiEvent, type IshikiMessageCreated } from "../types.js";
 import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
-/**
- * v3 唤醒引擎：响应意愿（Willingness，YesImBot v3 形状）。
- *
- * 每个频道攒一个意愿值：来一条消息就按「基础分 + 属性加成 × 兴趣系数 × 边际递减」加分，
- * 闲下来按半衰期衰减，分数越过阈值后以线性概率掷骰决定要不要说话，说过一轮就扣掉成本。
- *
- * 与 v3 的两处机制差异（都是刻意为之，不是遗漏）：
- * - v3 用 1 秒定时器逐秒衰减，这里改成**惰性**：在 `decide` / `observe` 时把距上次写入的
- *   时间一次折算完。数学等价，但没有常驻循环（引擎也拿不到宿主定时器）。
- * - v3 的「对话热度」两档依赖一个从未被写入的时间戳 Map，恒不命中；`boostSkippedTopic`
- *   也没有调用方。两者都不搬。
- */
-
-/** v3 `agent/config.ts:87-130` 的默认值。 */
 const DEFAULT_V3_WAKEUP: V3WakeupConfig = {
   base: 12,
   atMention: 100,
@@ -35,36 +22,24 @@ const DEFAULT_V3_WAKEUP: V3WakeupConfig = {
 };
 
 export interface V3WakeupConfig {
-  /** 一条消息的基础分。 */
   base: number;
-  /** 被 @ 时的加成；与引用、私聊可叠加。 */
   atMention: number;
-  /** 引用本账号消息时的加成。 */
   isQuote: number;
-  /** 私聊消息的加成。 */
   isDirectMessage: number;
-  /** 命中任一关键词即改用 `keywordMultiplier`。 */
   keywords: string[];
   keywordMultiplier: number;
   defaultMultiplier: number;
-  /** 意愿值上限。 */
   maxWillingness: number;
-  /** 衰减半衰期，秒。 */
   decayHalfLifeSeconds: number;
-  /** 概率从 0 起跳的意愿阈值。 */
   probabilityThreshold: number;
-  /** 阈值之上的每点意愿对应的概率增量。 */
   probabilityAmplifier: number;
-  /** 一轮结束后扣掉的意愿。 */
   replyCost: number;
 }
 
-/** 越界或非数就回落到默认值。 */
 function atLeast(value: number, floor: number, fallback: number): number {
   return Number.isFinite(value) && value >= floor ? value : fallback;
 }
 
-/** 逐项收敛到 v3 Schema 的取值域：配置是手写 YAML，越界的值在这里挡掉，别让 NaN 流进概率。 */
 function normalize(config: V3WakeupConfig): V3WakeupConfig {
   return {
     ...config,
@@ -76,12 +51,6 @@ function normalize(config: V3WakeupConfig): V3WakeupConfig {
   };
 }
 
-/**
- * 把「距上次写入过了多久」折算成衰减，等价于 v3 每秒乘一次因子。
- *
- * 高于阈值时衰减强度减半，所以分两段：先按减半的强度逐秒走到阈值（这段最多几百次），
- * 剩下的用闭式幂一次算完。`score < 0.01` 归零，与 v3 一致。
- */
 function decay(score: number, elapsedMs: number, config: V3WakeupConfig): number {
   if (score === 0) return 0;
 
@@ -98,7 +67,6 @@ function decay(score: number, elapsedMs: number, config: V3WakeupConfig): number
   return score < 0.01 ? 0 : score;
 }
 
-/** v3 的 S 型曲线：0.2 以下不放大，0.2–0.8 放大到峰值 2 倍，0.8 以上线性回落到 0。 */
 function dynamicGainMultiplier(score: number, max: number): number {
   const ratio = score / max;
 
@@ -107,7 +75,17 @@ function dynamicGainMultiplier(score: number, max: number): number {
   return 1 - (ratio - 0.8) / 0.2;
 }
 
-/** 一个频道的意愿值，以及它最后一次被写入的时刻（惰性衰减的起点）。 */
+function readChannelId(message: AgentMessage): string | undefined {
+  if (message.role !== "custom") return undefined;
+  switch (message.type) {
+    case "ishiki.message.created":
+    case "ishiki.message.deleted":
+      return message.data.channelId;
+    default:
+      return undefined;
+  }
+}
+
 interface ChannelWillingness {
   score: number;
   updatedAt: number;
@@ -122,13 +100,6 @@ export class V3WakeupInstance implements WakeupEngineInstance {
     this.config = normalize({ ...DEFAULT_V3_WAKEUP, ...config });
   }
 
-  /**
-   * 订阅本视窗的轮末事件，自己接回执；返回拆卸函数，取消订阅并丢掉这次挂载见过的频道。
-   *
-   * `turn.done` 不带频道号，回执扣给谁只能靠「这块视窗里出现过哪些频道」——由事实流里
-   * 每条消息自带的 channelId 攒出来。单频道形态下这就是那一个频道；聚合形态下是视窗内的全部频道，
-   * 一次开口让整块视窗都冷静下来。两种形态走同一份代码：它不看挂了几次，只看自己见过什么。
-   */
   attach(agent: Agent): () => void {
     const seen = new Set<string>();
     const unsubscribe = agent.channel.subscribe("agent", (event) => {
@@ -156,7 +127,6 @@ export class V3WakeupInstance implements WakeupEngineInstance {
     return Math.random() < this.probability(score) ? "trigger" : "wait";
   }
 
-  /** 一轮走完（turn.done）：补掉这期间的自然衰减，再扣掉回复成本；失败与中止不扣，与 v3 一致。 */
   observe(channelId: string): void {
     const now = Date.now();
     const state = this.channels.get(channelId);
@@ -165,13 +135,11 @@ export class V3WakeupInstance implements WakeupEngineInstance {
     this.channels.set(channelId, { score, updatedAt: now });
   }
 
-  /** 当前意愿值，供调用方观察（测试与排查用）。 */
   score(channelId: string): number {
     const state = this.channels.get(channelId);
     return state === undefined ? 0 : decay(state.score, Date.now() - state.updatedAt, this.config);
   }
 
-  /** 先补衰减再加本条消息的增益（增益要过一遍 S 型曲线），写回并返回。 */
   private accumulate(message: IshikiMessageCreated, now: number): number {
     const state = this.channels.get(message.channelId);
     const decayed = state === undefined ? 0 : decay(state.score, now - state.updatedAt, this.config);
@@ -182,7 +150,6 @@ export class V3WakeupInstance implements WakeupEngineInstance {
     return next;
   }
 
-  /** v3 的增益：基础分 + 属性加成（可叠加），乘兴趣系数，再乘边际递减。 */
   private gain(message: IshikiMessageCreated, score: number): number {
     const config = this.config;
 
@@ -196,7 +163,6 @@ export class V3WakeupInstance implements WakeupEngineInstance {
     return raw * Math.max(0, 1 - (score / config.maxWillingness) ** 2);
   }
 
-  /** v3 的概率换算：阈值及以下恒 0，之上线性放大，最后夹到 [0, 1]。 */
   private probability(score: number): number {
     const { probabilityThreshold, probabilityAmplifier } = this.config;
     if (score <= probabilityThreshold) return 0;
@@ -210,13 +176,12 @@ declare module "./engine.js" {
   }
 }
 
-/** v3 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
 export class V3WakeupEngine extends WakeupEngine<"v3"> {
   constructor(ctx: Context) {
     super(ctx, "v3");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "v3">>): WakeupEngineInstance {
+  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "v3">>, _context: ExtensionContext): WakeupEngineInstance {
     return new V3WakeupInstance(config.v3 ?? {});
   }
 }

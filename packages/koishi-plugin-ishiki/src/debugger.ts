@@ -1,37 +1,31 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { AgentPlugin, type AgentCustomEvent } from "@yesimagent/core";
+import { AgentPlugin, type AgentCustomEvent, type AgentEvent, type LanguageModelUsage } from "@yesimagent/core";
 import type { Logger } from "koishi";
 
 export interface DumpFetchOptions {
   readonly logger: Logger;
-  /** Directory raw exchanges are written to. */
   readonly directory: string;
 }
 
 const PREFIX = "[ishiki:debug]";
 
-/**
- * 开发调试用：把 `stream` 通道的分片按到达顺序写到 `process.stdout`，不走 logger
- * （logger 的级别与格式会吃掉增量，控制台要的是一行行流出来的原文）。
- * 增量原地续写（同一 `id` 的分片接在一起），非增量分片自成一行；只排版，不拼装、不缓存，
- * 所以到达顺序、分段边界与分片本身一样都看得到。
- * 用法：`createAgent({ plugins: [createDebugStreamPlugin()] })`。
- */
-export function createDebugStreamPlugin(): AgentPlugin {
-  let unsubscribe: (() => void) | undefined;
+export function createDebugPlugin(id: string, logger: Logger): AgentPlugin {
+  let disposers: Array<() => void> = [];
   return {
     name: "debug-stream",
     init: (agent) => {
-      const write = createDeltaWriter();
-      unsubscribe = agent.channel.subscribe("stream", write);
+      disposers.push(agent.channel.subscribe("stream", createDeltaWriter()));
+      disposers.push(agent.channel.subscribe("agent", createEventLogger({ id, logger })));
     },
-    stop: () => unsubscribe?.(),
+    stop: () => {
+      for (const dispose of disposers) dispose();
+      disposers = [];
+    },
   };
 }
 
-/** 续写状态只在监听器生命周期里活着：`open` 是当前那条没写换行的增量流，非增量分片先把它收尾。 */
 function createDeltaWriter(): (part: AgentCustomEvent["stream"]) => void {
   let open: string | undefined;
   const close = (): void => {
@@ -55,7 +49,6 @@ function createDeltaWriter(): (part: AgentCustomEvent["stream"]) => void {
   };
 }
 
-/** 增量分片只认原文：`label` 是新开一条流时打的头部，之后同 `id` 的分片直接接在后面。 */
 function deltaOf(part: AgentCustomEvent["stream"]): { id: string; label: string; text: string } | undefined {
   switch (part.type) {
     case "text-delta":
@@ -69,7 +62,6 @@ function deltaOf(part: AgentCustomEvent["stream"]): { id: string; label: string;
   }
 }
 
-/** 非增量分片一行一条：只挑开发时要看的字段，其余类型只留判别式，避免把图片、原始块整段灌进终端。 */
 function fact(part: AgentCustomEvent["stream"]): string {
   switch (part.type) {
     case "tool-input-start":
@@ -91,11 +83,84 @@ function fact(part: AgentCustomEvent["stream"]): string {
   }
 }
 
-/**
- * Wraps `fetch` to keep a copy of every provider exchange. A tool call's argument order only exists in
- * the raw text the provider streams — the parsed object a runtime logs has already lost the question,
- * so the request body (declared schema order) and the response body (generated order) are both kept.
- */
+/** 订阅 agent 事件，按 turn / tool / message 记账后逐条打日志。 */
+function createEventLogger(options: { id: string; logger: Logger }): (event: AgentEvent) => void {
+  const tag = `[${options.id}]`;
+  const logger = options.logger;
+  const stepStartedAt = new Map<string, number>();
+  const toolStartedAt = new Map<string, number>();
+
+  return (event) => {
+    switch (event.type) {
+      case "turn.start":
+        stepStartedAt.set(event.turnId, Date.now());
+        break;
+      case "turn.step": {
+        const startedAt = stepStartedAt.get(event.turnId);
+        stepStartedAt.set(event.turnId, Date.now());
+        logger.debug(`${tag} turn.step #${event.stepNumber} ${formatUsage(event.usage)} finish=${event.finishReason ?? "unknown"} ${formatElapsed(startedAt)}`);
+        return;
+      }
+      case "turn.done":
+        stepStartedAt.delete(event.turnId);
+        break;
+      case "turn.failed":
+      case "turn.aborted":
+        stepStartedAt.delete(event.turnId);
+        break;
+      case "tool.start":
+        toolStartedAt.set(toolCallKey(event), Date.now());
+        break;
+      case "tool.done":
+        logger.debug(`${tag} tool.done ${event.toolName} ${formatElapsed(toolStartedAt.get(toolCallKey(event)))}`);
+        toolStartedAt.delete(toolCallKey(event));
+        return;
+      case "tool.failed":
+        toolStartedAt.delete(toolCallKey(event));
+        break;
+      case "message.appended":
+        if (event.message.role === "assistant" && Array.isArray(event.message.content)) {
+          const text = event.message.content.map((part) => (part.type === "text" ? part.text : `[${part.type}]`)).join("");
+          logger.debug(`${tag} message.appended ${event.message.role} "${text}"`);
+        }
+        break;
+      default:
+        // 其余事件没有要算的量，落到下面统一记一行类型。
+        break;
+    }
+
+    if (event.type === "turn.failed") {
+      logger.warn(`${tag} turn failed: ${event.error?.message ?? "unknown error"}`);
+      return;
+    }
+    logger.debug(`${tag} ${event.type}`);
+  };
+}
+
+/** 一次工具调用的键：优先用 provider 给的 id，缺了就用轮次加名字兜底。 */
+function toolCallKey(event: { turnId: string; toolName: string; toolCallId?: string }): string {
+  return event.toolCallId ?? `${event.turnId}:${event.toolName}`;
+}
+
+/** 距离起点过了多少毫秒；起点缺席（没见到对应的 start 事件）时不报数。 */
+function formatElapsed(startedAt: number | undefined): string {
+  return startedAt === undefined ? "elapsed=?" : `elapsed=${Date.now() - startedAt}ms`;
+}
+
+/** 一步的用量。provider 少给字段就少报字段，不拿 0 冒充。 */
+function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
+  if (usage === undefined) return "usage=?";
+  const parts = [`in=${usage.inputTokens ?? "?"}`, `out=${usage.outputTokens ?? "?"}`, `total=${usage.totalTokens ?? "?"}`];
+  const cached = usage.inputTokenDetails?.cacheReadTokens;
+  if (cached !== undefined) {
+    parts.push(`cached=${cached}`);
+    parts.push(`rate=${((cached / (usage.inputTokens ?? 1)) * 100).toFixed(2)}%`);
+  }
+  const reasoning = usage.outputTokenDetails?.reasoningTokens;
+  if (reasoning !== undefined) parts.push(`reasoning=${reasoning}`);
+  return `usage(${parts.join(" ")})`;
+}
+
 export function createDumpFetch(options: DumpFetchOptions): typeof globalThis.fetch {
   let sequence = 0;
   return async (input, init) => {
@@ -109,7 +174,6 @@ export function createDumpFetch(options: DumpFetchOptions): typeof globalThis.fe
     void record(options, stamp, payload, copy);
 
     const headers = new Headers(response.headers);
-    // The body is handed over decoded, so the original encoding frames no longer describe it.
     headers.delete("content-encoding");
     headers.delete("content-length");
     return new Response(body, { status: response.status, statusText: response.statusText, headers });
@@ -131,9 +195,6 @@ async function record(options: DumpFetchOptions, stamp: string, payload: string,
   await fs.mkdir(options.directory, { recursive: true });
   await fs.writeFile(path.join(options.directory, `${stamp}-request.json`), payload, "utf-8");
   await fs.writeFile(path.join(options.directory, `${stamp}-response.sse`), raw, "utf-8");
-
-  // options.logger.debug(`[dump] ${stamp} tools ${toolSchemas(payload)}`);
-  // for (const delta of argumentDeltas(raw)) options.logger.debug(`[dump] ${stamp} ${delta}`);
 }
 
 async function readAll(body: ReadableStream<Uint8Array>): Promise<string> {

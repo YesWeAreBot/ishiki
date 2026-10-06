@@ -30,11 +30,5 @@
   "peerDependencies": {
     "koishi": "^4.18.11",
     "koishi-plugin-ishiki": "workspace:^"
-  },
-  "koishi": {
-    "description": {
-      "zh": "MCP 协议客户端扩展包：把 MCP 服务器的工具接入 ishiki 视窗",
-      "en": "MCP protocol client extension: exposes MCP server tools to ishiki runtimes"
-    }
   }
 }

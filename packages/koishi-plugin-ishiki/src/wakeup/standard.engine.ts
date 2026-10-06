@@ -1,6 +1,7 @@
 import { Service, type Context } from "koishi";
 
-import type { EngineConfig } from "../profile.js";
+import type { ExtensionContext } from "../extension.js";
+import type { EngineConfig } from "../profile/index.js";
 import type { IshikiEvent } from "../types.js";
 import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
@@ -13,9 +14,6 @@ export interface StandardWakeupConfig {
   keywords: string[];
 }
 
-/**
- * 规则判定：私聊看 `isDirect`，群聊看引用、关键词与 @；命中任一即触发一轮。
- */
 export class StandardWakeupInstance implements WakeupEngineInstance {
   public readonly config: StandardWakeupConfig;
 
@@ -40,13 +38,12 @@ declare module "./engine.js" {
   }
 }
 
-/** standard 的 provider：没有插件级配置，只把 profile/scene 合出来的参数交给运行体。 */
 export class StandardWakeupEngine extends WakeupEngine<"standard"> {
   constructor(ctx: Context) {
     super(ctx, "standard");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "standard">>): WakeupEngineInstance {
+  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "standard">>, _context: ExtensionContext): WakeupEngineInstance {
     return new StandardWakeupInstance(config.standard ?? {});
   }
 }

@@ -4,7 +4,6 @@ import { jsonSchema, tool, type ToolSet } from "koishi-plugin-ishiki";
 
 import type { ExecResult, WorkspaceSandbox } from "./sandbox.js";
 
-/** 相对路径按工作目录补齐：沙箱的文件系统只认绝对路径。 */
 function resolveIn(sandbox: WorkspaceSandbox, target: string): string {
   return target.startsWith("/") ? target : path.posix.join(sandbox.cwd, target);
 }
@@ -23,10 +22,6 @@ interface EditInput extends PathInput {
   replace_all?: boolean;
 }
 
-/**
- * 沙箱内的四件工具。它们只是一层薄的入参整形：真正的读写都落在沙箱的文件系统上，
- * 所以 bash 与这三个工具看到的是同一份工作区。
- */
 export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
   return {
     bash: tool({
