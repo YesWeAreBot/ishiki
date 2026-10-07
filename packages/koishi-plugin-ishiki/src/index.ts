@@ -8,6 +8,7 @@ import { parse } from "yaml";
 
 import { loadCodemode } from "./builtin-tools/codemode.js";
 import { createFinish } from "./builtin-tools/finish.js";
+import { createReadTool } from "./builtin-tools/read.js";
 import { createSendMessage } from "./builtin-tools/send-message.js";
 import { ContextEngine, StandardContextEngine, V3ContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
@@ -15,6 +16,11 @@ import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
 import { resourcePath } from "./resource.js";
+import { ArtifactStore } from "./resources/artifact.js";
+import { MinatoAssetDatabase, defineAssetTable } from "./resources/asset-db.js";
+import { AssetRegistry } from "./resources/asset.js";
+import { ResourceCenter } from "./resources/center.js";
+import { AssetHandler, ArtifactHandler, LocalHandler } from "./resources/handlers.js";
 import { AgentRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -55,6 +61,7 @@ class Ishiki extends Service<Ishiki.Config> {
     this.logger.level = config.logLevel;
 
     this.dataPath = path.resolve(ctx.baseDir, config.dataPath);
+    defineAssetTable(ctx);
     const modelConfigFile = path.resolve(this.dataPath, "models.yaml");
     if (!existsSync(modelConfigFile)) {
       this.logger.warn(`Model config file not found: ${modelConfigFile}, creating an empty one.`);
@@ -153,12 +160,18 @@ class Ishiki extends Service<Ishiki.Config> {
         const spawn = (key: string, domain: InstanceDomain): AgentRuntime => {
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
           const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger };
+          const resources = new ResourceCenter(key, home);
+          const assetHandler = new AssetHandler(new AssetRegistry(key, home, new MinatoAssetDatabase(this.ctx)));
+          resources.useCore(assetHandler);
+          resources.useCore(new ArtifactHandler(new ArtifactStore(home)));
+          resources.useCore(new LocalHandler(resources));
           const runtime = new AgentRuntime({
             id: key,
             home,
             model,
-            instructions,
+            instructions: [instructions, resourceSchemeDoc(settings.resources.imageInput)].filter(Boolean).join("\n\n"),
             tools: {
+              read: createReadTool({ center: resources, imageInput: settings.resources.imageInput, assetReader: assetHandler }),
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing }),
               finish: createFinish(),
             },
@@ -168,6 +181,7 @@ class Ishiki extends Service<Ishiki.Config> {
             codemode: settings.codemode,
             debugStream: this.config.debugStream,
             logger: this.logger,
+            resources,
           });
           runtimes.set(key, runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);
@@ -231,6 +245,24 @@ function renderInstructions(root: string): string {
   const persona = existsSync(personaFile) ? readFileSync(personaFile, "utf8").trim() : "";
   const template = new Template(readFileSync(resourcePath("templates", "system.jinja"), "utf8")).render({});
   return [template.trim(), persona].filter((part) => part.length > 0).join("\n\n");
+}
+
+/** One-paragraph system-prompt doc for the resource URL space, driven by live extensions. */
+function resourceSchemeDoc(imageInput: boolean): string {
+  const imageLine = imageInput
+    ? "- `asset://<32-hex-id>` — media received in chat or produced by tools. `read` returns the image itself."
+    : "- `asset://<32-hex-id>` — media received in chat or produced by tools. `read` returns its metadata (you cannot view images directly).";
+  return [
+    "## Resources",
+    "",
+    "Resources are addressed by URL and read with the `read` tool. Selectors compose on any URL:",
+    "`:1-200` (line range), `:50+30` (50 plus 30 lines), `:raw` (verbatim), `.a.b.0` (JSON dot path).",
+    "",
+    imageLine,
+    "- `artifact://<tool>/<name>` — captured tool output (long command logs, results). Read instead of asking for a resend.",
+    "- `local://<path>` — files under this agent's home directory.",
+    "- Extension schemes may also be available; `read` lists them if you use an unknown one.",
+  ].join("\n");
 }
 
 namespace Ishiki {

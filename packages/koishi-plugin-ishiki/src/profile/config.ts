@@ -103,7 +103,18 @@ export interface ProfileSettings {
   toolcall: ToolcallConfig;
   codemode: CodemodeConfig;
   typing: TypingConfig;
+  resources: ResourcesConfig;
 }
+
+/** Resource center knobs; see packages/koishi-plugin-ishiki/src/resources. */
+export interface ResourcesConfig {
+  /** True when the profile's model can consume image file parts. */
+  imageInput: boolean;
+}
+
+export const ResourcesConfig: Schema<ResourcesConfig> = Schema.object({
+  imageInput: Schema.boolean().default(false),
+});
 
 export interface ProfileConfig {
   model: string;
@@ -116,6 +127,7 @@ export interface ProfileConfig {
   toolcall?: ToolcallConfig;
   codemode?: CodemodeConfig;
   typing?: TypingConfig;
+  resources?: ResourcesConfig;
 }
 
 export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
@@ -129,6 +141,7 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   toolcall: ToolcallConfig,
   codemode: CodemodeConfig,
   typing: TypingConfig,
+  resources: ResourcesConfig,
 });
 
 /** 解析产物：一个 profile 的全部静态信息，装配期只读它。 */
@@ -157,6 +170,7 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       toolcall: fillEngine(config.toolcall, "native"),
       codemode: CodemodeConfig((config.codemode ?? {}) as CodemodeConfig),
       typing: TypingConfig((config.typing ?? {}) as TypingConfig),
+      resources: ResourcesConfig((config.resources ?? {}) as ResourcesConfig),
     },
     extensions: resolveExtensions(config.extends ?? {}),
   };

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { ArtifactStore } from "./artifact.js";
 import { AssetRegistry } from "./asset.js";
+import type { AssetRecord } from "./asset.js";
 import { ResourceCenter, ResourceError, type ResourcePayload, type ResourceUrl, type SchemeHandler, type SchemeSpec } from "./center.js";
 
 /** Max text payload inlined into a resource resolution. Larger texts must be sliced via the read tool. */
@@ -81,6 +82,11 @@ export class AssetHandler implements SchemeHandler {
   /** Byte-level access for the read tool and sandbox mount adapter. */
   public readBytes(id: string, signal?: AbortSignal): Promise<Uint8Array> {
     return this.registry.readBytes(id, signal);
+  }
+
+  /** Record lookup for callers that branch on metadata before pulling bytes. */
+  public getRecord(id: string): Promise<AssetRecord | undefined> {
+    return this.registry.get(id);
   }
 }
 

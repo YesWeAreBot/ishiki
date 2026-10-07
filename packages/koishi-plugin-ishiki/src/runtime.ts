@@ -18,6 +18,7 @@ import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
 import type { CodemodeConfig } from "./profile/index.js";
+import { ResourceCenter } from "./resources/center.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
 
@@ -33,6 +34,8 @@ export interface AgentRuntimeConfig {
   codemode: CodemodeConfig;
   debugStream: boolean;
   logger: Logger;
+  /** Runtime-scoped resource center; readers register schemes on it. */
+  resources: ResourceCenter;
 }
 
 const FINISH_TOOL = "finish";
@@ -42,6 +45,7 @@ export class AgentRuntime {
   readonly id: string;
   readonly home: string;
   readonly storage: AgentStorage;
+  readonly resources: ResourceCenter;
 
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
@@ -59,6 +63,7 @@ export class AgentRuntime {
     this.wakeup = config.wakeup;
     this.context = config.context;
     this.extensions = config.extensions;
+    this.resources = config.resources;
 
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));

@@ -16,7 +16,6 @@ export default defineConfig({
   },
   test: {
     exclude: ["**/node_modules/**", "**/.git/**"],
-    // 测试按 src 的族分目录，收集规则跟着走：只写 `tests/*.spec.ts` 会漏掉子目录里的全部用例。
     include: ["packages/*/tests/**/*.spec.ts"],
   },
 });
