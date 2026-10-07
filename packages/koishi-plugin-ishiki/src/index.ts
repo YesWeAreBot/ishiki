@@ -152,7 +152,7 @@ class Ishiki extends Service<Ishiki.Config> {
         const runtimes = new Map<string, AgentRuntime>();
         const spawn = (key: string, domain: InstanceDomain): AgentRuntime => {
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
-          const context: ExtensionContext = { runtimeId: key, domain, home, root: profile.root, logger: this.logger };
+          const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger };
           const runtime = new AgentRuntime({
             id: key,
             home,
@@ -162,10 +162,9 @@ class Ishiki extends Service<Ishiki.Config> {
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing }),
               finish: createFinish(),
             },
-            plugins: extensions.map(({ extension, config }) => extension(config, context)).filter((plugin) => plugin !== undefined),
+            extensions: extensions.map(({ extension, config }) => extension(config, context)).filter((ext) => ext !== undefined),
             context: contextProvider(settings.context, context),
             wakeup: wakeupProvider(settings.wakeup, context),
-            innerThoughts: settings.innerThoughts,
             codemode: settings.codemode,
             debugStream: this.config.debugStream,
             logger: this.logger,

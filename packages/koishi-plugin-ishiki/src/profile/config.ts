@@ -101,7 +101,6 @@ export interface ProfileSettings {
   context: ContextConfig;
   wakeup: WakeupConfig;
   toolcall: ToolcallConfig;
-  innerThoughts: boolean;
   codemode: CodemodeConfig;
   typing: TypingConfig;
 }
@@ -115,7 +114,6 @@ export interface ProfileConfig {
   context?: ContextConfig;
   wakeup?: WakeupConfig;
   toolcall?: ToolcallConfig;
-  innerThoughts?: boolean;
   codemode?: CodemodeConfig;
   typing?: TypingConfig;
 }
@@ -129,7 +127,6 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   context: ContextConfig,
   wakeup: WakeupConfig,
   toolcall: ToolcallConfig,
-  innerThoughts: Schema.boolean(),
   codemode: CodemodeConfig,
   typing: TypingConfig,
 });
@@ -158,7 +155,6 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       context: fillEngine(config.context, "standard"),
       wakeup: fillEngine(config.wakeup, "standard"),
       toolcall: fillEngine(config.toolcall, "native"),
-      innerThoughts: config.innerThoughts ?? false,
       codemode: CodemodeConfig((config.codemode ?? {}) as CodemodeConfig),
       typing: TypingConfig((config.typing ?? {}) as TypingConfig),
     },

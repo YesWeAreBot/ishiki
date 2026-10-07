@@ -33,20 +33,20 @@ const DIRECT_ONLY: readonly string[] = ["finish"];
 
 export interface CodemodeSurface {
   tool: Tool;
-
   callers: ToolCallers;
 }
 
 export function createCodemode(config: CodemodeConfig, tools: ToolSet): CodemodeSurface {
   const direct = new Set([...DIRECT_ONLY, ...config.direct]);
+  const { DIRECT_TOOL_CALL, experimental_codeModeTool } = codemode();
   const callers: ToolCallers = {};
   for (const name of Object.keys(tools)) {
-    if (BOTH_REACHABLE.includes(name)) callers[name] = [CODE_MODE, codemode().DIRECT_TOOL_CALL];
+    if (BOTH_REACHABLE.includes(name)) callers[name] = [CODE_MODE, DIRECT_TOOL_CALL];
     else if (!direct.has(name)) callers[name] = [CODE_MODE];
   }
-  const sandboxTool = codemode().experimental_codeModeTool({ executionPolicy: { timeoutMs: config.timeoutMs } }) as Tool;
-  const caller = (sandboxTool as { experimental_toolCaller?: unknown }).experimental_toolCaller;
-  if (caller === undefined) throw new Error("Failed to create codemode tool caller");
+  const sandboxTool = experimental_codeModeTool({ executionPolicy: { timeoutMs: config.timeoutMs } });
+  const caller = sandboxTool.experimental_toolCaller;
+  if (caller === undefined) throw new Error("failed to create codemode tool caller");
   const exposed: Record<string, unknown> = {};
   for (const key of Object.keys(sandboxTool)) exposed[key] = (sandboxTool as Record<string, unknown>)[key];
   exposed.experimental_toolCaller = caller;

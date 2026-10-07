@@ -32,7 +32,7 @@ class McpClientExtension extends Extension {
       },
       extendInstructions: async () => {
         await pool.connecting;
-        return pool.instructions();
+        return pool.instructions() || "";
       },
     };
   }
@@ -44,7 +44,7 @@ class McpClientExtension extends Extension {
 
     const pool = new ProfilePool(context.root, this.fallback, this.limits, this.logger);
     this.pools.set(context.root, pool);
-    context.profile.on("dispose", () => {
+    context.fiber.on("dispose", () => {
       this.pools.delete(context.root);
       void pool.close();
     });
@@ -58,19 +58,17 @@ namespace McpClientExtension {
     logLevel: number;
   }
 
-  export const limits: Schema<OutputLimits> = Schema.object({
-    maxImageBytes: Schema.number()
-      .description("单张图片的字节上限；超过的降级成一行说明")
-      .default(5 * 1024 * 1024),
-    maxTotalImageBytes: Schema.number()
-      .description("单次调用里全部图片合计的字节上限")
-      .default(10 * 1024 * 1024),
-    maxImageCount: Schema.number().min(0).description("单次调用最多带几张图片").default(4),
-    maxOutputChars: Schema.number().min(1).description("文本面的字符上限；超出的部分截断").default(30_000),
-  });
-
   export const Config: Schema<Config> = Schema.object({
-    limits,
+    limits: Schema.object({
+      maxImageBytes: Schema.number()
+        .description("单张图片的字节上限；超过的降级成一行说明")
+        .default(5 * 1024 * 1024),
+      maxTotalImageBytes: Schema.number()
+        .description("单次调用里全部图片合计的字节上限")
+        .default(10 * 1024 * 1024),
+      maxImageCount: Schema.number().min(0).description("单次调用最多带几张图片").default(4),
+      maxOutputChars: Schema.number().min(1).description("文本面的字符上限；超出的部分截断").default(30_000),
+    }),
     logLevel: Schema.union([0, 1, 2, 3]).description("日志级别").default(Logger.INFO) as Schema<number>,
   });
 }

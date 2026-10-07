@@ -1,9 +1,7 @@
-import type { AgentPlugin } from "@yesimagent/core";
-import { Service, type Context, type Logger, type Schema } from "koishi";
+import { ToolSet } from "@yesimagent/core";
+import { Awaitable, Service, type Context, type Logger, type Schema } from "koishi";
 
 import type { InstanceDomain } from "./profile/index.js";
-
-export type RuntimePlugin = AgentPlugin;
 
 export interface ExtensionContext {
   readonly runtimeId: string;
@@ -11,8 +9,13 @@ export interface ExtensionContext {
   readonly home: string;
   readonly root: string;
   /** profile 的 fiber：profile 级共享资源挂它的 dispose。 */
-  // readonly profile: Context;
+  readonly fiber: Context;
   readonly logger: Logger;
+}
+
+export interface ExtensionInstance {
+  extendInstructions?(): Awaitable<string>;
+  extendTools?(): Awaitable<ToolSet>;
 }
 
 declare module "koishi" {
@@ -50,5 +53,5 @@ export abstract class Extension<T = any> extends Service {
     return (schema === undefined ? config : schema(config ?? {})) as T;
   }
 
-  public abstract [Service.invoke](config: T, context: ExtensionContext): RuntimePlugin | undefined;
+  public abstract [Service.invoke](config: T, context: ExtensionContext): ExtensionInstance | undefined;
 }

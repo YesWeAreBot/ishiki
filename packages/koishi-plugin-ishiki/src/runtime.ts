@@ -7,7 +7,6 @@ import {
   LanguageModelV4,
   ToolConflictError,
   type Agent,
-  type AgentPlugin,
   type AgentStorage,
   type ToolCallers,
   type ToolSet,
@@ -15,9 +14,9 @@ import {
 import type { Logger } from "koishi";
 
 import { CODE_MODE, createCodemode } from "./builtin-tools/codemode.js";
-import { withInnerThoughts } from "./builtin-tools/inner-thoughts.js";
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
+import { ExtensionInstance } from "./extension.js";
 import type { CodemodeConfig } from "./profile/index.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
@@ -28,10 +27,9 @@ export interface AgentRuntimeConfig {
   model: LanguageModelV4;
   instructions: string;
   tools: ToolSet;
-  plugins: AgentPlugin[];
+  extensions: ExtensionInstance[];
   context: ContextEngineInstance;
   wakeup: WakeupEngineInstance;
-  innerThoughts: boolean;
   codemode: CodemodeConfig;
   debugStream: boolean;
   logger: Logger;
@@ -48,7 +46,7 @@ export class AgentRuntime {
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
   private readonly context: ContextEngineInstance;
-  private readonly plugins: AgentPlugin[];
+  private readonly extensions: ExtensionInstance[];
   private readonly agent: Agent;
 
   private disposeContext?: () => void;
@@ -60,7 +58,7 @@ export class AgentRuntime {
     this.logger = config.logger;
     this.wakeup = config.wakeup;
     this.context = config.context;
-    this.plugins = config.plugins.filter((plugin) => plugin !== undefined);
+    this.extensions = config.extensions;
 
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
@@ -86,8 +84,8 @@ export class AgentRuntime {
           transformMessages: (messages, options) => this.context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
           extendInstructions: async () => {
             const parts = [config.instructions];
-            for (const plugin of this.plugins) {
-              const contributed = await plugin.extendInstructions?.();
+            for (const ext of this.extensions) {
+              const contributed = await ext.extendInstructions?.();
               if (contributed !== undefined && contributed.length > 0) parts.push(contributed);
             }
             const extended = (await this.context.instructions?.()) ?? "";
@@ -96,15 +94,15 @@ export class AgentRuntime {
           },
           extendTools: async () => {
             const merged: ToolSet = { ...config.tools };
-            for (const plugin of this.plugins) {
-              const contributed = await plugin.extendTools?.();
+            for (const ext of this.extensions) {
+              const contributed = await ext.extendTools?.();
               if (contributed === undefined) continue;
               for (const [name, tool] of Object.entries(contributed)) {
                 if (name in merged) throw new ToolConflictError(name);
                 merged[name] = tool;
               }
             }
-            const base = config.innerThoughts ? withInnerThoughts(merged, this.logger) : merged;
+            const base = merged;
             if (!config.codemode.enable) return base;
             const sandbox = createCodemode(config.codemode, base);
             for (const name of Object.keys(toolCallers)) delete toolCallers[name];
@@ -156,7 +154,6 @@ export class AgentRuntime {
           },
         },
         ...(config.debugStream ? [createDebugPlugin(config.id, config.logger)] : []),
-        ...this.plugins,
       ],
       ...(config.codemode.enable ? { toolCallers } : {}),
     });

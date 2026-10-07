@@ -16,11 +16,12 @@ export namespace SendMessageTool {
     continue?: boolean;
     target?: string;
   }
-  export type Output = { ok: true; count: number };
+  export type Output = { ok: true; ids: string[] } | { ok: false; error: { name: string; message: string }; sent: string[]; failedAt: number };
 }
 
 export function createSendMessage(options: SendMessageTool.Options): Tool<SendMessageTool.Input, SendMessageTool.Output> {
   const { ctx, logger, domain, typing } = options;
+
   return tool({
     description: "send message to the channel",
     inputSchema: jsonSchema<SendMessageTool.Input>({
@@ -50,7 +51,7 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
           // return { ok: false, error: { name: error.name, message: error.message }, sent: sentMessages, failedAt: sentMessages.length };
         }
       }
-      return { ok: true, count: sentMessages.length };
+      return { ok: true };
     },
   });
 }
