@@ -82,6 +82,20 @@ export class AssetRegistry {
   }
 
   /**
+   * Register a row and write bytes that are already in hand (tool-returned
+   * media): blob lands immediately, `fetchedAt` set — readBytes never fetches.
+   */
+  public async putInHand(id: string, bytes: Uint8Array, row: { src: string; mediaType?: string; filename?: string }): Promise<void> {
+    await this.db.create({ id, runtimeId: this.runtimeId, src: row.src, mediaType: row.mediaType, filename: row.filename, ingestedAt: Date.now() });
+    await this.#cachePut(id, bytes);
+    this.#memory.set(id, bytes);
+    await this.db.markFetched(this.runtimeId, id, {
+      byteLength: bytes.byteLength,
+      contentHash: createHash("sha256").update(bytes).digest("hex"),
+    });
+  }
+
+  /**
    * Bytes for an asset id: memory cache → disk cache → fetch-and-cache.
    * Concurrent callers on the same id share one fetch. This is the single
    * entry point for every read path (read tool, sandbox mount, outbound send),

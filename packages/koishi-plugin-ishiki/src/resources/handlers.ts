@@ -93,6 +93,11 @@ export class AssetHandler implements SchemeHandler {
   public listIds(): Promise<string[]> {
     return this.registry.listIds();
   }
+
+  /** Register a row and write bytes whose source is already materialized (tool-returned media). */
+  public async putInHand(id: string, bytes: Uint8Array, row: { src: string; mediaType?: string; filename?: string }): Promise<void> {
+    await this.registry.putInHand(id, bytes, row);
+  }
 }
 
 /** `artifact://<tool>/<name>` — persisted tool output. */

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Awaitable } from "koishi";
 
 import type { ArtifactStore } from "./artifact.js";
-import type { AssetRecord } from "./asset.js";
+import { AssetRegistry, type AssetRecord } from "./asset.js";
 
 /**
  * Typed error codes for resource access failures. The model-facing reader turns
@@ -90,6 +90,8 @@ export interface AssetHandlerView {
   readBytes(id: string, signal?: AbortSignal): Promise<Uint8Array>;
   getRecord(id: string): Promise<AssetRecord | undefined>;
   listIds(): Promise<string[]>;
+  /** Bytes are already in hand: write the cache directly and register the row. */
+  putInHand(id: string, bytes: Uint8Array, row: { src: string; mediaType?: string; filename?: string }): Promise<void>;
 }
 
 function isAssetHandlerView(handler: SchemeHandler | undefined): handler is SchemeHandler & AssetHandlerView {
@@ -97,7 +99,8 @@ function isAssetHandlerView(handler: SchemeHandler | undefined): handler is Sche
     handler !== undefined &&
     typeof (handler as Partial<AssetHandlerView>).readBytes === "function" &&
     typeof (handler as Partial<AssetHandlerView>).getRecord === "function" &&
-    typeof (handler as Partial<AssetHandlerView>).listIds === "function"
+    typeof (handler as Partial<AssetHandlerView>).listIds === "function" &&
+    typeof (handler as Partial<AssetHandlerView>).putInHand === "function"
   );
 }
 
@@ -180,10 +183,31 @@ export class ResourceCenter {
     return this.#artifactStore.put(tool, name, new TextEncoder().encode(content), { mediaType: "text/plain" });
   }
 
+  /**
+   * Register a tool-returned media blob as an asset keyed by its content
+   * hash, so identical images dedupe across calls. The src is a synthetic
+   * data: URL, meaning bytes are already in hand — no lazy fetch.
+   */
+  public async sinkMedia(tool: string, bytes: Uint8Array, mediaType: string): Promise<string> {
+    const view = this.#assetView();
+    if (!view) throw new ResourceError("resource_unavailable", "asset handler is not registered");
+    const dataUrl = `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`;
+    const id = AssetRegistry.deriveId(`${tool}/${dataUrl}`);
+    const existing = await view.getRecord(id);
+    if (existing) return `asset://${id}`;
+    await view.putInHand(id, bytes, { src: dataUrl, mediaType });
+    return `asset://${id}`;
+  }
+
   /** The asset handler's extended view, when one is registered. */
   #assetView(): AssetHandlerView | undefined {
     const handler = this.#handlers.get("asset");
     return isAssetHandlerView(handler) ? handler : undefined;
+  }
+
+  /** Byte-level asset access for outbound send resolution. */
+  public assetView(): AssetHandlerView | undefined {
+    return this.#assetView();
   }
 
   /** Parse `scheme://authority/path`; throws `invalid_resource_uri` on malformed or traversal-bearing input. */

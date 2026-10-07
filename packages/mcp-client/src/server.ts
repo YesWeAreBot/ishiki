@@ -4,7 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "koishi";
-import { jsonSchema, tool, type ToolResultOutput, type ToolSet } from "koishi-plugin-ishiki";
+import { jsonSchema, tool, ResourceError, type ToolResultOutput, type ToolSet } from "koishi-plugin-ishiki";
 
 import type { McpServer } from "./config.js";
 
@@ -15,9 +15,11 @@ export interface OutputLimits {
   maxOutputChars: number;
 }
 
-/** Receives truncated tool output; wired to the runtime's artifact store. */
+/** Receives truncated tool output and tool-returned media; wired to the runtime's resource center. */
 export interface OutputSpiller {
   spill(tool: string, content: string): Promise<{ url: string; sandboxPath: string }>;
+  /** Persist a tool-returned image and return its asset:// URL. */
+  sinkImage?(tool: string, bytes: Uint8Array, mediaType: string): Promise<string>;
 }
 
 export class McpConnection {
@@ -100,6 +102,15 @@ export class McpConnection {
     this.logger.debug(`mcp server "${this.name}" disconnected`);
   }
 
+  /** Read a resource from this server; text and base64 blobs both supported. */
+  public async readResource(resourceUri: string): Promise<{ uri: string; text?: string; blob?: string; mimeType?: string }> {
+    const result = await this.client.readResource({ uri: resourceUri });
+    const first = result.contents[0];
+    if (!first) throw new ResourceError("resource_not_found", `mcp resource not found: ${resourceUri}`);
+    if ("blob" in first) return { uri: first.uri, blob: first.blob, mimeType: first.mimeType };
+    return { uri: first.uri, text: first.text, mimeType: first.mimeType };
+  }
+
   private async render(blocks: McpBlock[], exposedTool: string): Promise<ToolResultOutput> {
     const parts: NonNullable<Extract<ToolResultOutput, { type: "content" }>["value"]> = [];
     let images = 0;
@@ -128,7 +139,13 @@ export class McpConnection {
       }
       images += 1;
       totalBytes += bytes.byteLength;
-      parts.push({ type: "file", mediaType, data: { type: "data", data: bytes } });
+      if (this.spiller?.sinkImage) {
+        // 图片固化成 asset：上下文里只留 URL，模型要看图时再 read。
+        const assetUrl = await this.spiller.sinkImage(exposedTool, bytes, mediaType);
+        lines.push(`[image: ${assetUrl}]`);
+      } else {
+        parts.push({ type: "file", mediaType, data: { type: "data", data: bytes } });
+      }
     }
 
     const joined = lines.join("\n").trim();

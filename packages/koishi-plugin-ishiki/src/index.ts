@@ -175,7 +175,7 @@ class Ishiki extends Service<Ishiki.Config> {
             instructions: [instructions, resourceSchemeDoc(settings.resources.imageInput)].filter(Boolean).join("\n\n"),
             tools: {
               read: createReadTool({ center: resources, imageInput: settings.resources.imageInput, assetReader: assetHandler }),
-              send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing }),
+              send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing, resources }),
               finish: createFinish(),
             },
             extensions: extensions.map(({ extension, config }) => extension(config, context)).filter((ext) => ext !== undefined),

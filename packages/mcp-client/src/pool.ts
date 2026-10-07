@@ -31,6 +31,7 @@ export class ProfilePool {
             const url = await resources.artifactSpill(tool, content);
             return { url, sandboxPath: `/artifacts/${url.slice("artifact://".length)}` };
           },
+          sinkImage: (tool, bytes, mediaType) => resources.sinkMedia(tool, bytes, mediaType),
         }
       : undefined;
     for (const connection of this.connections) connection.spiller = this.spiller;
@@ -82,6 +83,14 @@ export class ProfilePool {
   public instructions(): string | undefined {
     const texts = this.connections.map((connection) => connection.instructions).filter((text): text is string => text !== undefined && text.length > 0);
     return texts.length === 0 ? undefined : texts.join("\n\n");
+  }
+
+  /** Read an MCP resource by server name and URI. */
+  public async readResource(serverName: string, resourceUri: string): Promise<{ uri: string; text?: string; blob?: string; mimeType?: string }> {
+    await this.connecting;
+    const connection = this.connections.find((entry) => entry.name === serverName);
+    if (!connection) throw new Error(`mcp server "${serverName}" is not connected`);
+    return connection.readResource(resourceUri);
   }
 
   public async close(): Promise<void> {

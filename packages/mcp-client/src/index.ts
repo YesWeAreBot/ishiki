@@ -4,6 +4,7 @@ import { Logger, Schema, Service, type Context } from "koishi";
 import { Extension, type ExtensionContext } from "koishi-plugin-ishiki";
 
 import { ProfilePool } from "./pool.js";
+import { McpResourceHandler } from "./resource-handler.js";
 import type { OutputLimits } from "./server.js";
 
 class McpClientExtension extends Extension {
@@ -25,6 +26,8 @@ class McpClientExtension extends Extension {
   public [Service.invoke](_config: unknown, context: ExtensionContext) {
     const pool = this.pool(context);
     pool.setResources(context.resources);
+    // mcp://<server>/<resource-uri>；同样由该池兜底解析任意自定义 scheme 资源。
+    context.resources?.use(new McpResourceHandler(pool));
     return {
       name: "ishiki.mcp-client",
       extendTools: async () => {
