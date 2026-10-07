@@ -18,7 +18,9 @@ import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
 import type { CodemodeConfig } from "./profile/index.js";
+import { AssetRegistry } from "./resources/asset.js";
 import { ResourceCenter } from "./resources/center.js";
+import { rewriteInboundMedia } from "./resources/inbound.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
 
@@ -36,6 +38,8 @@ export interface AgentRuntimeConfig {
   logger: Logger;
   /** Runtime-scoped resource center; readers register schemes on it. */
   resources: ResourceCenter;
+  /** The registry behind the runtime's asset:// scheme, for inbound media registration. */
+  assets: AssetRegistry;
 }
 
 const FINISH_TOOL = "finish";
@@ -46,6 +50,7 @@ export class AgentRuntime {
   readonly home: string;
   readonly storage: AgentStorage;
   readonly resources: ResourceCenter;
+  readonly assets: AssetRegistry;
 
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
@@ -64,6 +69,7 @@ export class AgentRuntime {
     this.context = config.context;
     this.extensions = config.extensions;
     this.resources = config.resources;
+    this.assets = config.assets;
 
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
@@ -165,6 +171,12 @@ export class AgentRuntime {
   }
 
   async deliver(event: IshikiEvent): Promise<void> {
+    if (event.type === "ishiki.message.created") {
+      const { media, content } = event.data;
+      if (media.length > 0) {
+        event.data.content = await rewriteInboundMedia(content, media, this.assets);
+      }
+    }
     const trigger = (await this.wakeup.decide(event)) === "trigger";
     this.agent.send(event, { trigger, ifBusy: "join" });
   }

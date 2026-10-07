@@ -22,6 +22,8 @@ export interface IshikiMessageCreated extends IshikiEventBase {
   isDirect: boolean;
   user: { id: string; name?: string };
   guildId?: string;
+  /** Media elements extracted from the message; empty when it carries none. */
+  media: InboundMedia[];
   quote?: {
     id: string;
     content?: string;
@@ -29,6 +31,13 @@ export interface IshikiMessageCreated extends IshikiEventBase {
     channel?: { id: string };
     guild?: { id: string };
   };
+}
+
+/** An inbound media element (image/audio/video/file) before asset registration. */
+export interface InboundMedia {
+  kind: "image" | "audio" | "video" | "file";
+  src: string;
+  filename?: string;
 }
 
 export interface IshikiMessageDeleted extends IshikiEventBase {

@@ -161,7 +161,8 @@ class Ishiki extends Service<Ishiki.Config> {
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
           const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger };
           const resources = new ResourceCenter(key, home);
-          const assetHandler = new AssetHandler(new AssetRegistry(key, home, new MinatoAssetDatabase(this.ctx)));
+          const assetRegistry = new AssetRegistry(key, home, new MinatoAssetDatabase(this.ctx));
+          const assetHandler = new AssetHandler(assetRegistry);
           resources.useCore(assetHandler);
           resources.useCore(new ArtifactHandler(new ArtifactStore(home)));
           resources.useCore(new LocalHandler(resources));
@@ -182,6 +183,7 @@ class Ishiki extends Service<Ishiki.Config> {
             debugStream: this.config.debugStream,
             logger: this.logger,
             resources,
+            assets: assetRegistry,
           });
           runtimes.set(key, runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);
