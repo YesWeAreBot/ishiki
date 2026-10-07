@@ -1,9 +1,10 @@
 import { jsonSchema, tool, type Tool } from "@yesimagent/core";
 import { Context, h, Logger, sleep } from "koishi";
 
-import type { InstanceDomain, TypingConfig } from "../profile/index.js";
+import { matchesChannel, type InstanceDomain, type TypingConfig } from "../profile/index.js";
 import type { ResourceCenter } from "../resources/center.js";
 import { ResourceError } from "../resources/center.js";
+import { concreteMediaType } from "../resources/media.js";
 
 export namespace SendMessageTool {
   export interface Options {
@@ -18,17 +19,10 @@ export namespace SendMessageTool {
     messages: string[];
     mode?: "element" | "raw";
     continue?: boolean;
-    target?: string;
+    target?: { sid: string; channelId: string };
   }
   export type Output = { ok: true; ids: string[] } | { ok: false; error: { name: string; message: string }; sent: string[]; failedAt: number };
 }
-
-const MEDIA_SNIFF: Record<string, (bytes: Uint8Array) => boolean> = {
-  "image/png": (b) => b[0] === 0x89 && b[1] === 0x50,
-  "image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8,
-  "image/gif": (b) => b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46,
-  "image/webp": (b) => b[0] === 0x52 && b[8] === 0x57 && b[9] === 0x45,
-};
 
 /**
  * Outbound media resolver. `src` may be an asset://, artifact://,
@@ -63,35 +57,18 @@ async function resolveElement(element: h, resources: ResourceCenter, dropped: st
 
   const payload = await readForSend(src, resources, dropped);
   if (!payload) return "";
-  const mediaType = payload.mediaType ?? sniffMedia(payload.bytes!) ?? "application/octet-stream";
-  const dataUri = `data:${mediaType};base64,${Buffer.from(payload.bytes!).toString("base64")}`;
+  const dataUri = `data:${payload.mediaType};base64,${Buffer.from(payload.bytes).toString("base64")}`;
   return h(element.type, { ...element.attrs, src: dataUri }).toString();
 }
 
-async function readForSend(src: string, resources: ResourceCenter, dropped: string[]): Promise<{ bytes: Uint8Array; mediaType?: string } | undefined> {
+async function readForSend(src: string, resources: ResourceCenter, dropped: string[]): Promise<{ bytes: Uint8Array; mediaType: string } | undefined> {
   try {
-    // asset:// 的 resolve 是元数据卡片；发送需要真字节，走 AssetHandlerView。
-    if (src.startsWith("asset://")) {
-      const id = src.slice("asset://".length);
-      const view = resources.assetView();
-      if (!view) {
-        dropped.push(`${src}: resource_unavailable`);
-        return undefined;
-      }
-      const record = await view.getRecord(id);
-      if (!record) {
-        dropped.push(`${src}: resource_not_found`);
-        return undefined;
-      }
-      const bytes = await view.readBytes(id);
-      return { bytes, mediaType: record.mediaType };
-    }
     const payload = await resources.resolve(src);
     if (payload.bytes === undefined) {
-      dropped.push(`${src}: 不是可发送的媒体（${payload.content?.slice(0, 40) ?? "无字节"}）`);
+      dropped.push(`${src}: 不是可发送的媒体`);
       return undefined;
     }
-    return { bytes: payload.bytes, mediaType: payload.mediaType };
+    return { bytes: payload.bytes, mediaType: concreteMediaType(payload.mediaType, payload.bytes) ?? "application/octet-stream" };
   } catch (error) {
     const code = error instanceof ResourceError ? error.code : "resource_read_failed";
     dropped.push(`${src}: ${code}`);
@@ -99,27 +76,38 @@ async function readForSend(src: string, resources: ResourceCenter, dropped: stri
   }
 }
 
-function sniffMedia(bytes: Uint8Array): string | undefined {
-  for (const [mediaType, matches] of Object.entries(MEDIA_SNIFF)) {
-    if (matches(bytes)) return mediaType;
-  }
-  return undefined;
-}
-
 export function createSendMessage(options: SendMessageTool.Options): Tool<SendMessageTool.Input, SendMessageTool.Output> {
   const { ctx, logger, domain, typing } = options;
 
+  const cross = domain.mode === "cross";
+  if (cross && domain.channels.size === 0) throw new Error("cross-mode domain has no channels");
+
   return tool({
-    description: "send message to the channel",
+    description: cross
+      ? "Send visible messages to a channel. Copy target from its [channel target=...] header."
+      : "Send visible messages to the current channel.",
     inputSchema: jsonSchema<SendMessageTool.Input>({
       type: "object",
       properties: {
         messages: { type: "array", items: { type: "string" }, minItems: 1, description: "messages to send" },
         mode: { type: "string", enum: ["element", "raw"], description: "message mode" },
         continue: { type: "boolean", description: "whether to continue sending messages after a failure" },
-        target: { type: "string", description: "target user id for private message" },
+        ...(cross
+          ? {
+              target: {
+                type: "object" as const,
+                description: "Destination target, copied unchanged from the channel header.",
+                properties: {
+                  sid: { type: "string" as const, minLength: 1, description: "Bot account SID (platform:selfId)." },
+                  channelId: { type: "string" as const, minLength: 1, description: "Channel ID (group or private), not sender ID." },
+                },
+                required: ["sid", "channelId"],
+                additionalProperties: false,
+              },
+            }
+          : {}),
       },
-      required: ["messages"],
+      required: cross ? ["messages", "target"] : ["messages"],
     }),
     execute: async (input) => {
       const ids: string[] = [];
@@ -149,21 +137,21 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
   });
 }
 
-async function sendToChannel(ctx: Context, domain: InstanceDomain, target: string | undefined, fragment: h.Fragment): Promise<string[]> {
+async function sendToChannel(ctx: Context, domain: InstanceDomain, target: SendMessageTool.Input["target"], fragment: h.Fragment): Promise<string[]> {
   if (domain.mode === "channel") {
-    const bot = ctx.bots.find((entry) => entry.platform === domain.platform && entry.selfId === domain.selfId);
+    const bot = ctx.bots[`${domain.platform}:${domain.selfId}`];
     if (!bot) throw new Error(`bot ${domain.platform}:${domain.selfId} not available`);
-    if (target) return bot.sendMessage(target, fragment);
     return bot.sendMessage(domain.channelId, fragment);
   }
-  const sent: string[] = [];
-  for (const channelId of domain.channels.keys()) {
-    const [platform, selfId] = channelId.split(":");
-    const bot = ctx.bots.find((entry) => entry.platform === platform && entry.selfId === selfId);
-    if (!bot) continue;
-    sent.push(...(await bot.sendMessage(channelId, fragment)));
+  if (!target || typeof target.sid !== "string" || target.sid.length === 0 || typeof target.channelId !== "string" || target.channelId.length === 0) {
+    throw new Error("cross-mode send_message requires target: { sid, channelId }; copy it from the destination channel's header");
   }
-  return sent;
+  const { sid, channelId } = target;
+  const filter = domain.channels.get(sid);
+  if (!filter || !matchesChannel(filter, channelId)) throw new Error(`target ${JSON.stringify(target)} is outside this cross-mode domain`);
+  const bot = ctx.bots[sid];
+  if (!bot) throw new Error(`bot ${sid} not available`);
+  return bot.sendMessage(channelId, fragment);
 }
 
 function calculateTypingDelay(content: string, typing: TypingConfig): number {

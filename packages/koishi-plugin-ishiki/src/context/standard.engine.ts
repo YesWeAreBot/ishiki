@@ -54,6 +54,7 @@ const COMPACTION_INSTRUCTIONS = [
   "",
   "# 信息保留",
   "保留人物身份、频道归属、有效约定、关系与称谓变化、偏好及未完成事项。",
+  "频道寻址保留完整的 target: { sid, channelId }，sid 为 platform:selfId；群聊与私聊都使用 channelId，不得将发送者 user.id 当作频道地址。",
   "区分请求、计划、执行结果与未经验证的判断。",
   "保留仍可使用的产物路径及关键标识。",
   "明确记录事项已完成、失败或待确认。",
@@ -86,7 +87,7 @@ function addressParts(message: AgentMessage, domain?: InstanceDomain, names?: Re
 
   const head = (from: { platform: string; selfId: string; channelId: string }) => {
     if (domain?.mode !== "cross") return "";
-    return `[#${from.platform}:${from.selfId}/${from.channelId}] `;
+    return `[channel target=${JSON.stringify({ sid: `${from.platform}:${from.selfId}`, channelId: from.channelId })}]`;
   };
 
   switch (message.type) {
@@ -114,7 +115,7 @@ function addressParts(message: AgentMessage, domain?: InstanceDomain, names?: Re
 
 export function renderLine(message: AgentMessage, domain?: InstanceDomain): string | undefined {
   const parts = addressParts(message, domain);
-  return parts === undefined ? undefined : `${parts.head}${parts.body}`;
+  return parts === undefined ? undefined : parts.head.length > 0 ? `${parts.head}\n${parts.body}` : parts.body;
 }
 
 function renderText(message: AgentMessage, domain?: InstanceDomain): string {
@@ -339,6 +340,12 @@ export class StandardContextInstance implements ContextEngineInstance {
       return this.prepend(head, [...tail]);
     }
     return this.prepend(head, tail.slice(cut));
+  }
+
+  instructions(): string {
+    return this.domain?.mode === "cross"
+      ? "You participate in several channels. To reply, copy target from the message's [channel target=...] header into send_message."
+      : "You are in one channel. send_message sends to this conversation.";
   }
 
   renderMessages(messages: readonly AgentMessage[]) {

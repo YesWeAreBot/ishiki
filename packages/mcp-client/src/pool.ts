@@ -28,10 +28,10 @@ export class ProfilePool {
     this.spiller = resources
       ? {
           spill: async (tool, content) => {
-            const url = await resources.artifactSpill(tool, content);
-            return { url, sandboxPath: `/artifacts/${url.slice("artifact://".length)}` };
+            const url = await resources.store.spillArtifact(tool, content);
+            return { url, sandboxPath: `/home/.ishiki/artifacts/${url.slice("artifact://".length)}` };
           },
-          sinkImage: (tool, bytes, mediaType) => resources.sinkMedia(tool, bytes, mediaType),
+          sinkImage: (tool, bytes, mediaType) => resources.store.sinkMedia(tool, bytes, mediaType),
         }
       : undefined;
     for (const connection of this.connections) connection.spiller = this.spiller;

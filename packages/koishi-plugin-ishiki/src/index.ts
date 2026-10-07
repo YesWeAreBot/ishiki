@@ -16,11 +16,7 @@ import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
 import { resourcePath } from "./resource.js";
-import { ArtifactStore } from "./resources/artifact.js";
-import { MinatoAssetDatabase, defineAssetTable } from "./resources/asset-db.js";
-import { AssetRegistry } from "./resources/asset.js";
 import { ResourceCenter } from "./resources/center.js";
-import { AssetHandler, ArtifactHandler, LocalHandler } from "./resources/handlers.js";
 import { AgentRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -44,7 +40,6 @@ interface Route {
 
 class Ishiki extends Service<Ishiki.Config> {
   static name = "ishiki";
-  static inject = [];
 
   public readonly dataPath: string;
   public readonly logger: Logger;
@@ -61,7 +56,6 @@ class Ishiki extends Service<Ishiki.Config> {
     this.logger.level = config.logLevel;
 
     this.dataPath = path.resolve(ctx.baseDir, config.dataPath);
-    defineAssetTable(ctx);
     const modelConfigFile = path.resolve(this.dataPath, "models.yaml");
     if (!existsSync(modelConfigFile)) {
       this.logger.warn(`Model config file not found: ${modelConfigFile}, creating an empty one.`);
@@ -160,13 +154,6 @@ class Ishiki extends Service<Ishiki.Config> {
         const spawn = (key: string, domain: InstanceDomain): AgentRuntime => {
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
           const resources = new ResourceCenter(key, home);
-          const assetRegistry = new AssetRegistry(key, home, new MinatoAssetDatabase(this.ctx));
-          const assetHandler = new AssetHandler(assetRegistry);
-          resources.useCore(assetHandler);
-          const artifactStore = new ArtifactStore(home);
-          resources.useCore(new ArtifactHandler(artifactStore));
-          resources.useCore(new LocalHandler(resources));
-          resources.useArtifactStore(artifactStore);
           const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger, resources };
           const runtime = new AgentRuntime({
             id: key,
@@ -174,7 +161,7 @@ class Ishiki extends Service<Ishiki.Config> {
             model,
             instructions: [instructions, resourceSchemeDoc(settings.resources.imageInput)].filter(Boolean).join("\n\n"),
             tools: {
-              read: createReadTool({ center: resources, imageInput: settings.resources.imageInput, assetReader: assetHandler }),
+              read: createReadTool({ center: resources, imageInput: settings.resources.imageInput }),
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing, resources }),
               finish: createFinish(),
             },
@@ -185,7 +172,6 @@ class Ishiki extends Service<Ishiki.Config> {
             debugStream: this.config.debugStream,
             logger: this.logger,
             resources,
-            assets: assetRegistry,
           });
           runtimes.set(key, runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);
@@ -259,8 +245,9 @@ function resourceSchemeDoc(imageInput: boolean): string {
   return [
     "## Resources",
     "",
-    "Resources are addressed by URL and read with the `read` tool. Selectors compose on any URL:",
-    "`:1-200` (line range), `:50+30` (50 plus 30 lines), `:raw` (verbatim), `.a.b.0` (JSON dot path).",
+    "Resources are addressed by URL and read with the `read` tool. Text slices compose on any URL:",
+    "`:1-200` (line range), `:50+30` (50 plus 30 lines), `:raw` (verbatim).",
+    "Append `?view=meta` for a cheap probe (type, size, platform info) that loads no bytes.",
     "",
     imageLine,
     "- `artifact://<tool>/<name>` — captured tool output (long command logs, results). Read instead of asking for a resend.",

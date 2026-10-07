@@ -3,9 +3,10 @@ import path from "node:path";
 
 import { Bash, InMemoryFs, MountableFs, OverlayFs, ReadWriteFs, type FsStat } from "just-bash";
 import type { Logger } from "koishi";
+import type { ResourceCenter } from "koishi-plugin-ishiki";
 
 import type { WorkspaceConfig } from "./config.js";
-import { HOME_MOUNT, resolveMounts, resolveSkillMounts, WORKSPACE_MOUNT, type HostMount } from "./mounts.js";
+import { HOME_MOUNT, ISHIKI_MOUNT, resolveMounts, resolveSkillMounts, WORKSPACE_MOUNT, type HostMount } from "./mounts.js";
 import { ResourceFs } from "./resource-fs.js";
 import { discoverSkills, type Skill } from "./skills.js";
 
@@ -24,6 +25,8 @@ export interface WorkspaceLayout {
   readonly python: boolean;
   readonly mounts: readonly HostMount[];
   readonly skills: readonly Skill[];
+  /** True when the resource center is mounted at /home/.ishiki. */
+  readonly resourcesMounted: boolean;
 }
 
 export interface WorkspaceSandbox extends WorkspaceLayout {
@@ -43,8 +46,8 @@ export interface SandboxOptions {
   root: string;
   dataPath: string;
   logger: Logger;
-  /** Resource center providing /assets and /artifacts mounts; undefined disables them. */
-  resources?: import("koishi-plugin-ishiki").ResourceCenter;
+  /** Resource center providing the /home/.ishiki mount; undefined disables it. */
+  resources?: ResourceCenter;
   /** Receives truncated bash output; undefined leaves truncation as lossy. */
   spiller?: OutputSpiller;
 }
@@ -67,6 +70,7 @@ export function resolveLayout(options: SandboxOptions): WorkspaceLayout {
     python: config.python,
     mounts,
     skills,
+    resourcesMounted: options.resources !== undefined,
   };
 }
 
@@ -89,12 +93,7 @@ export async function createSandbox(layout: WorkspaceLayout, options: SandboxOpt
     base: homeView,
     mounts: [
       { mountPoint: WORKSPACE_MOUNT, filesystem: new Writable({ root: path.join(home, "workspace") }) },
-      ...(options.resources
-        ? [
-            { mountPoint: "/assets", filesystem: new ResourceFs(options.resources) },
-            { mountPoint: "/artifacts", filesystem: new ResourceFs(options.resources) },
-          ]
-        : []),
+      ...(options.resources ? [{ mountPoint: ISHIKI_MOUNT, filesystem: new ResourceFs(options.resources) }] : []),
       ...layout.mounts.map((mount) => ({
         mountPoint: mount.target,
         filesystem: mount.readOnly ? new OverlayFs({ root: mount.source, mountPoint: "/", readOnly: true }) : new Writable({ root: mount.source }),

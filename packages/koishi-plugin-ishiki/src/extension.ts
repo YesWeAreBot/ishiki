@@ -19,6 +19,7 @@ export interface ExtensionContext {
 export interface ExtensionInstance {
   extendInstructions?(): Awaitable<string>;
   extendTools?(): Awaitable<ToolSet>;
+  stop?(): Awaitable<void>;
 }
 
 declare module "koishi" {

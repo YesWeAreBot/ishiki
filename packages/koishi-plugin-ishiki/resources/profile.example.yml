@@ -73,6 +73,13 @@ typing:
   minDelay: 800
   maxDelay: 4000
 
+# 模型的资源能力。imageInput: true 表示所用模型能看图：read 一张图片时
+# 返回图片本身（file part）；缺省 false 时返回一行文字描述
+# （`asset://...: image/png, 12.3 KiB. This model cannot view images directly.`）。
+# 这只改数据形态，不决定模型会不会调 read —— 会看图的模型务必打开。
+resources:
+  imageInput: false
+
 # 扩展包：键是包名，值是这个 profile 给它的东西。extends 只启用包附加的能力，
 # 不决定引擎：某个引擎变体可不可用，只看 `ishiki.engine.<族>.<名字>` 这个 Koishi Service
 # 在不在，名字带不带包前缀都一样。变体名写在上面 context / wakeup / toolcall 三段里。
@@ -91,8 +98,10 @@ typing:
 # ── profiles/fused/profile.yaml ─────────────────────────────────────────────
 # 多频道合成一块视窗：mode: cross 时整个 profile 只有一个 runtime，
 # 认领的频道共享同一份事实流、同一套引擎实例。合流之后没有「当前频道」，
-# 所以出站要显式写坐标（send_message 的 target），每条事实行前也会多一个
-# `[#sid/频道号 | 发送者]` 的寻址头。
+# 所以出站要显式写坐标（send_message 的 target），格式为
+# `{ sid: "platform:selfId", channelId: "频道号" }`。每个频道事实块前会有
+# `[channel target={"sid":"platform:selfId","channelId":"频道号"}]` 寻址头，
+# 可将其中完整 target 对象原样复制给 send_message。群聊和私聊都使用 channelId。
 # 代价在 token：认领的频道全部消息进同一块窗口，认领范围别铺太开。
 # channels 的 key 可以写多个账号，把多个账号合流；同一账号的同一批频道只能归一个 profile。
 #

@@ -1,5 +1,5 @@
 import type { FsStat, IFileSystem } from "just-bash";
-import { AssetHandler, type ResourceCenter } from "koishi-plugin-ishiki";
+import type { ResourceCenter, ResourceMeta } from "koishi-plugin-ishiki";
 
 const EROFS = () => new Error("EROFS: resource mounts are read-only");
 const ENOENT = (path: string) => Object.assign(new Error(`ENOENT: no such file or directory: ${path}`), { code: "ENOENT" });
@@ -8,16 +8,25 @@ function dirStat(): FsStat {
   return { isFile: false, isDirectory: true, isSymbolicLink: false, size: 0, mode: 0o555, mtime: new Date(0) };
 }
 
-function fileStat(size: number, mtime: Date): FsStat {
-  return { isFile: true, isDirectory: false, isSymbolicLink: false, size, mode: 0o444, mtime };
+function fileStat(size: number, mtime: number): FsStat {
+  return { isFile: true, isDirectory: false, isSymbolicLink: false, size, mode: 0o444, mtime: new Date(mtime) };
 }
+/** Where a path points inside the mounted resource tree. */
+type ResourcePath = { kind: "root" } | { kind: "assets"; rest: readonly string[] } | { kind: "artifacts"; rest: readonly string[] } | { kind: "outside" };
+
+const OUTSIDE: ResourcePath = { kind: "outside" };
 
 /**
- * Read-only just-bash filesystem over the runtime resource center:
- * `/assets/<32-hex-id>` and `/artifacts/<tool>/<name>`. Byte reads funnel
- * through the same registry the read tool uses, so a URL and its sandbox
- * path always resolve to the same bytes; asset reads trigger the lazy fetch
- * on first access.
+ * Read-only just-bash filesystem over the runtime resource center, mounted at
+ * `/home/.ishiki`. Layout mirrors the URL space:
+ *
+ *   /home/.ishiki/assets/<32-hex-id>
+ *   /home/.ishiki/artifacts/<tool>/<name>
+ *
+ * Byte reads funnel through `center.resolve`, the same path the read tool
+ * uses, so a URL and its sandbox path always resolve to the same bytes; asset
+ * reads trigger the lazy fetch on first access. Stat and readdir go through
+ * the store's metadata and never fetch.
  */
 export class ResourceFs implements IFileSystem {
   public constructor(private readonly center: ResourceCenter) {}
@@ -30,24 +39,16 @@ export class ResourceFs implements IFileSystem {
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    const { scheme, rest } = this.split(path);
-    if (scheme === "assets") return this.#readAsset(path, rest);
-    return this.#readArtifactBytes(path, rest);
-  }
-
-  async #readAsset(path: string, segments: readonly string[]): Promise<Uint8Array> {
-    const id = segments[0] ?? "";
-    if (segments.length !== 1 || !/^[a-f0-9]{32}$/.test(id)) throw ENOENT(path);
-    const handler = this.center.resolveHandler("asset");
-    if (!(handler instanceof AssetHandler)) throw ENOENT(path);
-    return handler.readBytes(id);
-  }
-
-  async #readArtifactBytes(path: string, segments: readonly string[]): Promise<Uint8Array> {
-    if (segments.length < 2) throw ENOENT(path);
-    const payload = await this.center.resolve(`artifact://${segments[0]}/${segments.slice(1).join("/")}`);
-    if (payload.bytes !== undefined) return payload.bytes;
-    return new TextEncoder().encode(payload.content ?? "");
+    const parsed = this.split(path);
+    if (parsed.kind === "outside" || parsed.kind === "root" || parsed.rest.length === 0) throw ENOENT(path);
+    const url = parsed.kind === "assets" ? `asset://${parsed.rest[0]}` : `artifact://${parsed.rest.join("/")}`;
+    try {
+      const payload = await this.center.resolve(url);
+      if (payload.bytes !== undefined) return payload.bytes;
+      return new TextEncoder().encode(payload.content ?? "");
+    } catch {
+      throw ENOENT(path);
+    }
   }
 
   async writeFile(): Promise<void> {
@@ -68,17 +69,15 @@ export class ResourceFs implements IFileSystem {
   }
 
   async stat(path: string): Promise<FsStat> {
-    const { scheme, rest } = this.split(path);
-    if (rest.length === 0) return dirStat();
-    if (scheme === "assets") {
-      if (rest.length > 1) throw ENOENT(path);
-      const record = await this.center.assetRecord(rest[0]);
-      if (!record) throw ENOENT(path);
-      return fileStat(record.byteLength ?? 0, new Date(record.fetchedAt ?? record.ingestedAt));
+    const parsed = this.split(path);
+    if (parsed.kind === "outside") throw ENOENT(path);
+    if (parsed.kind === "root" || parsed.rest.length === 0) return dirStat();
+    const meta = await this.meta(parsed);
+    if (meta === undefined || meta === null) {
+      if (meta === null) return dirStat();
+      throw ENOENT(path);
     }
-    if (rest.length === 1) return dirStat();
-    const payload = await this.center.resolve(`artifact://${rest[0]}/${rest.slice(1).join("/")}`);
-    return fileStat(payload.size, new Date(0));
+    return fileStat(meta.byteLength ?? 0, meta.fetchedAt ?? meta.createdAt);
   }
 
   async lstat(path: string): Promise<FsStat> {
@@ -90,10 +89,15 @@ export class ResourceFs implements IFileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
-    const { scheme, rest } = this.split(path);
-    if (rest.length === 0) return scheme === "assets" ? this.center.listAssetIds() : this.center.listArtifactTools();
-    if (scheme === "artifacts" && rest.length === 1) return this.center.listArtifactNames(rest[0]);
-    throw ENOENT(path);
+    const parsed = this.split(path);
+    if (parsed.kind === "outside") throw ENOENT(path);
+    if (parsed.kind === "root") return ["assets", "artifacts"];
+    if (parsed.rest.length === 0) {
+      return parsed.kind === "assets" ? this.center.store.names("asset", "") : this.center.store.namespaces("artifact");
+    }
+    const meta = await this.meta(parsed);
+    if (meta !== null) throw ENOENT(path);
+    return this.center.store.names(parsed.kind === "assets" ? "asset" : "artifact", parsed.rest.join("/"));
   }
 
   async rm(): Promise<void> {
@@ -148,15 +152,34 @@ export class ResourceFs implements IFileSystem {
     return path;
   }
 
-  private split(path: string): { scheme: "assets" | "artifacts"; rest: readonly string[] } {
+  /**
+   * Metadata for a path without fetching: a row for files, `null` for a
+   * directory, `undefined` for nothing.
+   */
+  private async meta(parsed: Extract<ResourcePath, { kind: "assets" | "artifacts" }>): Promise<ResourceMeta | null | undefined> {
+    const { kind, rest } = parsed;
+    if (kind === "assets") {
+      if (rest.length !== 1) return undefined;
+      return this.center.store.getMeta("asset", "", rest[0]);
+    }
+    if (rest.length === 1) {
+      const tools = await this.center.store.namespaces("artifact");
+      return tools.includes(rest[0]) ? null : undefined;
+    }
+    const name = rest.at(-1)!;
+    return this.center.store.getMeta("artifact", rest.slice(0, -1).join("/"), name);
+  }
+
+  /**
+   * Split a mounted path. MountableFs strips the mount point, so paths arrive
+   * as the empty root, `assets/...`, or `artifacts/...`.
+   */
+  private split(path: string): ResourcePath {
     const segments = path.split("/").filter((segment) => segment.length > 0);
-    const first = segments[0];
-    // Direct call: absolute path carries the scheme segment.
-    if (first === "assets" || first === "artifacts") return { scheme: first, rest: segments.slice(1) };
-    // Mounted call: MountableFs strips the mount point, so the first segment
-    // is the id (assets) or the tool namespace (artifacts). The shapes are
-    // disjoint: asset ids are 32-hex, artifact tool namespaces are not.
-    if (/^[a-f0-9]{32}$/.test(first)) return { scheme: "assets", rest: segments };
-    return { scheme: "artifacts", rest: segments };
+    const head = segments[0];
+    if (head === undefined) return { kind: "root" };
+    if (head === "assets") return { kind: "assets", rest: segments.slice(1) };
+    if (head === "artifacts") return { kind: "artifacts", rest: segments.slice(1) };
+    return OUTSIDE;
   }
 }

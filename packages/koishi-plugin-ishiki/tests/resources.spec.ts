@@ -4,37 +4,8 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ArtifactStore } from "../src/resources/artifact.js";
-import type { AssetDatabase, AssetRecord } from "../src/resources/asset.js";
-import { AssetRegistry } from "../src/resources/asset.js";
 import { ResourceCenter, ResourceError, RESERVED_SCHEMES } from "../src/resources/center.js";
-import { AssetHandler, ArtifactHandler, LocalHandler } from "../src/resources/handlers.js";
-
-/** In-memory asset row store; production wires minato behind the same shape. */
-class MemoryAssetDb implements AssetDatabase {
-  readonly rows = new Map<string, AssetRecord>();
-
-  async get(runtimeId: string, id: string) {
-    return this.rows.get(`${runtimeId}/${id}`);
-  }
-
-  async prefixSearch(runtimeId: string, prefix: string) {
-    return [...this.rows.values()].filter((row) => row.runtimeId === runtimeId && row.id.startsWith(prefix));
-  }
-
-  async listIds(runtimeId: string) {
-    return [...this.rows.values()].filter((row) => row.runtimeId === runtimeId).map((row) => row.id);
-  }
-
-  async create(row: AssetRecord) {
-    this.rows.set(`${row.runtimeId}/${row.id}`, row);
-  }
-
-  async markFetched(runtimeId: string, id: string, data: { byteLength: number; contentHash: string }) {
-    const row = this.rows.get(`${runtimeId}/${id}`);
-    if (row) Object.assign(row, data, { fetchedAt: Date.now() });
-  }
-}
+import { ResourceStore } from "../src/resources/store.js";
 
 let home: string;
 
@@ -46,107 +17,128 @@ afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true });
 });
 
-function assemble(db: MemoryAssetDb) {
-  const center = new ResourceCenter("rt1", home);
-  const assets = new AssetRegistry("rt1", home, db);
-  const artifacts = new ArtifactStore(home);
-  center.useCore(new AssetHandler(assets));
-  center.useCore(new ArtifactHandler(artifacts));
-  center.useCore(new LocalHandler(center));
-  return { center, assets, artifacts };
+function assemble() {
+  const store = new ResourceStore(home);
+  return { store, center: new ResourceCenter("rt1", home, store) };
 }
 
-describe("AssetRegistry.deriveId", () => {
+describe("ResourceStore.deriveId", () => {
   it("derives a stable 32-hex id from the source URL", () => {
-    const id = AssetRegistry.deriveId("https://example.com/a.png");
+    const id = ResourceStore.deriveId("https://example.com/a.png");
     expect(id).toMatch(/^[a-f0-9]{32}$/);
-    expect(AssetRegistry.deriveId("https://example.com/a.png")).toBe(id);
-    expect(AssetRegistry.deriveId("https://example.com/b.png")).not.toBe(id);
+    expect(ResourceStore.deriveId("https://example.com/a.png")).toBe(id);
+    expect(ResourceStore.deriveId("https://example.com/b.png")).not.toBe(id);
   });
 });
 
-describe("AssetRegistry.register", () => {
+describe("ResourceStore.registerAsset", () => {
   it("is idempotent per (runtime, src)", async () => {
-    const { assets } = assemble(new MemoryAssetDb());
-    const first = await assets.register("https://example.com/a.png", { mediaType: "image/png" });
-    const second = await assets.register("https://example.com/a.png");
+    const { store } = assemble();
+    const first = await store.registerAsset("https://example.com/a.png", { mediaType: "image/png" });
+    const second = await store.registerAsset("https://example.com/a.png");
     expect(second).toBe(first);
   });
 
-  it("keeps rows scoped by runtime id", async () => {
-    const db = new MemoryAssetDb();
-    const { assets } = assemble(db);
-    await assets.register("https://example.com/a.png");
-    const other = new AssetRegistry("rt2", home, db);
-    const url = await other.register("https://example.com/a.png");
-    expect(url).toBe(`asset://${AssetRegistry.deriveId("https://example.com/a.png")}`);
-    expect(db.rows.size).toBe(2);
+  it("exposes the asset through resolve with bytes materialized", async () => {
+    const { store, center } = assemble();
+    const url = await store.registerAsset("data:image/png;base64,iVBORw0KGgo=", { mediaType: "image/png" });
+    const payload = await center.resolve(url);
+    expect(payload.bytes?.[0]).toBe(0x89);
+    expect(payload.mediaType).toBe("image/png");
+  });
+
+  it("records inbound sourceInfo verbatim and surfaces it in the meta view", async () => {
+    const { store, center } = assemble();
+    const url = await store.registerAsset("https://example.com/photo.jpg", {
+      mediaType: "image/*",
+      filename: "1D62BD1F.jpg",
+      sourceInfo: { summary: "", file: "1D62BD1F.jpg", subType: 0, fileSize: "169667" },
+    });
+    const view = await center.resolve(`${url}?view=meta`);
+    expect(view.content).toContain("fileSize");
+    expect(view.content).toContain("1D62BD1F.jpg");
+    const meta = await store.getMeta("asset", "", url.slice("asset://".length));
+    expect(meta?.sourceInfo).toEqual({ summary: "", file: "1D62BD1F.jpg", subType: 0, fileSize: "169667" });
+  });
+
+  it("meta view loads no bytes", async () => {
+    const { store, center } = assemble();
+    const url = await store.registerAsset("https://example.com/never-fetched.png", { mediaType: "image/png" });
+    const view = await center.resolve(`${url}?view=meta`);
+    expect(view.notes).toContain("metadata only; no bytes were loaded");
+    const meta = await store.getMeta("asset", "", url.slice("asset://".length));
+    expect(meta?.fetchedAt).toBeUndefined();
   });
 });
 
-describe("AssetRegistry.readBytes", () => {
+describe("ResourceStore.readBytes", () => {
   it("decodes data: URLs once, caches on disk, and records content hash", async () => {
-    const db = new MemoryAssetDb();
-    const { assets } = assemble(db);
-    const url = await assets.register("data:image/png;base64,iVBORw0KGgo=");
-    const id = AssetRegistry.deriveId("data:image/png;base64,iVBORw0KGgo=");
-    const bytes = await assets.readBytes(url);
+    const { store } = assemble();
+    const url = await store.registerAsset("data:image/png;base64,iVBORw0KGgo=");
+    const id = url.slice("asset://".length);
+    const bytes = await store.readBytes("asset", "", id);
     expect([...bytes.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
-    const again = await assets.readBytes(id);
+    const again = await store.readBytes("asset", "", id);
     expect(again).toBe(bytes);
-    const row = db.rows.get(`rt1/${id}`)!;
-    expect(row.byteLength).toBe(bytes.byteLength);
-    expect(row.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    const meta = await store.getMeta("asset", "", id);
+    expect(meta?.byteLength).toBe(bytes.byteLength);
+    expect(meta?.contentHash).toMatch(/^[a-f0-9]{64}$/);
     await expect(fs.access(path.join(home, "resources", "assets", id))).resolves.toBeUndefined();
   });
 
   it("shares one fetch across concurrent readers (single-flight)", async () => {
-    const db = new MemoryAssetDb();
-    const { assets } = assemble(db);
-    const src = "data:text/plain,hello";
-    const url = await assets.register(src);
-    const [a, b] = await Promise.all([assets.readBytes(url), assets.readBytes(url)]);
+    const { store } = assemble();
+    const url = await store.registerAsset("data:text/plain,hello");
+    const id = url.slice("asset://".length);
+    const [a, b] = await Promise.all([store.readBytes("asset", "", id), store.readBytes("asset", "", id)]);
     expect(a).toBe(b);
   });
 
   it("rejects unknown ids with resource_not_found", async () => {
-    const { assets } = assemble(new MemoryAssetDb());
-    await expect(assets.readBytes("a".repeat(32))).rejects.toMatchObject({ code: "resource_not_found" });
+    const { store } = assemble();
+    await expect(store.readBytes("asset", "", "a".repeat(32))).rejects.toMatchObject({ code: "resource_not_found" });
   });
 });
 
 describe("ResourceCenter scheme registry", () => {
+  it("readies the three core schemes at construction", () => {
+    const { center } = assemble();
+    expect(center.listSchemes()).toEqual(["asset", "artifact", "local"]);
+  });
+
   it("rejects reserved scheme registration", () => {
-    const { center } = assemble(new MemoryAssetDb());
+    const { center } = assemble();
     for (const scheme of RESERVED_SCHEMES) {
-      expect(() => center.use({ scheme, spec: { backing: "file", immutable: true, scope: "runtime" }, resolve: () => ({ url: "", size: 0 }) })).toThrow(
-        /reserved/,
-      );
+      expect(() => center.attach({ scheme, resolve: () => ({ url: "", size: 0 }) })).toThrow(/reserved/);
     }
   });
 
   it("rejects duplicate registration and reports unknown schemes with the available list", async () => {
-    const { center } = assemble(new MemoryAssetDb());
-    expect(() => center.use(new AssetHandler(new AssetRegistry("rt1", home, new MemoryAssetDb())))).toThrow(/reserved/);
-    const err = await center.resolve("mystery://x").catch((error) => error);
-    expect(err).toBeInstanceOf(ResourceError);
-    expect(err.code).toBe("resource_unavailable");
-    expect(err.message).toContain("asset://, artifact://, local://");
+    const { center } = assemble();
+    const handler = { scheme: "custom", resolve: () => ({ url: "", size: 0 }) };
+    center.attach(handler);
+    expect(() => center.attach(handler)).toThrow(/already registered/);
+    const error = await center.resolve("mystery://x").catch((error) => error);
+    expect(error).toBeInstanceOf(ResourceError);
+    expect(error.code).toBe("resource_unavailable");
+    expect(error.message).toContain("asset://, artifact://, local://, custom://");
   });
 
-  it("removes handlers on demand", () => {
-    const { center } = assemble(new MemoryAssetDb());
-    expect(center.remove("asset")).toBe(true);
-    expect(center.remove("asset")).toBe(false);
+  it("deregisters via the returned disposer", () => {
+    const { center } = assemble();
+    const dispose = center.attach({ scheme: "custom", resolve: () => ({ url: "", size: 0 }) });
+    dispose();
+    expect(center.listSchemes()).toEqual(["asset", "artifact", "local"]);
   });
 });
 
 describe("ResourceCenter.parse", () => {
-  it("parses scheme, authority, and path segments", () => {
+  it("parses scheme, authority, path segments, and view", () => {
     const url = ResourceCenter.parse("artifact://bash/018f/output.log");
     expect(url.scheme).toBe("artifact");
     expect(url.authority).toBe("bash");
     expect(url.segments).toEqual(["018f", "output.log"]);
+    expect(ResourceCenter.parse("asset://abc?view=meta").view).toBe("meta");
   });
 
   it("rejects traversal, backslashes, and non-URLs", () => {
@@ -154,11 +146,18 @@ describe("ResourceCenter.parse", () => {
       expect(() => ResourceCenter.parse(bad)).toThrow(ResourceError);
     }
   });
+
+  it("keeps opaque tails verbatim and refuses unknown queries on structured schemes", async () => {
+    const { center } = assemble();
+    const opaque = ResourceCenter.parse("mcp://server/urn:example:doc?a=b");
+    expect(opaque.rawTail).toBe("/urn:example:doc?a=b");
+    await expect(center.resolve("asset://" + "a".repeat(32) + "?format=json")).rejects.toMatchObject({ code: "invalid_resource_uri" });
+  });
 });
 
 describe("ResourceCenter.locate", () => {
-  it("locates assets, artifacts, and local paths inside home", () => {
-    const { center } = assemble(new MemoryAssetDb());
+  it("delegates to the handler's own locate", () => {
+    const { center } = assemble();
     const id = "a".repeat(32);
     expect(center.locate(`asset://${id}`)).toBe(path.join(home, "resources", "assets", id));
     expect(center.locate("artifact://bash/abc.log")).toBe(path.join(home, "resources", "artifacts", "bash", "abc.log"));
@@ -166,67 +165,79 @@ describe("ResourceCenter.locate", () => {
   });
 
   it("refuses short asset ids and home escapes", () => {
-    const { center } = assemble(new MemoryAssetDb());
+    const { center } = assemble();
     expect(() => center.locate("asset://abc123")).toThrow(/full 32-hex/);
     expect(() => center.locate("local://../outside")).toThrow(/escapes|invalid/);
   });
 });
 
-describe("ArtifactStore", () => {
+describe("ResourceStore artifacts", () => {
   it("round-trips bytes and metadata", async () => {
-    const { artifacts } = assemble(new MemoryAssetDb());
-    const url = await artifacts.put("bash", "018f3a.log", new TextEncoder().encode("line1\nline2\n"), { mediaType: "text/plain" });
+    const { store } = assemble();
+    const url = await store.putArtifact("bash", "018f3a.log", new TextEncoder().encode("line1\nline2\n"), { mediaType: "text/plain" });
     expect(url).toBe("artifact://bash/018f3a.log");
-    const bytes = await artifacts.read("bash", "018f3a.log");
+    const bytes = await store.readBytes("artifact", "bash", "018f3a.log");
     expect(new TextDecoder().decode(bytes)).toBe("line1\nline2\n");
-    const info = await artifacts.info("bash", "018f3a.log");
-    expect(info?.meta.byteLength).toBe(12);
-    expect(info?.meta.createdAt).toBeTypeOf("number");
+    const meta = await store.getMeta("artifact", "bash", "018f3a.log");
+    expect(meta?.byteLength).toBe(12);
+    expect(meta?.createdAt).toBeTypeOf("number");
   });
 
-  it("lists artifact names sorted and clears a namespace", async () => {
-    const { artifacts } = assemble(new MemoryAssetDb());
-    await artifacts.put("bash", "b.log", new Uint8Array([1]));
-    await artifacts.put("bash", "a.log", new Uint8Array([2]));
-    expect(await artifacts.list("bash")).toEqual(["a.log", "b.log"]);
-    await artifacts.clearTool("bash");
-    expect(await artifacts.list("bash")).toEqual([]);
-    await expect(artifacts.read("bash", "a.log")).rejects.toMatchObject({ code: "resource_not_found" });
+  it("lists artifact names sorted and tool namespaces", async () => {
+    const { store } = assemble();
+    await store.putArtifact("bash", "b.log", new Uint8Array([1]));
+    await store.putArtifact("bash", "a.log", new Uint8Array([2]));
+    await store.putArtifact("other", "x.log", new Uint8Array([3]));
+    expect(await store.names("artifact", "bash")).toEqual(["a.log", "b.log"]);
+    expect(await store.namespaces("artifact")).toEqual(["bash", "other"]);
   });
 
-  it("rejects unsafe tool namespaces and names", async () => {
-    const { artifacts } = assemble(new MemoryAssetDb());
-    await expect(artifacts.put("../evil", "x", new Uint8Array())).rejects.toMatchObject({ code: "invalid_resource_uri" });
-    await expect(artifacts.put("bash", ".hidden", new Uint8Array())).rejects.toMatchObject({ code: "invalid_resource_uri" });
+  it("rejects unsafe namespaces and names", async () => {
+    const { store } = assemble();
+    await expect(store.putArtifact("../evil", "x", new Uint8Array())).rejects.toMatchObject({ code: "invalid_resource_uri" });
+    await expect(store.putArtifact("bash", ".hidden", new Uint8Array())).rejects.toMatchObject({ code: "invalid_resource_uri" });
+  });
+
+  it("spills truncated output as a text artifact", async () => {
+    const { store, center } = assemble();
+    const url = await store.spillArtifact("bash-stdout", "line\n".repeat(1000));
+    expect(url).toMatch(/^artifact:\/\/bash-stdout\/.*\.log$/);
+    const payload = await center.resolve(url);
+    expect(payload.content?.split("\n").length).toBe(1001);
   });
 });
 
 describe("handlers", () => {
-  it("asset resolve returns a metadata card, not bytes", async () => {
-    const db = new MemoryAssetDb();
-    const { center, assets } = assemble(db);
-    const src = "data:image/png;base64,iVBORw0KGgo=";
-    const url = await assets.register(src, { mediaType: "image/png" });
-    await assets.readBytes(url);
+  it("asset resolve returns bytes; meta view returns a summary", async () => {
+    const { store, center } = assemble();
+    const url = await store.registerAsset("data:image/png;base64,iVBORw0KGgo=", { mediaType: "image/png" });
     const payload = await center.resolve(url);
-    expect(payload.content).toContain("image/png");
-    expect(payload.bytes).toBeUndefined();
+    expect(payload.bytes).toBeDefined();
+    const view = await center.resolve(`${url}?view=meta`);
+    expect(view.content).toContain("image/png");
+    expect(view.bytes).toBeUndefined();
     await expect(center.resolve(`asset://${"f".repeat(32)}`)).rejects.toMatchObject({ code: "resource_not_found" });
   });
 
+  it("reports unsupported views", async () => {
+    const { store, center } = assemble();
+    const url = await store.registerAsset("data:image/png;base64,iVBORw0KGgo=");
+    await expect(center.resolve(`${url}?view=thumb`)).rejects.toMatchObject({ code: "unsupported_view" });
+  });
+
   it("artifact resolve inlines utf-8 text and flags binaries", async () => {
-    const { center, artifacts } = assemble(new MemoryAssetDb());
-    await artifacts.put("bash", "x.log", new TextEncoder().encode("hello"));
+    const { store, center } = assemble();
+    await store.putArtifact("bash", "x.log", new TextEncoder().encode("hello"));
     const payload = await center.resolve("artifact://bash/x.log");
     expect(payload.content).toBe("hello");
-    await artifacts.put("bash", "pic.bin", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    await store.putArtifact("bash", "pic.bin", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
     const binary = await center.resolve("artifact://bash/pic.bin");
     expect(binary.mediaType).toBe("image/png");
     expect(binary.bytes?.[0]).toBe(0x89);
   });
 
   it("local resolve reads text, lists directories, and refuses missing files", async () => {
-    const { center } = assemble(new MemoryAssetDb());
+    const { center } = assemble();
     await fs.mkdir(path.join(home, "notes"));
     await fs.writeFile(path.join(home, "notes", "a.md"), "# hi");
     const text = await center.resolve("local://notes/a.md");

@@ -37,7 +37,12 @@ export interface IshikiMessageCreated extends IshikiEventBase {
 export interface InboundMedia {
   kind: "image" | "audio" | "video" | "file";
   src: string;
+  /** Best-effort media type hint derived from the element kind (`image/*` etc.). */
+  mediaType?: string;
+  /** Best-effort display name; platform elements name this field differently. */
   filename?: string;
+  /** Every other attribute the platform put on the element, verbatim and informational. */
+  sourceInfo?: Record<string, unknown>;
 }
 
 export interface IshikiMessageDeleted extends IshikiEventBase {

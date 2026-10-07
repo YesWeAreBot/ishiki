@@ -1,41 +1,10 @@
-import { randomBytes } from "node:crypto";
-import path from "node:path";
-
 import type { Awaitable } from "koishi";
 
-import type { ArtifactStore } from "./artifact.js";
-import { AssetRegistry, type AssetRecord } from "./asset.js";
+import { ResourceError } from "./errors.js";
+import { ArtifactHandler, AssetHandler, LocalHandler } from "./handlers.js";
+import { ResourceStore } from "./store.js";
 
-/**
- * Typed error codes for resource access failures. The model-facing reader turns
- * these into precise error text; callers may also branch on them programmatically.
- */
-export type ResourceErrorCode = "invalid_resource_uri" | "resource_unavailable" | "resource_not_found" | "resource_too_large" | "resource_read_failed";
-
-export class ResourceError extends Error {
-  public constructor(
-    public readonly code: ResourceErrorCode,
-    message?: string,
-  ) {
-    super(message ?? code);
-    this.name = "ResourceError";
-  }
-}
-
-/** How a scheme's resources exist. `file`-backed schemes may expose a host path via `locate`. */
-export type SchemeBacking = "file" | "virtual" | "remote";
-
-/**
- * Declared facts about a scheme. Consumed by the reader (selector grammar in P2),
- * the sandbox mount adapter (P3), and the outbound resolver (P6).
- */
-export interface SchemeSpec {
-  backing: SchemeBacking;
-  /** Scheme names reference immutable bytes: asset ids and artifact paths never mutate. */
-  immutable: boolean;
-  /** Runtime-scoped schemes resolve against the owning runtime's stores. */
-  scope: "runtime" | "global";
-}
+export { ResourceError, type ResourceErrorCode } from "./errors.js";
 
 /**
  * A resolved resource. Text-bearing schemes return `content`; binary schemes
@@ -49,20 +18,29 @@ export interface ResourcePayload {
   mediaType?: string;
   size: number;
   filename?: string;
-  /** Extra model-facing context (e.g. truncation notes). */
+  /** Extra model-facing context (e.g. "metadata only" notes). */
   notes?: string[];
 }
 
-/** Per-runtime handler for one URL scheme. */
+/**
+ * Per-runtime handler for one URL scheme. Handlers own their scheme's path
+ * semantics entirely; the center owns routing, the view/selector grammar, and
+ * error normalization.
+ */
 export interface SchemeHandler {
   readonly scheme: string;
-  readonly spec: SchemeSpec;
+  /** The scheme's path carries the wrapped resource's own syntax (mcp://); no views, no selectors. */
+  readonly opaque?: boolean;
   resolve(url: ResourceUrl): Awaitable<ResourcePayload>;
+  /** Alternative representation of the same resource (e.g. "meta"); undefined when the view is unsupported. */
+  resolveView?(url: ResourceUrl, view: string): Awaitable<ResourcePayload>;
+  /** Host filesystem path for file-backed schemes; used by the sandbox mount and future search tooling. */
+  locate?(url: ResourceUrl): string | undefined;
 }
 
 /**
- * A parsed resource URL. The authority is preserved as-is; path segments are
- * decoded once and validated against traversal at parse time.
+ * A parsed resource URL: `scheme://authority/path?view` with the selector
+ * chain (`:1-200`, `:raw`) peeled off separately by the read tool.
  */
 export interface ResourceUrl {
   scheme: string;
@@ -72,150 +50,130 @@ export interface ResourceUrl {
   authority: string;
   /** Path segments below the authority, already URL-decoded. */
   segments: readonly string[];
-  /** Exact input string. */
+  /** View requested via `?view=<name>`, when present and well-formed. */
+  view?: string;
+  /** Raw query string without the `?`, verbatim. Opaque schemes keep it as part of their tail. */
+  query?: string;
+  /** Raw decoded-free tail after the authority (path + query), for opaque schemes. */
+  rawTail: string;
+  /** Exact input string (query included, selector chain excluded). */
   href: string;
 }
 
-const SCHEME_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)([^?#]*)$/;
+const SCHEME_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)([^?#]*)(?:\?(.*))?$/;
+const QUERY_VIEW_RE = /^view=([a-z][a-z0-9-]*)$/;
 
-/** Schemes the ResourceCenter owns; extensions may not register these names. */
-export const RESERVED_SCHEMES = ["asset", "artifact", "local", "skill", "workspace", "global"] as const;
+/** Schemes the resource center itself assembles; extensions may not register these names. */
+export const RESERVED_SCHEMES = ["asset", "artifact", "local"] as const;
 
-const RESERVED: Record<string, true> = Object.fromEntries(RESERVED_SCHEMES.map((scheme) => [scheme, true as const]));
-
-const ARTIFACT_TOOL_RE = /^[a-zA-Z0-9_-]+$/;
-
-/** Byte/record-level surface the asset handler exposes beyond SchemeHandler. */
-export interface AssetHandlerView {
-  readBytes(id: string, signal?: AbortSignal): Promise<Uint8Array>;
-  getRecord(id: string): Promise<AssetRecord | undefined>;
-  listIds(): Promise<string[]>;
-  /** Bytes are already in hand: write the cache directly and register the row. */
-  putInHand(id: string, bytes: Uint8Array, row: { src: string; mediaType?: string; filename?: string }): Promise<void>;
+function isReserved(scheme: string): boolean {
+  return (RESERVED_SCHEMES as readonly string[]).includes(scheme);
 }
 
-function isAssetHandlerView(handler: SchemeHandler | undefined): handler is SchemeHandler & AssetHandlerView {
-  return (
-    handler !== undefined &&
-    typeof (handler as Partial<AssetHandlerView>).readBytes === "function" &&
-    typeof (handler as Partial<AssetHandlerView>).getRecord === "function" &&
-    typeof (handler as Partial<AssetHandlerView>).listIds === "function" &&
-    typeof (handler as Partial<AssetHandlerView>).putInHand === "function"
-  );
-}
-
+/**
+ * The runtime's resource center: URL grammar, scheme registry, and routing.
+ * It owns its store (bytes + metadata) and readies the three core schemes —
+ * `asset://`, `artifact://`, `local://` — at construction. Extensions attach
+ * their own schemes via `attach`; cores scheme names stay reserved.
+ */
 export class ResourceCenter {
-  readonly #handlers = new Map<string, SchemeHandler>();
-  #artifactStore?: ArtifactStore;
+  private handlers = new Map<string, SchemeHandler>();
 
   public constructor(
     public readonly runtimeId: string,
     public readonly home: string,
-  ) {}
-
-  /** Register an extension scheme handler. Reserved names and duplicates fail fast at assembly time. */
-  public use(handler: SchemeHandler): void {
-    if (RESERVED[handler.scheme.toLowerCase()]) {
-      throw new Error(`scheme "${handler.scheme}://" is reserved by the resource center`);
-    }
-    this.#set(handler);
+    public readonly store: ResourceStore = new ResourceStore(home),
+  ) {
+    this.register(new AssetHandler(store));
+    this.register(new ArtifactHandler(store));
+    this.register(new LocalHandler(home));
   }
 
-  /** Register a core-owned handler (asset/artifact/local); the only path allowed onto reserved names. */
-  public useCore(handler: SchemeHandler): void {
-    this.#set(handler);
+  /** Register a core handler; reserved names are reachable only this way. */
+  private register(handler: SchemeHandler): void {
+    this.handlers.set(handler.scheme.toLowerCase(), handler);
   }
 
-  #set(handler: SchemeHandler): void {
+  /**
+   * Register an extension scheme handler; returns the deregister function for
+   * the extension's stop() hook. Reserved names and duplicates fail fast at
+   * assembly time.
+   */
+  public attach(handler: SchemeHandler): () => void {
     const scheme = handler.scheme.toLowerCase();
-    if (this.#handlers.has(scheme)) throw new Error(`scheme "${handler.scheme}://" is already registered`);
-    this.#handlers.set(scheme, handler);
-  }
-
-  public remove(scheme: string): boolean {
-    return this.#handlers.delete(scheme.toLowerCase());
+    if (isReserved(scheme)) throw new Error(`scheme "${handler.scheme}://" is reserved by the resource center`);
+    if (this.handlers.has(scheme)) throw new Error(`scheme "${handler.scheme}://" is already registered`);
+    this.handlers.set(scheme, handler);
+    return () => this.handlers.delete(scheme);
   }
 
   public listSchemes(): string[] {
-    return [...this.#handlers.keys()];
-  }
-
-  /** Registered handler for a core scheme, for byte-level consumers (sandbox mounts, read tool). */
-  public resolveHandler(scheme: "asset" | "artifact" | "local"): SchemeHandler | undefined {
-    return this.#handlers.get(scheme);
-  }
-
-  /** Asset record lookup by id, via the registered asset handler. */
-  public async assetRecord(id: string): Promise<AssetRecord | undefined> {
-    const view = this.#assetView();
-    return view?.getRecord(id);
-  }
-
-  /** All registered asset ids in this runtime. */
-  public async listAssetIds(): Promise<string[]> {
-    const view = this.#assetView();
-    return (await view?.listIds()) ?? [];
-  }
-
-  /** Artifact tool namespaces present in the store. */
-  public async listArtifactTools(): Promise<string[]> {
-    return (await this.#artifactStore?.listTools()) ?? [];
-  }
-
-  /** Artifact names inside one tool namespace. */
-  public async listArtifactNames(tool: string): Promise<string[]> {
-    return this.#artifactStore?.list(tool) ?? [];
-  }
-
-  /** Attach the artifact store for listing queries; called at assembly time. */
-  public useArtifactStore(store: ArtifactStore): void {
-    this.#artifactStore = store;
+    return [...this.handlers.keys()];
   }
 
   /**
-   * Persist a truncated-output capture under `artifact://<tool>/<uuidv7-like>`
-   * and return the URL. Uses the artifact handler when present; requires the
-   * store to be attached.
+   * Whether the scheme's URLs take the `:1-200` / `:raw` selector chain:
+   * registered and not opaque. Unknown schemes and opaque wrappers never peel.
    */
-  public async artifactSpill(tool: string, content: string): Promise<string> {
-    if (!this.#artifactStore) throw new ResourceError("resource_unavailable", "artifact store is not attached");
-    const name = `${new Date().toISOString().replace(/[-:.TZ]/g, "")}-${randomBytes(4).toString("hex")}.log`;
-    return this.#artifactStore.put(tool, name, new TextEncoder().encode(content), { mediaType: "text/plain" });
+  public acceptsSelectors(scheme: string): boolean {
+    const handler = this.handlers.get(scheme);
+    return handler !== undefined && handler.opaque !== true;
   }
 
   /**
-   * Register a tool-returned media blob as an asset keyed by its content
-   * hash, so identical images dedupe across calls. The src is a synthetic
-   * data: URL, meaning bytes are already in hand — no lazy fetch.
+   * Resolve a resource URL through its handler. Unregistered schemes report
+   * `resource_unavailable` with the available list; query views route to
+   * `resolveView` when present. Opaque handlers keep their query verbatim.
    */
-  public async sinkMedia(tool: string, bytes: Uint8Array, mediaType: string): Promise<string> {
-    const view = this.#assetView();
-    if (!view) throw new ResourceError("resource_unavailable", "asset handler is not registered");
-    const dataUrl = `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`;
-    const id = AssetRegistry.deriveId(`${tool}/${dataUrl}`);
-    const existing = await view.getRecord(id);
-    if (existing) return `asset://${id}`;
-    await view.putInHand(id, bytes, { src: dataUrl, mediaType });
-    return `asset://${id}`;
+  public async resolve(input: string): Promise<ResourcePayload> {
+    const url = ResourceCenter.parse(input);
+    const handler = this.handlers.get(url.scheme);
+    if (!handler) {
+      const available = this.listSchemes()
+        .map((scheme) => `${scheme}://`)
+        .join(", ");
+      throw new ResourceError(
+        "resource_unavailable",
+        available.length > 0 ? `unknown scheme "${url.scheme}://". Available: ${available}` : `unknown scheme "${url.scheme}://"`,
+      );
+    }
+    try {
+      if (handler.opaque !== true && url.query !== undefined && url.view === undefined) {
+        throw new ResourceError("invalid_resource_uri", `unsupported query "?${url.query}" in ${input}`);
+      }
+      if (handler.opaque !== true && url.view !== undefined) {
+        if (!handler.resolveView) {
+          throw new ResourceError("unsupported_view", `scheme "${url.scheme}://" does not support views`);
+        }
+        return await handler.resolveView(url, url.view);
+      }
+      return await handler.resolve(url);
+    } catch (error) {
+      if (error instanceof ResourceError) throw error;
+      throw new ResourceError("resource_read_failed", error instanceof Error ? error.message : String(error));
+    }
   }
 
-  /** The asset handler's extended view, when one is registered. */
-  #assetView(): AssetHandlerView | undefined {
-    const handler = this.#handlers.get("asset");
-    return isAssetHandlerView(handler) ? handler : undefined;
+  /**
+   * Host filesystem path for file-backed schemes, via the handler's own
+   * locate. Returns undefined when the scheme has no stable host backing.
+   */
+  public locate(input: string): string | undefined {
+    const url = ResourceCenter.parse(input);
+    return this.handlers.get(url.scheme)?.locate?.(url);
   }
 
-  /** Byte-level asset access for outbound send resolution. */
-  public assetView(): AssetHandlerView | undefined {
-    return this.#assetView();
-  }
-
-  /** Parse `scheme://authority/path`; throws `invalid_resource_uri` on malformed or traversal-bearing input. */
+  /**
+   * Parse `scheme://authority/path?query`; throws `invalid_resource_uri` on
+   * malformed or traversal-bearing input. The query is captured verbatim:
+   * well-formed `view=<name>` is exposed as `view`, and `resolve` rejects
+   * anything else for non-opaque schemes so one URL always parses one way.
+   */
   public static parse(input: string): ResourceUrl {
     const trimmed = input.trim();
     const match = SCHEME_RE.exec(trimmed);
     if (!match) throw new ResourceError("invalid_resource_uri", `invalid resource URL: ${input}`);
-    const [, rawScheme, rawAuthority, rawPath] = match;
+    const [, rawScheme, rawAuthority, rawPath, rawQuery] = match;
     const authority = decodeURIComponent(rawAuthority!);
     if (authority === "." || authority.startsWith("..")) {
       throw new ResourceError("invalid_resource_uri", `invalid authority in ${input}`);
@@ -230,86 +188,17 @@ export class ResourceCenter {
         }
         return decoded;
       });
+    const query = rawQuery !== undefined && rawQuery.length > 0 ? rawQuery : undefined;
+    const view = query === undefined ? undefined : QUERY_VIEW_RE.exec(query)?.[1];
     return {
       scheme: rawScheme!.toLowerCase(),
       rawScheme: rawScheme!,
       authority,
       segments,
+      view,
+      query,
+      rawTail: `${rawPath!}${query === undefined ? "" : `?${query}`}`,
       href: trimmed,
     };
-  }
-
-  /** Resolve through a registered handler. Unregistered schemes report `resource_unavailable` with the available list. */
-  public async resolve(input: string): Promise<ResourcePayload> {
-    const url = ResourceCenter.parse(input);
-    const handler = this.#handlers.get(url.scheme);
-    if (!handler) {
-      const available = this.listSchemes()
-        .map((scheme) => `${scheme}://`)
-        .join(", ");
-      throw new ResourceError(
-        "resource_unavailable",
-        available.length > 0 ? `unknown scheme "${url.scheme}://". Available: ${available}` : `unknown scheme "${url.scheme}://"`,
-      );
-    }
-    try {
-      return await handler.resolve(url);
-    } catch (error) {
-      if (error instanceof ResourceError) throw error;
-      throw new ResourceError("resource_read_failed", error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  /**
-   * Host filesystem path for a runtime-scoped resource, without reading bytes.
-   * Returns undefined when the scheme has no stable host backing. Used by the
-   * sandbox mount adapter and future search tooling — never for reads, which
-   * go through handlers so the no-tool-inconsistency invariant holds.
-   */
-  public locate(input: string): string | undefined {
-    const url = ResourceCenter.parse(input);
-    switch (url.scheme) {
-      case "asset":
-        return this.#assetPath(url.authority);
-      case "artifact":
-        return this.#artifactPath(url);
-      case "local":
-        return this.#localPath(url);
-      default:
-        return undefined;
-    }
-  }
-
-  /** Asset blob path. Throws when the id is not a full 32-hex hash. */
-  #assetPath(id: string): string {
-    if (!/^[a-f0-9]{32}$/.test(id)) {
-      throw new ResourceError("invalid_resource_uri", `asset URL requires a full 32-hex id`);
-    }
-    return path.join(this.home, "resources", "assets", id);
-  }
-
-  #artifactPath(url: ResourceUrl): string {
-    if (!url.authority || url.segments.length === 0) {
-      throw new ResourceError("invalid_resource_uri", `artifact URL requires tool namespace and name: ${url.href}`);
-    }
-    if (!ARTIFACT_TOOL_RE.test(url.authority)) {
-      throw new ResourceError("invalid_resource_uri", `invalid artifact tool namespace: ${url.href}`);
-    }
-    const name = url.segments.at(-1)!;
-    if (!/^[a-zA-Z0-9._-]+$/.test(name) || name.startsWith(".")) {
-      throw new ResourceError("invalid_resource_uri", `invalid artifact name: ${url.href}`);
-    }
-    return path.join(this.home, "resources", "artifacts", url.authority, name);
-  }
-
-  #localPath(url: ResourceUrl): string {
-    const relative = [url.authority, ...url.segments].filter(Boolean).join("/");
-    if (!relative) throw new ResourceError("invalid_resource_uri", `local URL requires a path: ${url.href}`);
-    const target = path.resolve(this.home, relative);
-    const home = path.resolve(this.home);
-    if (target !== home && !target.startsWith(home + path.sep)) {
-      throw new ResourceError("invalid_resource_uri", `local URL escapes the runtime home: ${url.href}`);
-    }
-    return target;
   }
 }

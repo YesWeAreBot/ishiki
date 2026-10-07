@@ -2,6 +2,7 @@ import { Logger, Schema, Service, type Context } from "koishi";
 import { Extension, type ExtensionContext, type ToolSet } from "koishi-plugin-ishiki";
 
 import { WorkspaceConfig } from "./config.js";
+import { ISHIKI_MOUNT } from "./mounts.js";
 import { workspaceInstructions } from "./prompt.js";
 import { SkillHandler, WorkspaceHandler } from "./resource-schemes.js";
 import { createSandbox, resolveLayout, type OutputSpiller, type WorkspaceSandbox } from "./sandbox.js";
@@ -36,9 +37,9 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
     const spiller: OutputSpiller | undefined = context.resources
       ? {
           spill: async (tool, content) => {
-            const url = await context.resources.artifactSpill(tool, content);
+            const url = await context.resources.store.spillArtifact(tool, content);
             const rest = url.slice("artifact://".length);
-            return { url, sandboxPath: `/artifacts/${rest}` };
+            return { url, sandboxPath: `${ISHIKI_MOUNT}/artifacts/${rest}` };
           },
         }
       : undefined;
@@ -53,15 +54,21 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
         resources: context.resources,
         spiller,
       }));
+    const disposers: Array<() => void> = [];
     // 资源 URL 面：技能内容与 workspace 持久根，与沙箱挂载同源。
-    context.resources?.use(new SkillHandler(layout.skills));
-    context.resources?.use(new WorkspaceHandler(context.home));
+    disposers.push(context.resources?.attach(new SkillHandler(layout.skills)));
+    disposers.push(context.resources?.attach(new WorkspaceHandler(context.home)));
     return {
       name: "ishiki.workspace",
       extendTools: async () => (tools ??= createWorkspaceTools(await box())),
       extendInstructions: async () => {
         const built = await box();
         return [workspaceInstructions(built), skillCatalog(built.skills)].filter((text) => text.length > 0).join("\n\n");
+      },
+      stop: async () => {
+        for (const dispose of disposers) {
+          dispose?.();
+        }
       },
     };
   }

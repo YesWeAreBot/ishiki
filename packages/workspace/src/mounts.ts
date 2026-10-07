@@ -4,6 +4,7 @@ import path from "node:path";
 export const HOME_MOUNT = "/home";
 export const WORKSPACE_MOUNT = "/home/workspace";
 export const SKILLS_MOUNT = "/home/skills";
+export const ISHIKI_MOUNT = "/home/.ishiki";
 
 export interface HostMount {
   readonly source: string;

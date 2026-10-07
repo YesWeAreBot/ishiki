@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 
-import { ResourceError, type ResourcePayload, type ResourceUrl, type SchemeHandler, type SchemeSpec } from "koishi-plugin-ishiki";
+import { ResourceError, type ResourcePayload, type ResourceUrl, type SchemeHandler } from "koishi-plugin-ishiki";
 
 import { SKILLS_MOUNT } from "./mounts.js";
 import type { Skill } from "./skills.js";
@@ -42,11 +42,10 @@ async function readHostText(url: string, file: string): Promise<ResourcePayload>
  */
 export class SkillHandler implements SchemeHandler {
   readonly scheme = "skill";
-  readonly spec: SchemeSpec = { backing: "file", immutable: false, scope: "runtime" };
 
   public constructor(private readonly skills: readonly Skill[]) {}
 
-  #file(url: ResourceUrl): string {
+  private file(url: ResourceUrl): string {
     const skill = this.skills.find((entry) => entry.name === url.authority);
     if (!skill) {
       const available = this.skills.map((entry) => entry.name).join(", ") || "none";
@@ -57,12 +56,7 @@ export class SkillHandler implements SchemeHandler {
   }
 
   async resolve(url: ResourceUrl): Promise<ResourcePayload> {
-    return readHostText(url.href, this.#file(url));
-  }
-
-  /** Host path of the skill file; backs locate-based tooling. */
-  locate(url: ResourceUrl): string {
-    return this.#file(url);
+    return readHostText(url.href, this.file(url));
   }
 }
 
@@ -73,11 +67,10 @@ export class SkillHandler implements SchemeHandler {
  */
 export class WorkspaceHandler implements SchemeHandler {
   readonly scheme = "workspace";
-  readonly spec: SchemeSpec = { backing: "file", immutable: false, scope: "runtime" };
 
   public constructor(private readonly home: string) {}
 
-  #file(url: ResourceUrl): string {
+  private file(url: ResourceUrl): string {
     const relative = url.segments.join("/");
     if (!relative) throw new ResourceError("invalid_resource_uri", `workspace URL requires a path: ${url.href}`);
     const target = path.resolve(this.home, "workspace", relative);
@@ -89,7 +82,7 @@ export class WorkspaceHandler implements SchemeHandler {
   }
 
   async resolve(url: ResourceUrl): Promise<ResourcePayload> {
-    const file = this.#file(url);
+    const file = this.file(url);
     let stat;
     try {
       stat = await fs.stat(file);
@@ -101,10 +94,5 @@ export class WorkspaceHandler implements SchemeHandler {
       return { url: url.href, content: entries.join("\n"), size: 0, notes: ["directory listing"] };
     }
     return readHostText(url.href, file);
-  }
-
-  /** Host path of the workspace file. */
-  locate(url: ResourceUrl): string {
-    return this.#file(url);
   }
 }

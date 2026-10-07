@@ -1,34 +1,25 @@
-import { ResourceError, type ResourcePayload, type ResourceUrl, type SchemeHandler, type SchemeSpec } from "koishi-plugin-ishiki";
+import { ResourceError, type ResourcePayload, type ResourceUrl, type SchemeHandler } from "koishi-plugin-ishiki";
 
 import type { ProfilePool } from "./pool.js";
 
-/** Text extracted from a resource read, ready to inline as a resource payload. */
-interface ResourceContent {
-  uri: string;
-  text?: string;
-  blob?: string;
-  mimeType?: string;
-}
-
 /**
- * `mcp://<server>/<resource-uri>` and the fallback for any unregistered
- * custom scheme: MCP resource URIs may use arbitrary or opaque forms
- * (`urn:example:doc`), so this handler owns everything not otherwise routed.
- * Pool is shared with the tool connections — resources resolve against the
- * same client sessions.
+ * `mcp://<server>/<resource-uri>` — remote resources from the connected MCP
+ * servers. The wrapped URI is arbitrary and may carry colons, slashes, or
+ * query strings of its own, so the scheme is opaque: the tail is taken
+ * verbatim from `rawTail`, with no view or selector parsing.
  */
 export class McpResourceHandler implements SchemeHandler {
   readonly scheme = "mcp";
-  readonly spec: SchemeSpec = { backing: "remote", immutable: true, scope: "runtime" };
+  readonly opaque = true;
 
   public constructor(private readonly pool: ProfilePool) {}
 
   async resolve(url: ResourceUrl): Promise<ResourcePayload> {
-    const [serverName, ...rest] = url.segments;
-    if (!serverName || rest.length === 0) {
+    const serverName = url.authority;
+    const resourceUri = url.rawTail.replace(/^\//, "");
+    if (!serverName || resourceUri.length === 0) {
       throw new ResourceError("invalid_resource_uri", `mcp URL requires server and resource URI: mcp://<server>/<resource-uri>`);
     }
-    const resourceUri = rest.join("/");
     const content = await this.pool.readResource(serverName, resourceUri);
     if (content.blob !== undefined) {
       const bytes = Buffer.from(content.blob, "base64");
@@ -38,5 +29,3 @@ export class McpResourceHandler implements SchemeHandler {
     return { url: url.href, content: text, mediaType: content.mimeType ?? "text/plain", size: Buffer.byteLength(text) };
   }
 }
-
-export type { ResourceContent };

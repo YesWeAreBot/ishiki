@@ -27,7 +27,7 @@ class McpClientExtension extends Extension {
     const pool = this.pool(context);
     pool.setResources(context.resources);
     // mcp://<server>/<resource-uri>；同样由该池兜底解析任意自定义 scheme 资源。
-    context.resources?.use(new McpResourceHandler(pool));
+    const dospose = context.resources?.attach(new McpResourceHandler(pool));
     return {
       name: "ishiki.mcp-client",
       extendTools: async () => {
@@ -37,6 +37,9 @@ class McpClientExtension extends Extension {
       extendInstructions: async () => {
         await pool.connecting;
         return pool.instructions() || "";
+      },
+      stop: () => {
+        dospose?.();
       },
     };
   }

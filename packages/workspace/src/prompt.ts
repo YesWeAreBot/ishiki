@@ -1,4 +1,4 @@
-import { HOME_MOUNT, SKILLS_MOUNT, WORKSPACE_MOUNT } from "./mounts.js";
+import { HOME_MOUNT, ISHIKI_MOUNT, SKILLS_MOUNT, WORKSPACE_MOUNT } from "./mounts.js";
 import type { WorkspaceSandbox } from "./sandbox.js";
 
 export function workspaceInstructions(sandbox: WorkspaceSandbox): string {
@@ -9,6 +9,9 @@ export function workspaceInstructions(sandbox: WorkspaceSandbox): string {
     "挂载点：",
     `- ${HOME_MOUNT}：只读，本实例的数据目录（写入会失败）`,
     `- ${WORKSPACE_MOUNT}：读写，工作目录（改动落盘）`,
+    ...(sandbox.resourcesMounted
+      ? [`- ${ISHIKI_MOUNT}：只读，资源中心（assets/ 是收到的媒体与工具产出的图，artifacts/ 是截断落盘的长输出；对应 read 工具的 asset:// 与 artifact:// URL）`]
+      : []),
     // 技能那几个挂载点在这里合成一行，逐个列出来只是把下面「技能」那一段重复一遍。
     ...sandbox.mounts
       .filter((mount) => !mount.target.startsWith(`${SKILLS_MOUNT}/`))
