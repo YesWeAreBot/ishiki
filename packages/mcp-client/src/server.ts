@@ -15,6 +15,11 @@ export interface OutputLimits {
   maxOutputChars: number;
 }
 
+/** Receives truncated tool output; wired to the runtime's artifact store. */
+export interface OutputSpiller {
+  spill(tool: string, content: string): Promise<{ url: string; sandboxPath: string }>;
+}
+
 export class McpConnection {
   public instructions?: string;
 
@@ -30,7 +35,10 @@ export class McpConnection {
     private readonly logger: Logger,
   ) {}
 
-  public static async connect(name: string, server: McpServer, limits: OutputLimits, logger: Logger): Promise<McpConnection> {
+  /** Truncated text output spills here when the calling runtime provides a resource center. */
+  public spiller?: OutputSpiller;
+
+  public static async connect(name: string, server: McpServer, limits: OutputLimits, logger: Logger, spiller?: OutputSpiller): Promise<McpConnection> {
     const client = new Client({ name, version: "1.0.0" });
     switch (server.type) {
       case "stdio":
@@ -47,6 +55,7 @@ export class McpConnection {
     }
 
     const connection = new McpConnection(name, client, server, limits, logger);
+    connection.spiller = spiller;
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       await connection.refresh();
     });
@@ -64,7 +73,7 @@ export class McpConnection {
         description: declared.description,
         inputSchema: jsonSchema(declared.inputSchema as Record<string, unknown>),
         execute: (params) => this.call(declared.name, params),
-        toModelOutput: ({ output }) => renderOutput(output as McpBlock[], this.limits),
+        toModelOutput: ({ output }) => this.render(output as McpBlock[], exposed),
       });
     }
     this.tools = Object.fromEntries(Object.entries(tools).sort(([left], [right]) => left.localeCompare(right)));
@@ -90,6 +99,51 @@ export class McpConnection {
     await this.client.close();
     this.logger.debug(`mcp server "${this.name}" disconnected`);
   }
+
+  private async render(blocks: McpBlock[], exposedTool: string): Promise<ToolResultOutput> {
+    const parts: NonNullable<Extract<ToolResultOutput, { type: "content" }>["value"]> = [];
+    let images = 0;
+    let totalBytes = 0;
+    const lines: string[] = [];
+
+    for (const block of blocks) {
+      if (block.type === "text") {
+        lines.push(block.text ?? "");
+        continue;
+      }
+      if (block.type !== "image") {
+        lines.push(`[${block.type}]`);
+        continue;
+      }
+
+      const mediaType = block.mimeType?.toLowerCase();
+      const bytes = block.data === undefined ? undefined : decodeImage(block.data, this.limits.maxImageBytes);
+      if (mediaType === undefined || bytes === undefined) {
+        lines.push("[图片：数据无效或大小超出限制]");
+        continue;
+      }
+      if (images >= this.limits.maxImageCount || totalBytes + bytes.byteLength > this.limits.maxTotalImageBytes) {
+        lines.push("[图片：超出本次调用的图片限额]");
+        continue;
+      }
+      images += 1;
+      totalBytes += bytes.byteLength;
+      parts.push({ type: "file", mediaType, data: { type: "data", data: bytes } });
+    }
+
+    const joined = lines.join("\n").trim();
+    let text = joined.slice(0, this.limits.maxOutputChars);
+    if (joined.length > this.limits.maxOutputChars && this.spiller !== undefined) {
+      try {
+        const { url, sandboxPath } = await this.spiller.spill(exposedTool, joined);
+        text += `\n[输出超出 ${this.limits.maxOutputChars} 字符，已截断] 完整输出：${url}（read 它，或在沙箱里访问 ${sandboxPath}）`;
+      } catch (error) {
+        this.logger.warn(`mcp spill failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (text.length > 0) parts.unshift({ type: "text", text });
+    return { type: "content", value: parts };
+  }
 }
 
 interface McpBlock {
@@ -97,42 +151,6 @@ interface McpBlock {
   text?: string;
   data?: string;
   mimeType?: string;
-}
-
-function renderOutput(blocks: McpBlock[], limits: OutputLimits): ToolResultOutput {
-  const parts: NonNullable<Extract<ToolResultOutput, { type: "content" }>["value"]> = [];
-  let images = 0;
-  let totalBytes = 0;
-  const lines: string[] = [];
-
-  for (const block of blocks) {
-    if (block.type === "text") {
-      lines.push(block.text ?? "");
-      continue;
-    }
-    if (block.type !== "image") {
-      lines.push(`[${block.type}]`);
-      continue;
-    }
-
-    const mediaType = block.mimeType?.toLowerCase();
-    const bytes = block.data === undefined ? undefined : decodeImage(block.data, limits.maxImageBytes);
-    if (mediaType === undefined || bytes === undefined) {
-      lines.push("[图片：数据无效或大小超出限制]");
-      continue;
-    }
-    if (images >= limits.maxImageCount || totalBytes + bytes.byteLength > limits.maxTotalImageBytes) {
-      lines.push("[图片：超出本次调用的图片限额]");
-      continue;
-    }
-    images += 1;
-    totalBytes += bytes.byteLength;
-    parts.push({ type: "file", mediaType, data: { type: "data", data: bytes } });
-  }
-
-  const text = lines.join("\n").trim().slice(0, limits.maxOutputChars);
-  if (text.length > 0) parts.unshift({ type: "text", text });
-  return { type: "content", value: parts };
 }
 
 function decodeImage(base64: string, maxBytes: number): Uint8Array | undefined {

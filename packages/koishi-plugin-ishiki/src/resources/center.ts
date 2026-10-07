@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 
 import type { Awaitable } from "koishi";
@@ -166,6 +167,17 @@ export class ResourceCenter {
   /** Attach the artifact store for listing queries; called at assembly time. */
   public useArtifactStore(store: ArtifactStore): void {
     this.#artifactStore = store;
+  }
+
+  /**
+   * Persist a truncated-output capture under `artifact://<tool>/<uuidv7-like>`
+   * and return the URL. Uses the artifact handler when present; requires the
+   * store to be attached.
+   */
+  public async artifactSpill(tool: string, content: string): Promise<string> {
+    if (!this.#artifactStore) throw new ResourceError("resource_unavailable", "artifact store is not attached");
+    const name = `${new Date().toISOString().replace(/[-:.TZ]/g, "")}-${randomBytes(4).toString("hex")}.log`;
+    return this.#artifactStore.put(tool, name, new TextEncoder().encode(content), { mediaType: "text/plain" });
   }
 
   /** The asset handler's extended view, when one is registered. */

@@ -24,6 +24,7 @@ class McpClientExtension extends Extension {
 
   public [Service.invoke](_config: unknown, context: ExtensionContext) {
     const pool = this.pool(context);
+    pool.setResources(context.resources);
     return {
       name: "ishiki.mcp-client",
       extendTools: async () => {

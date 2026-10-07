@@ -32,6 +32,11 @@ export interface WorkspaceSandbox extends WorkspaceLayout {
   write(virtualPath: string, content: string): Promise<void>;
 }
 
+/** Receives truncated tool output so nothing is lost; wired to the artifact store. */
+export interface OutputSpiller {
+  spill(tool: string, content: string): Promise<{ url: string; sandboxPath: string }>;
+}
+
 export interface SandboxOptions {
   config: WorkspaceConfig;
   home: string;
@@ -40,6 +45,8 @@ export interface SandboxOptions {
   logger: Logger;
   /** Resource center providing /assets and /artifacts mounts; undefined disables them. */
   resources?: import("koishi-plugin-ishiki").ResourceCenter;
+  /** Receives truncated bash output; undefined leaves truncation as lossy. */
+  spiller?: OutputSpiller;
 }
 
 function traversable(stat: FsStat): FsStat {
@@ -108,7 +115,11 @@ export async function createSandbox(layout: WorkspaceLayout, options: SandboxOpt
       const timeout = AbortSignal.timeout(layout.timeoutMs);
       try {
         const result = await bash.exec(command, { signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]) });
-        return { stdout: truncate(result.stdout, layout.maxOutputLength), stderr: truncate(result.stderr, layout.maxOutputLength), exitCode: result.exitCode };
+        const [stdout, stderr] = await Promise.all([
+          truncate(result.stdout, layout.maxOutputLength, "bash", "stdout", options.spiller),
+          truncate(result.stderr, layout.maxOutputLength, "bash", "stderr", options.spiller),
+        ]);
+        return { stdout, stderr, exitCode: result.exitCode };
       } catch (error) {
         return { stdout: "", stderr: `bash: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
       }
@@ -122,7 +133,10 @@ export async function createSandbox(layout: WorkspaceLayout, options: SandboxOpt
   };
 }
 
-function truncate(text: string, limit: number): string {
+async function truncate(text: string, limit: number, tool: string, stream: string, spiller?: OutputSpiller): Promise<string> {
   if (text.length <= limit) return text;
-  return `${text.slice(0, limit)}\n[... 输出超出 ${limit} 字符，已截断 ${text.length - limit} 字符 ...]`;
+  const suffix = `\n[输出超出 ${limit} 字符，已截断 ${text.length - limit} 字符]`;
+  if (spiller === undefined) return `${text.slice(0, limit)}${suffix}`;
+  const { url, sandboxPath } = await spiller.spill(`${tool}-${stream}`, text);
+  return `${text.slice(0, limit)}${suffix}\n完整输出：${url}（read 它，或在沙箱里访问 ${sandboxPath}）`;
 }
