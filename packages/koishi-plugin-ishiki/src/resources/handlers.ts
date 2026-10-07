@@ -88,6 +88,11 @@ export class AssetHandler implements SchemeHandler {
   public getRecord(id: string): Promise<AssetRecord | undefined> {
     return this.registry.get(id);
   }
+
+  /** All registered asset ids; used by the sandbox listing view. */
+  public listIds(): Promise<string[]> {
+    return this.registry.listIds();
+  }
 }
 
 /** `artifact://<tool>/<name>` — persisted tool output. */

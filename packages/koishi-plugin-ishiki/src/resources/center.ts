@@ -2,6 +2,9 @@ import path from "node:path";
 
 import type { Awaitable } from "koishi";
 
+import type { ArtifactStore } from "./artifact.js";
+import type { AssetRecord } from "./asset.js";
+
 /**
  * Typed error codes for resource access failures. The model-facing reader turns
  * these into precise error text; callers may also branch on them programmatically.
@@ -81,8 +84,25 @@ const RESERVED: Record<string, true> = Object.fromEntries(RESERVED_SCHEMES.map((
 
 const ARTIFACT_TOOL_RE = /^[a-zA-Z0-9_-]+$/;
 
+/** Byte/record-level surface the asset handler exposes beyond SchemeHandler. */
+export interface AssetHandlerView {
+  readBytes(id: string, signal?: AbortSignal): Promise<Uint8Array>;
+  getRecord(id: string): Promise<AssetRecord | undefined>;
+  listIds(): Promise<string[]>;
+}
+
+function isAssetHandlerView(handler: SchemeHandler | undefined): handler is SchemeHandler & AssetHandlerView {
+  return (
+    handler !== undefined &&
+    typeof (handler as Partial<AssetHandlerView>).readBytes === "function" &&
+    typeof (handler as Partial<AssetHandlerView>).getRecord === "function" &&
+    typeof (handler as Partial<AssetHandlerView>).listIds === "function"
+  );
+}
+
 export class ResourceCenter {
   readonly #handlers = new Map<string, SchemeHandler>();
+  #artifactStore?: ArtifactStore;
 
   public constructor(
     public readonly runtimeId: string,
@@ -114,6 +134,44 @@ export class ResourceCenter {
 
   public listSchemes(): string[] {
     return [...this.#handlers.keys()];
+  }
+
+  /** Registered handler for a core scheme, for byte-level consumers (sandbox mounts, read tool). */
+  public resolveHandler(scheme: "asset" | "artifact" | "local"): SchemeHandler | undefined {
+    return this.#handlers.get(scheme);
+  }
+
+  /** Asset record lookup by id, via the registered asset handler. */
+  public async assetRecord(id: string): Promise<AssetRecord | undefined> {
+    const view = this.#assetView();
+    return view?.getRecord(id);
+  }
+
+  /** All registered asset ids in this runtime. */
+  public async listAssetIds(): Promise<string[]> {
+    const view = this.#assetView();
+    return (await view?.listIds()) ?? [];
+  }
+
+  /** Artifact tool namespaces present in the store. */
+  public async listArtifactTools(): Promise<string[]> {
+    return (await this.#artifactStore?.listTools()) ?? [];
+  }
+
+  /** Artifact names inside one tool namespace. */
+  public async listArtifactNames(tool: string): Promise<string[]> {
+    return this.#artifactStore?.list(tool) ?? [];
+  }
+
+  /** Attach the artifact store for listing queries; called at assembly time. */
+  public useArtifactStore(store: ArtifactStore): void {
+    this.#artifactStore = store;
+  }
+
+  /** The asset handler's extended view, when one is registered. */
+  #assetView(): AssetHandlerView | undefined {
+    const handler = this.#handlers.get("asset");
+    return isAssetHandlerView(handler) ? handler : undefined;
   }
 
   /** Parse `scheme://authority/path`; throws `invalid_resource_uri` on malformed or traversal-bearing input. */

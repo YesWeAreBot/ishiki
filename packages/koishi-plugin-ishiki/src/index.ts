@@ -159,13 +159,15 @@ class Ishiki extends Service<Ishiki.Config> {
         const runtimes = new Map<string, AgentRuntime>();
         const spawn = (key: string, domain: InstanceDomain): AgentRuntime => {
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
-          const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger };
           const resources = new ResourceCenter(key, home);
           const assetRegistry = new AssetRegistry(key, home, new MinatoAssetDatabase(this.ctx));
           const assetHandler = new AssetHandler(assetRegistry);
           resources.useCore(assetHandler);
-          resources.useCore(new ArtifactHandler(new ArtifactStore(home)));
+          const artifactStore = new ArtifactStore(home);
+          resources.useCore(new ArtifactHandler(artifactStore));
           resources.useCore(new LocalHandler(resources));
+          resources.useArtifactStore(artifactStore);
+          const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger, resources };
           const runtime = new AgentRuntime({
             id: key,
             home,
@@ -297,5 +299,7 @@ export * from "./runtime.js";
 export * from "./context/index.js";
 export * from "./toolcall/index.js";
 export * from "./wakeup/index.js";
+export * from "./resources/index.js";
+export * from "./builtin-tools/index.js";
 
 export default Ishiki;

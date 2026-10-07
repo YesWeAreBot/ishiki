@@ -2,6 +2,7 @@ import { ToolSet } from "@yesimagent/core";
 import { Awaitable, Service, type Context, type Logger, type Schema } from "koishi";
 
 import type { InstanceDomain } from "./profile/index.js";
+import type { ResourceCenter } from "./resources/center.js";
 
 export interface ExtensionContext {
   readonly runtimeId: string;
@@ -11,6 +12,8 @@ export interface ExtensionContext {
   /** profile 的 fiber：profile 级共享资源挂它的 dispose。 */
   readonly fiber: Context;
   readonly logger: Logger;
+  /** runtime 的资源中心：扩展经它读 asset/artifact、注册自定义 scheme。 */
+  readonly resources: ResourceCenter;
 }
 
 export interface ExtensionInstance {

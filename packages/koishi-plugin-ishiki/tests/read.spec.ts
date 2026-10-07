@@ -23,6 +23,10 @@ class MemoryAssetDb implements AssetDatabase {
     return [...this.rows.values()].filter((row) => row.runtimeId === runtimeId && row.id.startsWith(prefix));
   }
 
+  async listIds(runtimeId: string) {
+    return [...this.rows.values()].filter((row) => row.runtimeId === runtimeId).map((row) => row.id);
+  }
+
   async create(row: AssetRecord) {
     this.rows.set(`${row.runtimeId}/${row.id}`, row);
   }

@@ -3,6 +3,7 @@ import { Extension, type ExtensionContext, type ToolSet } from "koishi-plugin-is
 
 import { WorkspaceConfig } from "./config.js";
 import { workspaceInstructions } from "./prompt.js";
+import { SkillHandler, WorkspaceHandler } from "./resource-schemes.js";
 import { createSandbox, resolveLayout, type WorkspaceSandbox } from "./sandbox.js";
 import { skillCatalog } from "./skills.js";
 import { createWorkspaceTools } from "./tools.js";
@@ -32,7 +33,18 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
     let sandbox: Promise<WorkspaceSandbox> | undefined;
     let tools: ToolSet | undefined;
     // 懒加载单例：tools 与 instructions 共用同一个沙箱。
-    const box = (): Promise<WorkspaceSandbox> => (sandbox ??= createSandbox(layout, context.home));
+    const box = (): Promise<WorkspaceSandbox> =>
+      (sandbox ??= createSandbox(layout, {
+        config,
+        home: context.home,
+        root: context.root,
+        dataPath: this.dataPath,
+        logger: this.logger,
+        resources: context.resources,
+      }));
+    // 资源 URL 面：技能内容与 workspace 持久根，与沙箱挂载同源。
+    context.resources?.use(new SkillHandler(layout.skills));
+    context.resources?.use(new WorkspaceHandler(context.home));
     return {
       name: "ishiki.workspace",
       extendTools: async () => (tools ??= createWorkspaceTools(await box())),

@@ -1,11 +1,12 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
-import type { FsStat } from "just-bash";
+import { Bash, InMemoryFs, MountableFs, OverlayFs, ReadWriteFs, type FsStat } from "just-bash";
 import type { Logger } from "koishi";
 
 import type { WorkspaceConfig } from "./config.js";
 import { HOME_MOUNT, resolveMounts, resolveSkillMounts, WORKSPACE_MOUNT, type HostMount } from "./mounts.js";
+import { ResourceFs } from "./resource-fs.js";
 import { discoverSkills, type Skill } from "./skills.js";
 
 export interface ExecResult {
@@ -37,6 +38,8 @@ export interface SandboxOptions {
   root: string;
   dataPath: string;
   logger: Logger;
+  /** Resource center providing /assets and /artifacts mounts; undefined disables them. */
+  resources?: import("koishi-plugin-ishiki").ResourceCenter;
 }
 
 function traversable(stat: FsStat): FsStat {
@@ -60,9 +63,9 @@ export function resolveLayout(options: SandboxOptions): WorkspaceLayout {
   };
 }
 
-export async function createSandbox(layout: WorkspaceLayout, home: string): Promise<WorkspaceSandbox> {
-  const jb = await import("just-bash");
-  class Writable extends jb.ReadWriteFs {
+export async function createSandbox(layout: WorkspaceLayout, options: SandboxOptions): Promise<WorkspaceSandbox> {
+  const { home } = options;
+  class Writable extends ReadWriteFs {
     override async stat(path: string): Promise<FsStat> {
       return traversable(await super.stat(path));
     }
@@ -71,21 +74,27 @@ export async function createSandbox(layout: WorkspaceLayout, home: string): Prom
       return traversable(await super.lstat(path));
     }
   }
-  const homeView = new jb.MountableFs({
-    base: new jb.InMemoryFs(),
-    mounts: [{ mountPoint: HOME_MOUNT, filesystem: new jb.OverlayFs({ root: home, mountPoint: "/", readOnly: true }) }],
+  const homeView = new MountableFs({
+    base: new InMemoryFs(),
+    mounts: [{ mountPoint: HOME_MOUNT, filesystem: new OverlayFs({ root: home, mountPoint: "/", readOnly: true }) }],
   });
-  const fs = new jb.MountableFs({
+  const fs = new MountableFs({
     base: homeView,
     mounts: [
       { mountPoint: WORKSPACE_MOUNT, filesystem: new Writable({ root: path.join(home, "workspace") }) },
+      ...(options.resources
+        ? [
+            { mountPoint: "/assets", filesystem: new ResourceFs(options.resources) },
+            { mountPoint: "/artifacts", filesystem: new ResourceFs(options.resources) },
+          ]
+        : []),
       ...layout.mounts.map((mount) => ({
         mountPoint: mount.target,
-        filesystem: mount.readOnly ? new jb.OverlayFs({ root: mount.source, mountPoint: "/", readOnly: true }) : new Writable({ root: mount.source }),
+        filesystem: mount.readOnly ? new OverlayFs({ root: mount.source, mountPoint: "/", readOnly: true }) : new Writable({ root: mount.source }),
       })),
     ],
   });
-  const bash = new jb.Bash({
+  const bash = new Bash({
     fs,
     cwd: layout.cwd,
     network: layout.network ? { dangerouslyAllowFullInternetAccess: true, denyPrivateRanges: true } : undefined,

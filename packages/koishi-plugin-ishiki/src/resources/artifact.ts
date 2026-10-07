@@ -98,6 +98,19 @@ export class ArtifactStore {
     return entries.filter((name) => !name.endsWith(".json")).sort();
   }
 
+  /** Tool namespaces that have a directory under the store. */
+  public async listTools(): Promise<string[]> {
+    try {
+      const entries = await fs.readdir(path.join(this.home, "resources", "artifacts"), { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
   /** Remove one tool namespace entirely; used on runtime disposal (artifacts are ephemeral). */
   public async clearTool(tool: string): Promise<void> {
     if (!SAFE_TOOL.test(tool)) throw new ResourceError("invalid_resource_uri", `invalid artifact tool namespace: ${tool}`);

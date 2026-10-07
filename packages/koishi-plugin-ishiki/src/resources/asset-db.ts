@@ -22,6 +22,11 @@ export class MinatoAssetDatabase implements AssetDatabase {
     return rows.filter((row) => row.id.startsWith(prefix));
   }
 
+  async listIds(runtimeId: string): Promise<string[]> {
+    const rows = await this.ctx.database.get("ishiki_assets", { runtimeId }, ["id"]);
+    return rows.map((row) => row.id);
+  }
+
   async create(row: AssetRecord): Promise<void> {
     await this.ctx.database.create("ishiki_assets", row);
   }

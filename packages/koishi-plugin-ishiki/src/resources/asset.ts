@@ -27,6 +27,7 @@ export interface AssetRecord {
 export interface AssetDatabase {
   get(runtimeId: string, id: string): Promise<AssetRecord | undefined>;
   prefixSearch(runtimeId: string, prefix: string): Promise<AssetRecord[]>;
+  listIds(runtimeId: string): Promise<string[]>;
   create(row: AssetRecord): Promise<void>;
   markFetched(runtimeId: string, id: string, data: { byteLength: number; contentHash: string }): Promise<void>;
 }
@@ -73,6 +74,11 @@ export class AssetRegistry {
     if (!PREFIX_ID.test(id)) return undefined;
     const candidates = await this.db.prefixSearch(this.runtimeId, id);
     return candidates.length === 1 ? candidates[0] : undefined;
+  }
+
+  /** All registered asset ids in this runtime; used by the sandbox listing view. */
+  public listIds(): Promise<string[]> {
+    return this.db.listIds(this.runtimeId);
   }
 
   /**
