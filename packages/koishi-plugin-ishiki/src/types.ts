@@ -4,6 +4,7 @@ declare module "@yesimagent/core" {
   interface AgentCustomMessage {
     "ishiki.message.created": IshikiMessageCreated;
     "ishiki.message.deleted": IshikiMessageDeleted;
+    "ishiki.tools.catalog": IshikiToolsCatalog;
   }
 }
 
@@ -49,4 +50,16 @@ export interface IshikiMessageDeleted extends IshikiEventBase {
   messageId: string;
   userId?: string;
   operatorId?: string;
+}
+
+/**
+ * Tool catalog update, persisted into the conversation by the toolsearch
+ * runtime. Full replay: each entry announces the complete visible-tool set
+ * and supersedes every earlier catalog.
+ */
+export interface IshikiToolsCatalog {
+  /** Catalog text rendered at write time (vendored code-mode renderer). */
+  text: string;
+  /** Visible tool names at write time; informational, for inspection and debugging. */
+  tools: readonly string[];
 }

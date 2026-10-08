@@ -14,12 +14,12 @@ import {
 import type { Logger } from "koishi";
 
 import { CODE_MODE, createCodemode } from "./builtin-tools/codemode.js";
+import { createSearchTool, SEARCH_TOOL, ToolsearchState } from "./builtin-tools/toolsearch.js";
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
-import type { CodemodeConfig } from "./profile/index.js";
+import type { CodemodeConfig, ToolsearchConfig } from "./profile/index.js";
 import { ResourceCenter } from "./resources/center.js";
-import { rewriteInboundMedia } from "./resources/inbound.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
 
@@ -33,6 +33,7 @@ export interface AgentRuntimeConfig {
   context: ContextEngineInstance;
   wakeup: WakeupEngineInstance;
   codemode: CodemodeConfig;
+  toolsearch: ToolsearchConfig;
   debugStream: boolean;
   logger: Logger;
   /** Runtime-scoped resource center; extensions register schemes on it. */
@@ -53,6 +54,7 @@ export class AgentRuntime {
   private readonly context: ContextEngineInstance;
   private readonly extensions: ExtensionInstance[];
   private readonly agent: Agent;
+  private readonly toolsearch: ToolsearchState;
 
   private disposeContext?: () => void;
   private disposeWakeup?: () => void;
@@ -65,6 +67,7 @@ export class AgentRuntime {
     this.context = config.context;
     this.extensions = config.extensions;
     this.resources = config.resources;
+    this.toolsearch = new ToolsearchState(config.toolsearch);
 
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
@@ -81,6 +84,7 @@ export class AgentRuntime {
           init: (agent) => {
             this.disposeContext = this.context.attach?.(agent);
             this.disposeWakeup = this.wakeup.attach?.(agent);
+            this.toolsearch.bind(agent);
           },
           stop: () => {
             this.disposeWakeup?.();
@@ -88,6 +92,11 @@ export class AgentRuntime {
           },
           transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
           transformMessages: (messages, options) => this.context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
+          toModelMessages: async (message: unknown) => {
+            const custom = message as { role?: string; type?: string; data?: { text?: string } };
+            if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
+            return [{ role: "user" as const, content: custom.data!.text! }];
+          },
           extendInstructions: async () => {
             const parts = [config.instructions];
             for (const ext of this.extensions) {
@@ -109,11 +118,37 @@ export class AgentRuntime {
               }
             }
             const base = merged;
-            if (!config.codemode.enable) return base;
-            const sandbox = createCodemode(config.codemode, base);
+            if (!config.codemode.enable) {
+              if (config.toolsearch.enable) {
+                // No sandbox: search itself is resident, everything else deferred.
+                const resident = new Set(this.toolsearch.residentNames());
+                const final: ToolSet = { ...base, [SEARCH_TOOL]: createSearchTool(this.toolsearch) };
+                this.toolsearch.codemodeEnabled = false;
+                this.toolsearch.refresh(final, resident, new Set());
+                return final;
+              }
+              return base;
+            }
+            const conversation = config.toolsearch.enable;
+            const sandbox = createCodemode(config.codemode, base, conversation);
             for (const name of Object.keys(toolCallers)) delete toolCallers[name];
             Object.assign(toolCallers, sandbox.callers);
-            return { ...base, [CODE_MODE]: sandbox.tool };
+            const withSandbox: ToolSet = { ...base, [CODE_MODE]: sandbox.tool };
+            if (!config.toolsearch.enable) return withSandbox;
+            // Sandbox on: search joins the direct-calling floor; deferred tools may
+            // be routed to the sandbox per the caller table.
+            const resident = new Set(this.toolsearch.residentNames());
+            const final: ToolSet = { ...withSandbox, [SEARCH_TOOL]: createSearchTool(this.toolsearch) };
+            this.toolsearch.codemodeEnabled = true;
+            this.toolsearch.refresh(final, resident, new Set(Object.keys(sandbox.callers)));
+            return final;
+          },
+          prepareStep: (options) => {
+            if (!config.toolsearch.enable) return options;
+            const visible = this.toolsearch.visibleTools();
+            const prior = options.activeTools;
+            const merged = prior === undefined ? visible : [...new Set([...prior, ...visible])];
+            return { ...options, activeTools: merged };
           },
           onStepFinish: (info) => {
             const calls = new Set<string>();
@@ -168,8 +203,18 @@ export class AgentRuntime {
   async deliver(event: IshikiEvent): Promise<void> {
     if (event.type === "ishiki.message.created") {
       const { media, content } = event.data;
+      // Register each media element's source URL as an asset and rewrite the
+      // message content so the model sees `<img src="asset://<id>"/>` instead
+      // of an expiring CDN link. Bytes fetch lazily on first `read` (or
+      // sandbox mount access); the element's remaining attributes stay in
+      // place, so the model still sees whatever the platform provided.
       if (media.length > 0) {
-        event.data.content = await rewriteInboundMedia(content, media, this.resources.store);
+        let rewritten = content;
+        for (const item of media) {
+          const url = await this.resources.store.registerAsset(item.src, { mediaType: item.mediaType, filename: item.filename, sourceInfo: item.sourceInfo });
+          rewritten = rewritten.split(item.src).join(url);
+        }
+        event.data.content = rewritten;
       }
     }
     const trigger = (await this.wakeup.decide(event)) === "trigger";

@@ -169,6 +169,7 @@ class Ishiki extends Service<Ishiki.Config> {
             context: contextProvider(settings.context, context),
             wakeup: wakeupProvider(settings.wakeup, context),
             codemode: settings.codemode,
+            toolsearch: settings.toolsearch,
             debugStream: this.config.debugStream,
             logger: this.logger,
             resources,
@@ -210,6 +211,7 @@ class Ishiki extends Service<Ishiki.Config> {
 
     const event = this.handler.handle(session);
     if (event === undefined) return;
+    if (event.type !== "ishiki.message.created" && event.type !== "ishiki.message.deleted") return;
 
     const { platform, selfId, channelId } = event.data;
     const sid = `${platform}:${selfId}`;

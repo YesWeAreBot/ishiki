@@ -25,7 +25,7 @@ function codemode(): CodemodeModule {
   return loaded;
 }
 
-export const CODE_MODE = "code_mode";
+export const CODE_MODE = "codemode";
 
 const BOTH_REACHABLE: readonly string[] = ["send_message"];
 
@@ -36,7 +36,16 @@ export interface CodemodeSurface {
   callers: ToolCallers;
 }
 
-export function createCodemode(config: CodemodeConfig, tools: ToolSet): CodemodeSurface {
+/**
+ * Build the code_mode sandbox tool and its caller routing.
+ *
+ * `conversation` mode (used with toolsearch): the provider-visible code tool
+ * keeps a stable description and tool signatures arrive through the
+ * toolsearch catalog messages instead of the SDK's per-step ephemeral
+ * `prepareModelMessage` user message, which does not survive this agent's
+ * per-step streamText loop.
+ */
+export function createCodemode(config: CodemodeConfig, tools: ToolSet, conversation: boolean): CodemodeSurface {
   const direct = new Set([...DIRECT_ONLY, ...config.direct]);
   const { DIRECT_TOOL_CALL, experimental_codeModeTool } = codemode();
   const callers: ToolCallers = {};
@@ -44,11 +53,21 @@ export function createCodemode(config: CodemodeConfig, tools: ToolSet): Codemode
     if (BOTH_REACHABLE.includes(name)) callers[name] = [CODE_MODE, DIRECT_TOOL_CALL];
     else if (!direct.has(name)) callers[name] = [CODE_MODE];
   }
-  const sandboxTool = experimental_codeModeTool({ executionPolicy: { timeoutMs: config.timeoutMs } });
+  const sandboxTool = experimental_codeModeTool({
+    executionPolicy: { timeoutMs: config.timeoutMs },
+    ...(conversation ? { toolDiscovery: "conversation" as const } : {}),
+  });
   const caller = sandboxTool.experimental_toolCaller;
   if (caller === undefined) throw new Error("failed to create codemode tool caller");
+
+  // Neutralize the SDK's ephemeral catalog message: in this agent every step
+  // is a fresh streamText call, so the SDK-side dedup (compares only the last
+  // user text) never matches and the catalog would be re-appended each step.
+  // Persistent catalog delivery is owned by the toolsearch runtime instead.
+  const exposedCaller = conversation && caller.type === "local" ? { ...caller, prepareModelMessage: () => null } : caller;
+
   const exposed: Record<string, unknown> = {};
   for (const key of Object.keys(sandboxTool)) exposed[key] = (sandboxTool as Record<string, unknown>)[key];
-  exposed.experimental_toolCaller = caller;
+  exposed.experimental_toolCaller = exposedCaller;
   return { tool: exposed as Tool, callers };
 }

@@ -61,6 +61,20 @@ export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
   timeoutMs: Schema.number().default(30_000),
 });
 
+export interface ToolsearchConfig {
+  enable: boolean;
+  /** 额外常驻工具名；未列出的工具（builtin 保底之外）进入延迟池 */
+  resident: string[];
+  /** 单次 search 最多加载的工具数 */
+  maxResults: number;
+}
+
+export const ToolsearchConfig: Schema<ToolsearchConfig> = Schema.object({
+  enable: Schema.boolean().default(false),
+  resident: Schema.array(Schema.string()).default([]),
+  maxResults: Schema.number().default(5),
+});
+
 export interface FailoverConfig {
   attempts?: number;
   backoffMs: number;
@@ -102,6 +116,7 @@ export interface ProfileSettings {
   wakeup: WakeupConfig;
   toolcall: ToolcallConfig;
   codemode: CodemodeConfig;
+  toolsearch: ToolsearchConfig;
   typing: TypingConfig;
   resources: ResourcesConfig;
 }
@@ -126,6 +141,7 @@ export interface ProfileConfig {
   wakeup?: WakeupConfig;
   toolcall?: ToolcallConfig;
   codemode?: CodemodeConfig;
+  toolsearch?: ToolsearchConfig;
   typing?: TypingConfig;
   resources?: ResourcesConfig;
 }
@@ -138,8 +154,9 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   failover: FailoverConfig,
   context: ContextConfig,
   wakeup: WakeupConfig,
-  toolcall: ToolcallConfig,
+  toolcall: Schema.union([ToolcallConfig, Schema.any()]),
   codemode: CodemodeConfig,
+  toolsearch: ToolsearchConfig,
   typing: TypingConfig,
   resources: ResourcesConfig,
 });
@@ -169,6 +186,7 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       wakeup: fillEngine(config.wakeup, "standard"),
       toolcall: fillEngine(config.toolcall, "native"),
       codemode: CodemodeConfig((config.codemode ?? {}) as CodemodeConfig),
+      toolsearch: ToolsearchConfig((config.toolsearch ?? {}) as ToolsearchConfig),
       typing: TypingConfig((config.typing ?? {}) as TypingConfig),
       resources: ResourcesConfig((config.resources ?? {}) as ResourcesConfig),
     },
