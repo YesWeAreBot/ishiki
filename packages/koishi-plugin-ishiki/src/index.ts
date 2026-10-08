@@ -15,7 +15,6 @@ import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
-import { resourcePath } from "./resource.js";
 import { ResourceCenter } from "./resources/center.js";
 import { AgentRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
@@ -30,6 +29,13 @@ import {
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import { JevWakeupEngine, StandardWakeupEngine, V3WakeupEngine, WakeupEngine } from "./wakeup/index.js";
+
+// 内联自 resource.ts：包内 resources 目录的绝对路径。
+// 从当前文件向上找到包根（含 package.json 的目录），兼容源码布局与打包后的单文件布局。
+let here = import.meta.url ? path.dirname(new URL(import.meta.url).pathname) : __dirname;
+if (process.platform === "win32" && here.startsWith("/")) here = here.slice(1);
+while (!existsSync(path.join(here, "package.json"))) here = path.dirname(here);
+const RESOURCES_DIR = path.join(here, "resources");
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
 interface Route {
@@ -235,7 +241,7 @@ class Ishiki extends Service<Ishiki.Config> {
 function renderInstructions(root: string): string {
   const personaFile = path.join(root, "persona.md");
   const persona = existsSync(personaFile) ? readFileSync(personaFile, "utf8").trim() : "";
-  const template = new Template(readFileSync(resourcePath("templates", "system.jinja"), "utf8")).render({});
+  const template = new Template(readFileSync(path.join(RESOURCES_DIR, "templates", "system.jinja"), "utf8")).render({});
   return [template.trim(), persona].filter((part) => part.length > 0).join("\n\n");
 }
 
