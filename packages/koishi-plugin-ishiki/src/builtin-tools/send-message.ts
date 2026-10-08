@@ -6,6 +6,8 @@ import type { ResourceCenter } from "../resources/center.js";
 import { ResourceError } from "../resources/center.js";
 import { concreteMediaType } from "../resources/media.js";
 
+export const SEND_MESSAGE_TOOL = "send_message";
+
 export namespace SendMessageTool {
   export interface Options {
     ctx: Context;

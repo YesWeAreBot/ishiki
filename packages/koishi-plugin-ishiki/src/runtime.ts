@@ -13,7 +13,9 @@ import {
 } from "@yesimagent/core";
 import type { Logger } from "koishi";
 
-import { CODE_MODE, createCodemode } from "./builtin-tools/codemode.js";
+import { CODEMODE_TOOL, createCodemode } from "./builtin-tools/codemode.js";
+import { FINISH_TOOL } from "./builtin-tools/finish.js";
+import { SEND_MESSAGE_TOOL } from "./builtin-tools/send-message.js";
 import { createSearchTool, SEARCH_TOOL, ToolsearchState } from "./builtin-tools/toolsearch.js";
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
@@ -39,9 +41,6 @@ export interface AgentRuntimeConfig {
   /** Runtime-scoped resource center; extensions register schemes on it. */
   resources: ResourceCenter;
 }
-
-const FINISH_TOOL = "finish";
-const SEND_MESSAGE_TOOL = "send_message";
 
 export class AgentRuntime {
   readonly id: string;
@@ -92,7 +91,7 @@ export class AgentRuntime {
           },
           transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
           transformMessages: (messages, options) => this.context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
-          toModelMessages: async (message: unknown) => {
+          toModelMessages: (message: unknown) => {
             const custom = message as { role?: string; type?: string; data?: { text?: string } };
             if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
             return [{ role: "user" as const, content: custom.data!.text! }];
@@ -133,7 +132,7 @@ export class AgentRuntime {
             const sandbox = createCodemode(config.codemode, base, conversation);
             for (const name of Object.keys(toolCallers)) delete toolCallers[name];
             Object.assign(toolCallers, sandbox.callers);
-            const withSandbox: ToolSet = { ...base, [CODE_MODE]: sandbox.tool };
+            const withSandbox: ToolSet = { ...base, [CODEMODE_TOOL]: sandbox.tool };
             if (!config.toolsearch.enable) return withSandbox;
             // Sandbox on: search joins the direct-calling floor; deferred tools may
             // be routed to the sandbox per the caller table.
@@ -143,14 +142,31 @@ export class AgentRuntime {
             this.toolsearch.refresh(final, resident, new Set(Object.keys(sandbox.callers)));
             return final;
           },
-          prepareStep: (options) => {
-            if (!config.toolsearch.enable) return options;
+          prepareStep: async (options) => {
+            // The baseline catalog must join the FIRST request itself: joined messages only
+            // flush after a step's output (core turn.ts), so anything sent during the turn
+            // would be invisible to every request of that turn. Persist it now and prepend
+            // the projected message to the messages about to be sent. flushCatalog's key
+            // bookkeeping mirrors this emission, so a later flush only fires on real changes.
+            let messages = options.messages;
+            if (config.toolsearch.enable && options.stepNumber === 0) {
+              const entry = await this.toolsearch.ensureBaselineCatalog();
+              if (entry) {
+                const projected = this.toModelMessages(entry.data);
+                if (projected && projected.length > 0) messages = [...projected, ...messages];
+              }
+            }
+            if (!config.toolsearch.enable) return { ...options, messages };
             const visible = this.toolsearch.visibleTools();
             const prior = options.activeTools;
-            const merged = prior === undefined ? visible : [...new Set([...prior, ...visible])];
-            return { ...options, activeTools: merged };
+            const activeTools = prior === undefined ? visible : [...new Set([...prior, ...visible])];
+            return { ...options, messages, activeTools };
           },
           onStepFinish: (info) => {
+            // Emit at most one catalog per step, after the step's search results
+            // are persisted and before the next model call; parallel searches
+            // within the step coalesce into a single full-replay catalog.
+            this.toolsearch.flushCatalog();
             const calls = new Set<string>();
             let sending = false;
             let continueRequested = false;
@@ -223,5 +239,12 @@ export class AgentRuntime {
 
   async stop(): Promise<void> {
     await this.agent.stop();
+  }
+
+  /** Projects a persisted catalog message to its model-visible form (shared with the plugin hook). */
+  private toModelMessages(message: unknown): [{ role: "user"; content: string }] | undefined {
+    const custom = message as { role?: string; type?: string; data?: { text?: string } };
+    if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
+    return [{ role: "user", content: custom.data!.text! }];
   }
 }

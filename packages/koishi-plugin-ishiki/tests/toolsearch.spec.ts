@@ -30,23 +30,25 @@ interface SentCatalog {
 /** Minimal agent double: records `send` calls and asserts the joined non-trigger contract. */
 function makeAgent() {
   const catalogs: SentCatalog[] = [];
+  const appended: unknown[] = [];
   const agent = {
     send: (message: { role: string; type: string; data: unknown }, options: { trigger?: boolean; ifBusy?: string }) => {
       expect(options).toMatchObject({ trigger: false, ifBusy: "join" });
       if (message.type === "ishiki.tools.catalog") catalogs.push(message.data as SentCatalog);
       return undefined;
     },
+    storage: { append: async (...entries: unknown[]) => void appended.push(...entries) },
   } as unknown as Agent;
-  return { agent, catalogs };
+  return { agent, catalogs, appended };
 }
 
 function makeState(config: { maxResults?: number } = {}) {
   const state = new ToolsearchState({ enable: true, resident: [], maxResults: config.maxResults ?? 5 });
-  const { agent, catalogs } = makeAgent();
+  const { agent, catalogs, appended } = makeAgent();
   state.bind(agent);
   state.codemodeEnabled = false;
   state.refresh({ ...makeTools(), [SEARCH_TOOL]: makeTool(SEARCH_TOOL, "Search deferred tools by keyword.") }, new Set(state.residentNames()), new Set());
-  return { state, catalogs };
+  return { state, catalogs, appended };
 }
 
 describe("ToolsearchState", () => {
@@ -81,22 +83,78 @@ describe("ToolsearchState", () => {
     expect(again.tools).toHaveLength(0);
   });
 
-  it("persists a catalog message per visible-set change and none on no-hit searches", () => {
+  it("emits nothing for a no-hit search, and only after flushCatalog", () => {
     const { state, catalogs } = makeState();
-    expect(catalogs).toHaveLength(0);
+    state.flushCatalog(); // baseline roster consumed
+    expect(catalogs).toHaveLength(1);
     state.search("zzz-nothing-matches");
-    expect(catalogs).toHaveLength(0);
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(1);
     state.search("weather");
     expect(catalogs).toHaveLength(1);
-    expect(catalogs[0]!.tools).toContain("weather_forecast");
-    state.search("gmail");
+    state.flushCatalog();
     expect(catalogs).toHaveLength(2);
-    expect(catalogs[1]!.tools).toEqual(expect.arrayContaining(["gmail_list_messages", "gmail_get_message", "weather_forecast"]));
+    expect(catalogs[1]!.tools).toContain("weather_forecast");
+  });
+
+  it("coalesces parallel searches within one step into a single catalog", () => {
+    const { state, catalogs } = makeState({ maxResults: 5 });
+    // Two searches run in parallel inside one step (the model calling search
+    // twice in one response): both mutate discovery before the flush.
+    const first = state.search("gmail messages inbox");
+    const second = state.search("create calendar event");
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(1);
+    const union = [...first.tools.map((match) => match.name), ...second.tools.map((match) => match.name)];
+    expect(catalogs[0]!.tools).toEqual(expect.arrayContaining(union));
+    // An unchanged visible set does not re-emit on the next step boundary.
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(1);
+  });
+
+  it("flushes a baseline catalog before any search ran", () => {
+    const { state, catalogs } = makeState();
+    // First flush always emits: the model gets a baseline roster (and, in
+    // codemode mode, the resident-host signatures) before it ever searches.
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(1);
+    expect(catalogs[0]!.tools).toEqual(expect.arrayContaining(["finish", "send_message", "read", SEARCH_TOOL]));
+    expect(catalogs[0]!.tools).not.toContain("weather_forecast");
+    // Baseline is not re-emitted on subsequent steps.
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(1);
+  });
+
+  it("persists the baseline catalog once via ensureBaselineCatalog and suppresses the duplicate flush", async () => {
+    const { state, catalogs, appended } = makeState();
+    const entry = await state.ensureBaselineCatalog();
+    expect(entry).toBeDefined();
+    expect(entry!.type).toBe("message");
+    const persisted = appended as Array<{ type: string; data: { type: string; data: { tools: string[] } } }>;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]!.data.type).toBe("ishiki.tools.catalog");
+    expect(persisted[0]!.data.data.tools).toEqual(expect.arrayContaining(["finish", "send_message", "read", SEARCH_TOOL]));
+
+    // Second call is a no-op: the baseline exists once in history.
+    await expect(state.ensureBaselineCatalog()).resolves.toBeUndefined();
+    expect((appended as unknown[]).length).toBe(1);
+
+    // The flush key was synced by the baseline, so no duplicate joins at the step boundary.
+    state.flushCatalog();
+    expect((appended as unknown[]).length).toBe(1);
+
+    // A real discovery change still flushes — via the step-boundary join.
+    state.search("weather");
+    state.flushCatalog();
+    expect((appended as unknown[]).length).toBe(1);
+    expect(catalogs).toHaveLength(1);
+    expect(catalogs[0]!.tools).toContain("weather_forecast");
   });
 
   it("renders the direct-calling catalog without tools.x() call examples", () => {
     const { state, catalogs } = makeState();
     state.search("weather");
+    state.flushCatalog();
     const text = catalogs[0]!.text;
     expect(text).toContain("Tool catalog update.");
     expect(text).toContain("weather_forecast");
@@ -112,6 +170,7 @@ describe("ToolsearchState", () => {
       new Set(["weather_forecast", "gmail_list_messages", "gmail_get_message", "calendar_create_event"]),
     );
     state.search("calendar event create");
+    state.flushCatalog();
     const last = catalogs.at(-1)!;
     expect(last.text).toContain("Code mode capability update.");
     expect(last.text).toContain("tools.calendar_create_event(");

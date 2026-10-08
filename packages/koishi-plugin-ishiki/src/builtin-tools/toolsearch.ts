@@ -1,14 +1,16 @@
-import { jsonSchema, tool, type Agent, type Tool, type ToolSet } from "@yesimagent/core";
-import { createCustomMessage } from "@yesimagent/core";
+import { jsonSchema, tool, createCustomMessage, createEntry, type Agent, type AgentEntry, type Tool, type ToolSet } from "@yesimagent/core";
 
 import type { ToolsearchConfig } from "../profile/index.js";
+import { CODEMODE_TOOL } from "./codemode.js";
+import { FINISH_TOOL } from "./finish.js";
+import { READ_TOOL } from "./read.js";
+import { SEND_MESSAGE_TOOL } from "./send-message.js";
 import { buildCodeModeToolCatalogMessage, renderToolCatalog } from "./vendor/tool-prompt.js";
 
 export const SEARCH_TOOL = "search";
-export const CODE_MODE = "code_mode";
 
 /** Tools that must stay visible on every step regardless of discovery state. */
-const ALWAYS_ON: readonly string[] = ["finish", "send_message", "read", SEARCH_TOOL];
+const ALWAYS_ON: readonly string[] = [FINISH_TOOL, SEND_MESSAGE_TOOL, READ_TOOL, CODEMODE_TOOL, SEARCH_TOOL];
 
 export namespace SearchTool {
   export interface Input {
@@ -41,6 +43,10 @@ export class ToolsearchState {
   /** Names routed to code_mode (host tools of the sandbox); empty when codemode is off. */
   private codemodeHosts = new Set<string>();
   private agent: Agent | undefined;
+  /** Sorted visible names at the last catalog emission; undefined until the first one. */
+  private lastEmittedKey: string | undefined;
+  /** Whether the baseline catalog has been persisted for this runtime. */
+  private baselineEmitted = false;
 
   /** Set by the runtime: controls the catalog's rendering shape. */
   codemodeEnabled = false;
@@ -61,7 +67,7 @@ export class ToolsearchState {
     this.codemodeHosts = new Set(codemodeHosts);
     this.registry.clear();
     for (const [name, def] of Object.entries(tools)) {
-      if (resident.has(name) || name === CODE_MODE) continue;
+      if (resident.has(name) || name === CODEMODE_TOOL) continue;
       this.registry.set(name, def);
     }
     for (const name of this.discovered) {
@@ -71,15 +77,15 @@ export class ToolsearchState {
 
   /** Visible set for the current step: resident ∪ discovered, filtered against the live tool set. */
   visibleTools(): readonly string[] {
-    const names = new Set<string>([...this.residentNames(), ...this.discovered, CODE_MODE]);
+    const names = new Set<string>([...this.residentNames(), ...this.discovered, CODEMODE_TOOL]);
     return [...names].filter((name) => this.allTools.has(name));
   }
 
   /**
-   * Run one search: keyword-match undiscovered deferred tools, mark hits
-   * discovered, and persist a full catalog message into the active turn via
-   * `send({trigger:false, ifBusy:'join'})` so it lands after this step's
-   * output and before the next step's model call.
+   * Run one search: keyword-match undiscovered deferred tools and mark hits
+   * discovered. Catalog emission is deferred to {@link flushCatalog} at the
+   * step boundary, so parallel searches within one step coalesce into a
+   * single full-replay catalog.
    */
   search(query: string): SearchTool.Output {
     const terms = [...new Set(tokenize(query))];
@@ -110,14 +116,44 @@ export class ToolsearchState {
     if (hits.length === 0) return { tools: [] };
 
     for (const hit of hits) this.discovered.add(hit.name);
-    this.emitCatalog();
     return { tools: hits };
   }
 
-  /** Persist a full-replay catalog message describing the current visible set. */
-  private emitCatalog(): void {
+  /**
+   * Persist the first catalog directly into storage so it is part of history
+   * before the very first model request is assembled. Step-boundary emission
+   * (joined messages) only lands after a step's output, so it can never reach
+   * the model in the turn that triggered it — this covers the gap where a
+   * fresh conversation's first request carries no tool signatures.
+   *
+   * Must be called during `prepareStep` (after `collectModelMessages`, before
+   * the model call) so the appended message can be projected and appended to
+   * the very request about to be sent. Later changes still go through
+   * {@link flushCatalog} at step boundaries.
+   */
+  async ensureBaselineCatalog(): Promise<AgentEntry<"message"> | undefined> {
+    if (this.baselineEmitted || this.agent === undefined) return undefined;
+    this.baselineEmitted = true;
+    const text = this.renderCatalogText();
+    const message = createCustomMessage("ishiki.tools.catalog", { text, tools: [...this.visibleTools()] });
+    const entry = createEntry("message", message);
+    await this.agent.storage.append(entry);
+    this.lastEmittedKey = [...this.visibleTools()].sort().join("\n");
+    return entry;
+  }
+
+  /**
+   * Persist a full-replay catalog message when the visible set changed since
+   * the last emission. Called at the step boundary (after the step's messages
+   * are persisted), so parallel searches within one step coalesce into a
+   * single catalog, and a search without new hits emits nothing.
+   */
+  flushCatalog(): void {
     const agent = this.agent;
     if (agent === undefined) return;
+    const key = [...this.visibleTools()].sort().join("\n");
+    if (key === this.lastEmittedKey) return;
+    this.lastEmittedKey = key;
     const text = this.renderCatalogText();
     agent.send(createCustomMessage("ishiki.tools.catalog", { text, tools: [...this.visibleTools()] }), { trigger: false, ifBusy: "join" });
   }

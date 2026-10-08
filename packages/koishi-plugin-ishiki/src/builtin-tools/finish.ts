@@ -1,5 +1,7 @@
 import { jsonSchema, tool, Tool } from "@yesimagent/core";
 
+export const FINISH_TOOL = "finish";
+
 export namespace FinishTool {
   export type Options = Record<string, never>;
   export interface Input {

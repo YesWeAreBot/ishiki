@@ -4,6 +4,8 @@ import { type ResourceCenter, type ResourcePayload } from "../resources/center.j
 import { concreteMediaType } from "../resources/media.js";
 import { splitSelectors, type Selector } from "../resources/selectors.js";
 
+export const READ_TOOL = "read";
+
 export namespace ReadTool {
   export interface Options {
     center: ResourceCenter;
