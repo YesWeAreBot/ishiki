@@ -10,7 +10,7 @@ export type ResourceKind = "asset" | "artifact";
 
 /** Sidecar metadata: everything that is not the bytes themselves. */
 export interface ResourceMeta {
-  /** Bytes identity: asset = sha256(src) prefix; artifact = tool-chosen name. */
+  /** Blob sidecars share the historical plural assets/artifacts directories. */
   id: string;
   kind: ResourceKind;
   /** URL namespace below the kind: always "" for assets, tool name for artifacts. */
@@ -21,6 +21,12 @@ export interface ResourceMeta {
   byteLength?: number;
   /** sha256 of the bytes; filled on fetch / put-in-hand. */
   contentHash?: string;
+  toolName?: string;
+  toolCallId?: string;
+  /** Stable readable representation for JSON outputs; original bytes remain in the blob. */
+  viewName?: string;
+  width?: number;
+  height?: number;
   createdAt: number;
   /** Last successful byte materialization; absent means lazy fetch has not run. */
   fetchedAt?: number;
@@ -48,6 +54,11 @@ export interface PutOptions {
   /** Original source URL the id derives from (assets). */
   src?: string;
   /** Free-form inbound element attributes, stored verbatim. */
+  toolName?: string;
+  toolCallId?: string;
+  viewName?: string;
+  width?: number;
+  height?: number;
   sourceInfo?: Record<string, unknown>;
 }
 
@@ -60,7 +71,7 @@ const FETCH_TIMEOUT_MS = 30_000;
 
 /**
  * The one byte-and-meta store behind every runtime-scoped scheme handler.
- * Layout: `resources/<kind>/<namespace>/<name>` plus `<name>.json` sidecars.
+ * Layout: `resources/assets/<id>` or `resources/artifacts/<tool>/<name>`, with `<name>.json` sidecars.
  * All writes are atomic (temp + rename); sidecar carries everything mutable.
  */
 export class ResourceStore {
@@ -93,20 +104,18 @@ export class ResourceStore {
     return `asset://${name}`;
   }
 
-  /** Persist a truncated-output capture as an artifact under the tool's namespace. */
-  public async spillArtifact(tool: string, content: string): Promise<string> {
-    const name = `${new Date().toISOString().replace(/[-:.TZ]/g, "")}-${Math.random().toString(16).slice(2, 10)}.log`;
-    return this.putArtifact(tool, name, new TextEncoder().encode(content), { mediaType: "text/plain" });
-  }
-
-  /** Register tool-returned media as an asset keyed by content; identical blobs dedupe. */
-  public async sinkMedia(tool: string, bytes: Uint8Array, mediaType: string): Promise<string> {
-    const dataUrl = `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`;
-    const id = ResourceStore.deriveId(`${tool}/${dataUrl}`);
-    const existing = await this.getMeta("asset", "", id);
-    if (existing) return `asset://${id}`;
-    await this.putInHand("asset", "", id, bytes, { src: dataUrl, mediaType });
-    return `asset://${id}`;
+  /** Content-addressed tool artifact. A readable view shares the original artifact URL. */
+  public async writeArtifact(tool: string, bytes: Uint8Array, meta: Omit<Partial<PutOptions>, "kind" | "namespace"> = {}, view?: string): Promise<string> {
+    const namespace = tool.replace(/[^a-zA-Z0-9_-]/g, "_") || "tool";
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    const viewHash = view === undefined ? "" : `-${createHash("sha256").update(view).digest("hex").slice(0, 16)}`;
+    const name = `${hash}-${createHash("sha256")
+      .update(meta.mediaType ?? "")
+      .digest("hex")
+      .slice(0, 8)}${viewHash}.blob`;
+    const viewName = view === undefined ? undefined : `${name}.view`;
+    if (viewName) await this.putBlob("artifact", namespace, viewName, Buffer.from(view!, "utf8"));
+    return this.putInHand("artifact", namespace, name, bytes, { ...meta, toolName: tool, viewName });
   }
 
   /**
@@ -126,6 +135,11 @@ export class ResourceStore {
       mediaType,
       byteLength: bytes.byteLength,
       contentHash: createHash("sha256").update(bytes).digest("hex"),
+      toolName: meta.toolName ?? existing?.toolName,
+      toolCallId: meta.toolCallId ?? existing?.toolCallId,
+      viewName: meta.viewName ?? existing?.viewName,
+      width: meta.width ?? existing?.width,
+      height: meta.height ?? existing?.height,
       createdAt: existing?.createdAt ?? Date.now(),
       fetchedAt: Date.now(),
       src: meta.src ?? existing?.src,
@@ -134,14 +148,6 @@ export class ResourceStore {
     });
     this.memory.set(this.key(kind, namespace, name), bytes);
     return kind === "asset" ? `asset://${name}` : `artifact://${namespace}/${name}`;
-  }
-
-  /** Store a tool artifact under its tool namespace; same (tool, name) is overwritten. */
-  public async putArtifact(namespace: string, name: string, bytes: Uint8Array, meta?: { mediaType?: string; filename?: string }): Promise<string> {
-    if (!NAME_RE.test(name) || name.startsWith(".")) {
-      throw new ResourceError("invalid_resource_uri", `invalid artifact name: ${name}`);
-    }
-    return this.putInHand("artifact", namespace, name, bytes, meta ?? {});
   }
 
   /** Metadata for one stored resource, or undefined. */
@@ -181,7 +187,7 @@ export class ResourceStore {
   public async names(kind: ResourceKind, namespace: string): Promise<string[]> {
     try {
       const entries = await fs.readdir(path.join(this.kindDir(kind), namespace));
-      return entries.filter((name) => NAME_RE.test(name) && !name.endsWith(".json"));
+      return entries.filter((name) => NAME_RE.test(name) && !name.endsWith(".json") && !name.endsWith(".view"));
     } catch {
       return [];
     }
@@ -250,7 +256,13 @@ export class ResourceStore {
   private async putMeta(meta: ResourceMeta): Promise<void> {
     const file = this.metaPath(meta.kind, meta.namespace, meta.name);
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify(meta, null, 2), "utf-8");
+    const temp = `${file}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temp, JSON.stringify(meta, null, 2), { flag: "wx" });
+      await fs.rename(temp, file);
+    } finally {
+      await fs.rm(temp, { force: true });
+    }
   }
 
   private async cacheGet(key: string): Promise<Uint8Array | undefined> {

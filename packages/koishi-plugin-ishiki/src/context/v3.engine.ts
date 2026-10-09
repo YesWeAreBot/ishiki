@@ -201,7 +201,7 @@ export class V3ContextInstance implements ContextEngineInstance {
   };
 
   renderMessages = (messages: readonly AgentMessage[]): AgentMessage[] => {
-    const lines = messages.map((message) => renderLine(message));
+    const lines = messages.map((message) => (message.role === "custom" && message.type === "ishiki.attachment" ? undefined : renderLine(message)));
 
     let cut = 0;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -218,7 +218,10 @@ export class V3ContextInstance implements ContextEngineInstance {
       (index < cut ? processed : fresh).push(line);
     });
 
-    return [createUserMessage(this.world().render(this.buildView(messages, processed, fresh)))];
+    return [
+      createUserMessage(this.world().render(this.buildView(messages, processed, fresh))),
+      ...messages.filter((message) => message.role === "custom" && message.type === "ishiki.attachment"),
+    ];
   };
 
   private recentTurns(entries: readonly AgentEntry[]): ReadonlySet<string> | undefined {

@@ -19,7 +19,7 @@ export interface ExecResult {
 export interface WorkspaceLayout {
   readonly cwd: string;
   readonly timeoutMs: number;
-  readonly maxOutputLength: number;
+  readonly maxExecutionOutputBytes: number;
   readonly network: boolean;
   readonly javascript: boolean;
   readonly python: boolean;
@@ -35,11 +35,6 @@ export interface WorkspaceSandbox extends WorkspaceLayout {
   write(virtualPath: string, content: string): Promise<void>;
 }
 
-/** Receives truncated tool output so nothing is lost; wired to the artifact store. */
-export interface OutputSpiller {
-  spill(tool: string, content: string): Promise<{ url: string; sandboxPath: string }>;
-}
-
 export interface SandboxOptions {
   config: WorkspaceConfig;
   home: string;
@@ -48,8 +43,6 @@ export interface SandboxOptions {
   logger: Logger;
   /** Resource center providing the /home/.ishiki mount; undefined disables it. */
   resources?: ResourceCenter;
-  /** Receives truncated bash output; undefined leaves truncation as lossy. */
-  spiller?: OutputSpiller;
 }
 
 function traversable(stat: FsStat): FsStat {
@@ -64,7 +57,7 @@ export function resolveLayout(options: SandboxOptions): WorkspaceLayout {
   return {
     cwd: config.cwd,
     timeoutMs: config.timeoutMs,
-    maxOutputLength: config.maxOutputLength,
+    maxExecutionOutputBytes: config.maxExecutionOutputBytes,
     network: config.network,
     javascript: config.javascript,
     python: config.python,
@@ -106,6 +99,7 @@ export async function createSandbox(layout: WorkspaceLayout, options: SandboxOpt
     network: layout.network ? { dangerouslyAllowFullInternetAccess: true, denyPrivateRanges: true } : undefined,
     javascript: layout.javascript,
     python: layout.python,
+    executionLimits: { maxOutputSize: layout.maxExecutionOutputBytes },
   });
 
   return {
@@ -114,11 +108,7 @@ export async function createSandbox(layout: WorkspaceLayout, options: SandboxOpt
       const timeout = AbortSignal.timeout(layout.timeoutMs);
       try {
         const result = await bash.exec(command, { signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]) });
-        const [stdout, stderr] = await Promise.all([
-          truncate(result.stdout, layout.maxOutputLength, "bash", "stdout", options.spiller),
-          truncate(result.stderr, layout.maxOutputLength, "bash", "stderr", options.spiller),
-        ]);
-        return { stdout, stderr, exitCode: result.exitCode };
+        return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
       } catch (error) {
         return { stdout: "", stderr: `bash: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
       }
@@ -130,12 +120,4 @@ export async function createSandbox(layout: WorkspaceLayout, options: SandboxOpt
       await fs.writeFile(virtualPath, content, "utf8");
     },
   };
-}
-
-async function truncate(text: string, limit: number, tool: string, stream: string, spiller?: OutputSpiller): Promise<string> {
-  if (text.length <= limit) return text;
-  const suffix = `\n[输出超出 ${limit} 字符，已截断 ${text.length - limit} 字符]`;
-  if (spiller === undefined) return `${text.slice(0, limit)}${suffix}`;
-  const { url, sandboxPath } = await spiller.spill(`${tool}-${stream}`, text);
-  return `${text.slice(0, limit)}${suffix}\n完整输出：${url}（read 它，或在沙箱里访问 ${sandboxPath}）`;
 }

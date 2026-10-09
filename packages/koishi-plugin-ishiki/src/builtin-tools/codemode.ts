@@ -60,7 +60,13 @@ export function createCodemode(config: CodemodeConfig, tools: ToolSet, conversat
     else if (!direct.has(name)) callers[name] = [CODEMODE_TOOL];
   }
   const sandboxTool = experimental_codeModeTool({
-    executionPolicy: { timeoutMs: config.timeoutMs },
+    executionPolicy: {
+      timeoutMs: config.timeoutMs,
+      maxToolInputBytes: config.maxToolInputBytes ?? 32 * 1024 * 1024,
+      maxToolOutputBytes: config.maxToolOutputBytes ?? 32 * 1024 * 1024,
+      maxResultBytes: config.maxResultBytes ?? 32 * 1024 * 1024,
+      memoryLimitBytes: config.memoryLimitBytes ?? 256 * 1024 * 1024,
+    },
     ...(conversation ? { toolDiscovery: "conversation" as const } : {}),
   });
   const caller = sandboxTool.experimental_toolCaller;

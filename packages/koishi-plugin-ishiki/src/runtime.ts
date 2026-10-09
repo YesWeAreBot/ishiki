@@ -3,16 +3,20 @@ import path from "node:path";
 
 import {
   createAgent,
+  createCustomMessage,
   createJsonlStorage,
   LanguageModelV4,
   ToolConflictError,
   type Agent,
   type AgentStorage,
+  type Tool,
   type ToolCallers,
   type ToolSet,
 } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import { h, type Logger } from "koishi";
 
+import { processOutput } from "./attachment/output.js";
+import { attachmentMessages, projectAttachments } from "./attachment/projection.js";
 import { CODEMODE_TOOL, createCodemode } from "./builtin-tools/codemode.js";
 import { FINISH_TOOL } from "./builtin-tools/finish.js";
 import { SEND_MESSAGE_TOOL } from "./builtin-tools/send-message.js";
@@ -20,10 +24,14 @@ import { createSearchTool, SEARCH_TOOL, ToolsearchState } from "./builtin-tools/
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
-import type { CodemodeConfig, ToolsearchConfig } from "./profile/index.js";
+import type { CodemodeConfig, ResourcesConfig, ToolsearchConfig } from "./profile/index.js";
 import { ResourceCenter } from "./resources/center.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
+
+const MEDIA_KINDS = { img: "image", audio: "audio", video: "video", file: "file" } as const;
+
+const MEDIA_TYPE_HINT = { image: "image/*", audio: "audio/*", video: "video/*" } as const;
 
 export interface AgentRuntimeConfig {
   id: string;
@@ -40,6 +48,7 @@ export interface AgentRuntimeConfig {
   logger: Logger;
   /** Runtime-scoped resource center; extensions register schemes on it. */
   resources: ResourceCenter;
+  attachmentPolicy?: ResourcesConfig;
 }
 
 export class AgentRuntime {
@@ -90,7 +99,11 @@ export class AgentRuntime {
             this.disposeContext?.();
           },
           transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
-          transformMessages: (messages, options) => this.context.renderMessages?.(messages, { turnId: options.turnId, signal: options.signal }) ?? messages,
+          transformMessages: async (messages, options) => {
+            const associated = attachmentMessages(messages);
+            const rendered = await (this.context.renderMessages?.(associated, { turnId: options.turnId, signal: options.signal }) ?? associated);
+            return projectAttachments(rendered, this.resources, config.attachmentPolicy ?? { imageInput: false });
+          },
           toModelMessages: (message: unknown) => {
             const custom = message as { role?: string; type?: string; data?: { text?: string } };
             if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
@@ -116,30 +129,46 @@ export class AgentRuntime {
                 merged[name] = tool;
               }
             }
-            const base = merged;
-            if (!config.codemode.enable) {
-              if (config.toolsearch.enable) {
-                // No sandbox: search itself is resident, everything else deferred.
-                const resident = new Set(this.toolsearch.residentNames());
-                const final: ToolSet = { ...base, [SEARCH_TOOL]: createSearchTool(this.toolsearch) };
-                this.toolsearch.codemodeEnabled = false;
-                this.toolsearch.refresh(final, resident, new Set());
-                return final;
-              }
-              return base;
-            }
-            const conversation = config.toolsearch.enable;
-            const sandbox = createCodemode(config.codemode, base, conversation);
+            const final: ToolSet = { ...merged };
             for (const name of Object.keys(toolCallers)) delete toolCallers[name];
-            Object.assign(toolCallers, sandbox.callers);
-            const withSandbox: ToolSet = { ...base, [CODEMODE_TOOL]: sandbox.tool };
-            if (!config.toolsearch.enable) return withSandbox;
-            // Sandbox on: search joins the direct-calling floor; deferred tools may
-            // be routed to the sandbox per the caller table.
-            const resident = new Set(this.toolsearch.residentNames());
-            const final: ToolSet = { ...withSandbox, [SEARCH_TOOL]: createSearchTool(this.toolsearch) };
-            this.toolsearch.codemodeEnabled = true;
-            this.toolsearch.refresh(final, resident, new Set(Object.keys(sandbox.callers)));
+            if (config.codemode.enable) {
+              const sandbox = createCodemode(config.codemode, merged, config.toolsearch.enable);
+              Object.assign(toolCallers, sandbox.callers);
+              final[CODEMODE_TOOL] = sandbox.tool;
+            }
+            if (config.toolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
+            for (const [name, original] of Object.entries(final)) {
+              const descriptors = Object.getOwnPropertyDescriptors(original);
+              descriptors.toModelOutput = {
+                enumerable: true,
+                configurable: true,
+                writable: true,
+                value: async (options: Parameters<NonNullable<typeof original.toModelOutput>>[0]) => {
+                  const converted = original.toModelOutput
+                    ? await original.toModelOutput.call(original, options)
+                    : typeof options.output === "string"
+                      ? { type: "text" as const, value: options.output }
+                      : { type: "json" as const, value: options.output as never };
+                  const result = await processOutput(this.resources, name, options.toolCallId, options.output, converted);
+                  if (result.items.length > 0)
+                    this.agent.send(
+                      createCustomMessage("ishiki.attachment", {
+                        source: "tool",
+                        toolName: name,
+                        toolCallId: options.toolCallId,
+                        items: result.items,
+                      }),
+                      { ifBusy: "join", trigger: false },
+                    );
+                  return result.output;
+                },
+              };
+              final[name] = Object.defineProperties({}, descriptors) as Tool;
+            }
+            if (config.toolsearch.enable) {
+              this.toolsearch.codemodeEnabled = config.codemode.enable;
+              this.toolsearch.refresh(final, new Set(this.toolsearch.residentNames()), new Set(Object.keys(toolCallers)));
+            }
             return final;
           },
           prepareStep: async (options) => {
@@ -218,20 +247,25 @@ export class AgentRuntime {
 
   async deliver(event: IshikiEvent): Promise<void> {
     if (event.type === "ishiki.message.created") {
-      const { media, content } = event.data;
+      const { content } = event.data;
       // Register each media element's source URL as an asset and rewrite the
       // message content so the model sees `<img src="asset://<id>"/>` instead
       // of an expiring CDN link. Bytes fetch lazily on first `read` (or
       // sandbox mount access); the element's remaining attributes stay in
       // place, so the model still sees whatever the platform provided.
-      if (media.length > 0) {
-        let rewritten = content;
-        for (const item of media) {
-          const url = await this.resources.store.registerAsset(item.src, { mediaType: item.mediaType, filename: item.filename, sourceInfo: item.sourceInfo });
-          rewritten = rewritten.split(item.src).join(url);
-        }
-        event.data.content = rewritten;
-      }
+      event.data.content = await h.transformAsync(content, async (element) => {
+        const kind = MEDIA_KINDS[element.type as keyof typeof MEDIA_KINDS];
+        const { src, ...rest } = element.attrs;
+        if (!kind || typeof src !== "string") return true;
+        // 除 src 外的全部平台属性原样留存：名字不确定、只作参考，不做语义假设。
+        const filename = typeof rest.file === "string" ? rest.file : typeof rest.filename === "string" ? rest.filename : undefined;
+        const url = await this.resources.store.registerAsset(src, {
+          mediaType: kind === "file" ? undefined : MEDIA_TYPE_HINT[kind],
+          filename,
+          sourceInfo: Object.keys(rest).length > 0 ? { ...rest } : undefined,
+        });
+        return h(element.type, { ...element.attrs, src: url }, ...element.children);
+      });
     }
     const trigger = (await this.wakeup.decide(event)) === "trigger";
     this.agent.send(event, { trigger, ifBusy: "join" });

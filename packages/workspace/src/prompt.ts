@@ -10,7 +10,7 @@ export function workspaceInstructions(sandbox: WorkspaceSandbox): string {
     `- ${HOME_MOUNT}：只读，本实例的数据目录（写入会失败）`,
     `- ${WORKSPACE_MOUNT}：读写，工作目录（改动落盘）`,
     ...(sandbox.resourcesMounted
-      ? [`- ${ISHIKI_MOUNT}：只读，资源中心（assets/ 是收到的媒体与工具产出的图，artifacts/ 是截断落盘的长输出；对应 read 工具的 asset:// 与 artifact:// URL）`]
+      ? [`- ${ISHIKI_MOUNT}：只读，资源中心（assets/ 是平台收到的媒体，artifacts/ 是工具媒体与完整长输出；对应 read 工具的 asset:// 与 artifact:// URL）`]
       : []),
     // 技能那几个挂载点在这里合成一行，逐个列出来只是把下面「技能」那一段重复一遍。
     ...sandbox.mounts
@@ -19,7 +19,7 @@ export function workspaceInstructions(sandbox: WorkspaceSandbox): string {
     ...(sandbox.skills.length > 0 ? [`- ${SKILLS_MOUNT}：只读，技能目录（见下）`] : []),
     `网络：${sandbox.network ? "可用，私有地址被拒绝" : "不可用"}`,
     `命令时限：${sandbox.timeoutMs} 毫秒，超时按退出码 124 返回`,
-    `bash 的 stdout 与 stderr 各自上限 ${sandbox.maxOutputLength} 字符，超出会被截断；大输出先用 wc、head、grep 收窄再看`,
+    `执行器输出安全上限 ${sandbox.maxExecutionOutputBytes} 字节；codemode 内拿到原始输出，最终返回模型的预览和归档由运行时统一处理。返回结构化结果，不自行 stringify/slice。`,
     "调用之间不保留 shell 状态：cd、别名、函数与导出变量都不跨调用，切换目录写在同一行（cd <目录> && <命令>）",
     // 附加运行时默认关，没配就没有这条命令，说清楚免得模型白试一轮。
     ...(sandbox.javascript ? ["js-exec 可用：在 QuickJS 里执行 JavaScript / TypeScript，可 require / import 一部分 node 模块，只访问得到沙箱内的文件"] : []),

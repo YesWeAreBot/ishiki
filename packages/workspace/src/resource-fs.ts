@@ -41,11 +41,9 @@ export class ResourceFs implements IFileSystem {
   async readFileBuffer(path: string): Promise<Uint8Array> {
     const parsed = this.split(path);
     if (parsed.kind === "outside" || parsed.kind === "root" || parsed.rest.length === 0) throw ENOENT(path);
-    const url = parsed.kind === "assets" ? `asset://${parsed.rest[0]}` : `artifact://${parsed.rest.join("/")}`;
     try {
-      const payload = await this.center.resolve(url);
-      if (payload.bytes !== undefined) return payload.bytes;
-      return new TextEncoder().encode(payload.content ?? "");
+      if (parsed.kind === "assets") return await this.center.store.readBytes("asset", "", parsed.rest[0]!);
+      return await this.center.store.readBytes("artifact", parsed.rest.slice(0, -1).join("/"), parsed.rest.at(-1)!);
     } catch {
       throw ENOENT(path);
     }

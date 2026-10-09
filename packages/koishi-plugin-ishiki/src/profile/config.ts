@@ -53,12 +53,28 @@ export interface CodemodeConfig {
   enable: boolean;
   direct: string[];
   timeoutMs: number;
+  maxToolInputBytes?: number;
+  maxToolOutputBytes?: number;
+  maxResultBytes?: number;
+  memoryLimitBytes?: number;
 }
 
 export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
   enable: Schema.boolean().default(false),
   direct: Schema.array(Schema.string()).default([]),
-  timeoutMs: Schema.number().default(30_000),
+  timeoutMs: Schema.number().min(1).default(30_000),
+  maxToolInputBytes: Schema.number()
+    .min(1)
+    .default(32 * 1024 * 1024),
+  maxToolOutputBytes: Schema.number()
+    .min(1)
+    .default(32 * 1024 * 1024),
+  maxResultBytes: Schema.number()
+    .min(1)
+    .default(32 * 1024 * 1024),
+  memoryLimitBytes: Schema.number()
+    .min(1)
+    .default(256 * 1024 * 1024),
 });
 
 export interface ToolsearchConfig {
@@ -125,10 +141,22 @@ export interface ProfileSettings {
 export interface ResourcesConfig {
   /** True when the profile's model can consume image file parts. */
   imageInput: boolean;
+  maxImageBytes?: number;
+  maxTotalImageBytes?: number;
+  maxImageCount?: number;
+  maxImageDimension?: number;
 }
 
 export const ResourcesConfig: Schema<ResourcesConfig> = Schema.object({
   imageInput: Schema.boolean().default(false),
+  maxImageBytes: Schema.number()
+    .min(0)
+    .default(5 * 1024 * 1024),
+  maxTotalImageBytes: Schema.number()
+    .min(0)
+    .default(10 * 1024 * 1024),
+  maxImageCount: Schema.number().min(0).default(4),
+  maxImageDimension: Schema.number().min(1).default(8000),
 });
 
 export interface ProfileConfig {

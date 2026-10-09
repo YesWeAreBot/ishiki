@@ -7,9 +7,6 @@ import { ResourceError } from "./errors.js";
 import { concreteMediaType, sniffMediaType } from "./media.js";
 import type { ResourceMeta, ResourceStore } from "./store.js";
 
-/** Max text payload inlined into a resource resolution. Larger texts must be sliced via the read tool. */
-const MAX_INLINE_TEXT_BYTES = 1024 * 1024;
-
 export { sniffMediaType } from "./media.js";
 
 export function isUtf8Text(bytes: Uint8Array): boolean {
@@ -102,14 +99,16 @@ export class ArtifactHandler implements SchemeHandler {
     const name = url.segments.at(-1)!;
     const bytes = await this.store.readBytes("artifact", url.authority, name);
     const meta = await this.store.getMeta("artifact", url.authority, name);
+    if (meta?.viewName) {
+      const payload = textPayload(url.href, new Uint8Array(await fs.readFile(path.join(path.dirname(this.locate(url)), meta.viewName))));
+      payload.mediaType = "text/plain";
+      return payload;
+    }
+    if (meta?.mediaType && !meta.mediaType.startsWith("text/") && meta.mediaType !== "application/json") {
+      return binaryPayload(url.href, bytes, meta.mediaType, meta.filename);
+    }
     if (!isUtf8Text(bytes)) {
       return binaryPayload(url.href, bytes, sniffMediaType(bytes) ?? meta?.mediaType ?? "application/octet-stream", meta?.filename);
-    }
-    if (bytes.byteLength > MAX_INLINE_TEXT_BYTES) {
-      throw new ResourceError(
-        "resource_too_large",
-        `artifact is ${bytes.byteLength} bytes; use a line selector (:1-200) or process it at /home/.ishiki/artifacts/${url.authority}/${name} in the sandbox`,
-      );
     }
     const payload = textPayload(url.href, bytes);
     payload.mediaType = meta?.mediaType;
@@ -118,6 +117,10 @@ export class ArtifactHandler implements SchemeHandler {
 
   /** Zero-fetch metadata probe. */
   public async resolveView(url: ResourceUrl, view: string): Promise<ResourcePayload> {
+    if (view === "original") {
+      const bytes = await this.store.readBytes("artifact", url.authority, url.segments.at(-1)!);
+      return textPayload(url.href, bytes);
+    }
     if (view !== "meta") throw new ResourceError("unsupported_view", `artifact scheme has no "${view}" view`);
     const name = url.segments.at(-1)!;
     const meta = await this.store.getMeta("artifact", url.authority, name);
@@ -159,9 +162,6 @@ export class LocalHandler implements SchemeHandler {
     const bytes = new Uint8Array(await fs.readFile(file));
     if (!isUtf8Text(bytes)) {
       return binaryPayload(url.href, bytes, sniffMediaType(bytes) ?? "application/octet-stream", path.basename(file));
-    }
-    if (bytes.byteLength > MAX_INLINE_TEXT_BYTES) {
-      throw new ResourceError("resource_too_large", `local file is ${bytes.byteLength} bytes; use a line selector or read it inside the sandbox at /home`);
     }
     return textPayload(url.href, bytes);
   }

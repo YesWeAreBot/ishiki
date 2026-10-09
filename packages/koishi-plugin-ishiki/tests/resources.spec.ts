@@ -174,7 +174,7 @@ describe("ResourceCenter.locate", () => {
 describe("ResourceStore artifacts", () => {
   it("round-trips bytes and metadata", async () => {
     const { store } = assemble();
-    const url = await store.putArtifact("bash", "018f3a.log", new TextEncoder().encode("line1\nline2\n"), { mediaType: "text/plain" });
+    const url = await store.putInHand("artifact", "bash", "018f3a.log", new TextEncoder().encode("line1\nline2\n"), { mediaType: "text/plain" });
     expect(url).toBe("artifact://bash/018f3a.log");
     const bytes = await store.readBytes("artifact", "bash", "018f3a.log");
     expect(new TextDecoder().decode(bytes)).toBe("line1\nline2\n");
@@ -185,23 +185,23 @@ describe("ResourceStore artifacts", () => {
 
   it("lists artifact names sorted and tool namespaces", async () => {
     const { store } = assemble();
-    await store.putArtifact("bash", "b.log", new Uint8Array([1]));
-    await store.putArtifact("bash", "a.log", new Uint8Array([2]));
-    await store.putArtifact("other", "x.log", new Uint8Array([3]));
+    await store.putInHand("artifact", "bash", "b.log", new Uint8Array([1]), {});
+    await store.putInHand("artifact", "bash", "a.log", new Uint8Array([2]), {});
+    await store.putInHand("artifact", "other", "x.log", new Uint8Array([3]), {});
     expect(await store.names("artifact", "bash")).toEqual(["a.log", "b.log"]);
     expect(await store.namespaces("artifact")).toEqual(["bash", "other"]);
   });
 
   it("rejects unsafe namespaces and names", async () => {
     const { store } = assemble();
-    await expect(store.putArtifact("../evil", "x", new Uint8Array())).rejects.toMatchObject({ code: "invalid_resource_uri" });
-    await expect(store.putArtifact("bash", ".hidden", new Uint8Array())).rejects.toMatchObject({ code: "invalid_resource_uri" });
+    await expect(store.putInHand("artifact", "../evil", "x", new Uint8Array(), {})).rejects.toMatchObject({ code: "invalid_resource_uri" });
+    await expect(store.putInHand("artifact", "bash", ".hidden", new Uint8Array(), {})).rejects.toMatchObject({ code: "invalid_resource_uri" });
   });
 
   it("spills truncated output as a text artifact", async () => {
     const { store, center } = assemble();
-    const url = await store.spillArtifact("bash-stdout", "line\n".repeat(1000));
-    expect(url).toMatch(/^artifact:\/\/bash-stdout\/.*\.log$/);
+    const url = await store.writeArtifact("bash-stdout", Buffer.from("line\n".repeat(1000)), { mediaType: "text/plain" });
+    expect(url).toMatch(/^artifact:\/\/bash-stdout\/.*\.blob$/);
     const payload = await center.resolve(url);
     expect(payload.content?.split("\n").length).toBe(1001);
   });
@@ -227,10 +227,10 @@ describe("handlers", () => {
 
   it("artifact resolve inlines utf-8 text and flags binaries", async () => {
     const { store, center } = assemble();
-    await store.putArtifact("bash", "x.log", new TextEncoder().encode("hello"));
+    await store.putInHand("artifact", "bash", "x.log", new TextEncoder().encode("hello"), {});
     const payload = await center.resolve("artifact://bash/x.log");
     expect(payload.content).toBe("hello");
-    await store.putArtifact("bash", "pic.bin", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+    await store.putInHand("artifact", "bash", "pic.bin", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]), {});
     const binary = await center.resolve("artifact://bash/pic.bin");
     expect(binary.mediaType).toBe("image/png");
     expect(binary.bytes?.[0]).toBe(0x89);

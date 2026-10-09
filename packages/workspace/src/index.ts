@@ -2,10 +2,9 @@ import { Logger, Schema, Service, type Context } from "koishi";
 import { Extension, type ExtensionContext, type ToolSet } from "koishi-plugin-ishiki";
 
 import { WorkspaceConfig } from "./config.js";
-import { ISHIKI_MOUNT } from "./mounts.js";
 import { workspaceInstructions } from "./prompt.js";
 import { SkillHandler, WorkspaceHandler } from "./resource-schemes.js";
-import { createSandbox, resolveLayout, type OutputSpiller, type WorkspaceSandbox } from "./sandbox.js";
+import { createSandbox, resolveLayout, type WorkspaceSandbox } from "./sandbox.js";
 import { skillCatalog } from "./skills.js";
 import { createWorkspaceTools } from "./tools.js";
 
@@ -29,20 +28,11 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
       root: context.root,
       dataPath: this.dataPath,
       logger: this.logger,
+      resources: context.resources,
     });
 
     let sandbox: Promise<WorkspaceSandbox> | undefined;
     let tools: ToolSet | undefined;
-    // 截断 spill：把被截断的完整输出固化成 artifact，模型可 read 或在沙箱里继续处理。
-    const spiller: OutputSpiller | undefined = context.resources
-      ? {
-          spill: async (tool, content) => {
-            const url = await context.resources.store.spillArtifact(tool, content);
-            const rest = url.slice("artifact://".length);
-            return { url, sandboxPath: `${ISHIKI_MOUNT}/artifacts/${rest}` };
-          },
-        }
-      : undefined;
     // 懒加载单例：tools 与 instructions 共用同一个沙箱。
     const box = (): Promise<WorkspaceSandbox> =>
       (sandbox ??= createSandbox(layout, {
@@ -52,7 +42,6 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
         dataPath: this.dataPath,
         logger: this.logger,
         resources: context.resources,
-        spiller,
       }));
     const disposers: Array<() => void> = [];
     // 资源 URL 面：技能内容与 workspace 持久根，与沙箱挂载同源。
@@ -87,4 +76,4 @@ namespace WorkspaceExtension {
 export default WorkspaceExtension;
 
 export { WorkspaceConfig } from "./config.js";
-export { createSandbox, resolveLayout, type OutputSpiller, type SandboxOptions, type WorkspaceSandbox } from "./sandbox.js";
+export { createSandbox, resolveLayout, type SandboxOptions, type WorkspaceSandbox } from "./sandbox.js";

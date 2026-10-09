@@ -65,6 +65,10 @@ codemode:
   # finish 固定只留目录（收尾由模型直调发起，程序里的收尾不该结束轮次）。
   direct: []
   timeoutMs: 30000 # 单次沙箱执行的总时限（毫秒）
+  maxToolInputBytes: 33554432 # 32 MiB，内部 JSON（含 base64）的有限执行预算
+  maxToolOutputBytes: 33554432
+  maxResultBytes: 33554432 # 最终结果先穿过沙箱边界，再由统一出口处理
+  memoryLimitBytes: 268435456 # 256 MiB，QuickJS 内存预算
 
 # 发消息前等多久，模拟打字
 typing:
@@ -73,12 +77,23 @@ typing:
   minDelay: 800
   maxDelay: 4000
 
-# 模型的资源能力。imageInput: true 表示所用模型能看图：read 一张图片时
-# 返回图片本身（file part）；缺省 false 时返回一行文字描述
-# （`asset://...: image/png, 12.3 KiB. This model cannot view images directly.`）。
-# 这只改数据形态，不决定模型会不会调 read —— 会看图的模型务必打开。
+# 平台图片与工具图片共用请求级附件策略。imageInput 是 profile 能力上限；
+# 开启时，models.yaml 中的模型及 failover 组内每个候选都必须声明 input: [text, image]。
+# 工具原始媒体在最终输出阶段归档为 artifact；下一 step 以带来源说明的 user/file 消息加载。
+# codemode 内 read 始终返回 JSON-safe base64，纯文本模型也可将图片传给后续工具。
+# 不自动缩放；不能加载、超过配额或不支持的媒体保留 URL 与原因说明。
 resources:
   imageInput: false
+  maxImageBytes: 5242880 # 单图 5 MiB
+  maxTotalImageBytes: 10485760 # 整次请求 10 MiB，跨平台与工具附件累计
+  maxImageCount: 4
+  maxImageDimension: 8000 # 已知尺寸的单边像素上限
+
+# read/模型文本预览共用 2000 行、30000 UTF-16 字符预算；超长结果保留前缀与完整 URL。
+# :1-200 / :50+30 选择行；#offset=N 按稳定可读视图续读，包含换行。
+# artifact://...?view=original 读取完整原始 JSON/text（仍分页），?view=meta 查看元数据。
+# 返回结构化工具结果，不自行 stringify/slice。MCP 插件旧 limits 已移入 resources。
+# workspace 旧 maxOutputLength 已移除；maxExecutionOutputBytes 默认 33554432 是执行安全上限。
 
 # 扩展包：键是包名，值是这个 profile 给它的东西。extends 只启用包附加的能力，
 # 不决定引擎：某个引擎变体可不可用，只看 `ishiki.engine.<族>.<名字>` 这个 Koishi Service

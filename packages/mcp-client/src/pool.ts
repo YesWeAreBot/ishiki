@@ -2,39 +2,23 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Logger } from "koishi";
-import type { ResourceCenter, ToolSet } from "koishi-plugin-ishiki";
+import type { ToolSet } from "koishi-plugin-ishiki";
 
 import { McpConfig, ServerConfig, type McpServer } from "./config.js";
-import { McpConnection, type OutputLimits, type OutputSpiller } from "./server.js";
+import { McpConnection } from "./server.js";
 
 export class ProfilePool {
   private readonly connections: McpConnection[] = [];
   public readonly connecting: Promise<void>;
   private users = 0;
-  private spiller?: OutputSpiller;
 
   constructor(
     public readonly directory: string,
     private readonly fallback: string,
-    private readonly limits: OutputLimits,
     private readonly logger: Logger,
   ) {
     const servers = readServers(directory, fallback, logger);
     this.connecting = this.connect(servers);
-  }
-
-  /** Attach the calling runtime's resource center so truncated output spills to its artifacts. */
-  public setResources(resources: ResourceCenter | undefined): void {
-    this.spiller = resources
-      ? {
-          spill: async (tool, content) => {
-            const url = await resources.store.spillArtifact(tool, content);
-            return { url, sandboxPath: `/home/.ishiki/artifacts/${url.slice("artifact://".length)}` };
-          },
-          sinkImage: (tool, bytes, mediaType) => resources.store.sinkMedia(tool, bytes, mediaType),
-        }
-      : undefined;
-    for (const connection of this.connections) connection.spiller = this.spiller;
   }
 
   private async connect({ mcpServers, disabledServers, enabledServers }: McpConfig): Promise<void> {
@@ -62,7 +46,7 @@ export class ProfilePool {
     const connected = await Promise.all(
       pending.map(async ({ name, server }) => {
         try {
-          const connection = await McpConnection.connect(name, server, this.limits, this.logger, this.spiller);
+          const connection = await McpConnection.connect(name, server, this.logger);
           this.logger.info(`mcp server "${name}" connected`);
           return connection;
         } catch (error) {

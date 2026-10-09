@@ -6,6 +6,7 @@ import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gat
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
 
+import { supportsImageInput } from "./attachment/capabilities.js";
 import { loadCodemode } from "./builtin-tools/codemode.js";
 import { createFinish } from "./builtin-tools/finish.js";
 import { createReadTool } from "./builtin-tools/read.js";
@@ -139,6 +140,9 @@ class Ishiki extends Service<Ishiki.Config> {
     const apply = (fiber: Context): void => {
       try {
         // profile 级装配只做一次：模型、引擎 provider、扩展 Service、instructions。
+        if (settings.resources.imageInput && !supportsImageInput(this.gateway, settings.model)) {
+          throw new Error(`profile imageInput requires declared image input on every candidate of "${settings.model}"`);
+        }
         const toolcall = ToolcallEngine.GetService(fiber, settings.toolcall.engine);
         const failover = this.gateway.groups().includes(settings.model) || (settings.failover.attempts ?? 1) > 1;
         const model = toolcall(settings.toolcall).wrap(
@@ -167,7 +171,7 @@ class Ishiki extends Service<Ishiki.Config> {
             model,
             instructions: [instructions, resourceSchemeDoc(settings.resources.imageInput)].filter(Boolean).join("\n\n"),
             tools: {
-              read: createReadTool({ center: resources, imageInput: settings.resources.imageInput }),
+              read: createReadTool({ center: resources }),
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing, resources }),
               finish: createFinish(),
             },
@@ -179,6 +183,7 @@ class Ishiki extends Service<Ishiki.Config> {
             debugStream: this.config.debugStream,
             logger: this.logger,
             resources,
+            attachmentPolicy: settings.resources,
           });
           runtimes.set(key, runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);
@@ -247,20 +252,19 @@ function renderInstructions(root: string): string {
 
 /** One-paragraph system-prompt doc for the resource URL space, driven by live extensions. */
 function resourceSchemeDoc(imageInput: boolean): string {
-  const imageLine = imageInput
-    ? "- `asset://<32-hex-id>` — media received in chat or produced by tools. `read` returns the image itself."
-    : "- `asset://<32-hex-id>` — media received in chat or produced by tools. `read` returns its metadata (you cannot view images directly).";
   return [
     "## Resources",
     "",
-    "Resources are addressed by URL and read with the `read` tool. Text slices compose on any URL:",
-    "`:1-200` (line range), `:50+30` (50 plus 30 lines), `:raw` (verbatim).",
-    "Append `?view=meta` for a cheap probe (type, size, platform info) that loads no bytes.",
-    "",
-    imageLine,
-    "- `artifact://<tool>/<name>` — captured tool output (long command logs, results). Read instead of asking for a resend.",
-    "- `local://<path>` — files under this agent's home directory.",
-    "- Extension schemes may also be available; `read` lists them if you use an unknown one.",
+    "Return structured results from codemode; do not stringify or slice media or large results. Internal tool values stay JSON-safe and unmodified. The runtime archives final media and full long results, then supplies text previews and attachment references.",
+    "Use read({url}) to read resources. Text pages contain at most 2000 lines / 30000 characters. Use :1-200 or :50+30 for lines, and the returned #offset=N continuation (UTF-16 characters, including newlines).",
+    "Append ?view=meta for metadata without downloading, or artifact ?view=original for the original JSON/text instead of its stable readable view. Original text is also paged.",
+    "- asset://<32-hex-id>: platform media, fetched lazily.",
+    "- artifact://<tool>/<name>: original tool media or full output; sandbox files are /home/.ishiki/artifacts/<tool>/<name>.",
+    "- local://<path>: files under the runtime home. Extension schemes may also be available.",
+    "read returns base64 file bytes inside codemode even for text-only models. Unchanged read files reuse their source; modified files become new artifacts.",
+    imageInput
+      ? "Attachments are projected into user image parts subject to the request-wide image quota."
+      : "Attachments remain references and descriptions because image input is disabled.",
   ].join("\n");
 }
 

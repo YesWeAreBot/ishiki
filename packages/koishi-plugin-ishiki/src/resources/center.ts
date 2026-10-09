@@ -1,8 +1,12 @@
+import * as fs from "node:fs/promises";
+import path from "node:path";
+
 import type { Awaitable } from "koishi";
 
 import { ResourceError } from "./errors.js";
-import { ArtifactHandler, AssetHandler, LocalHandler } from "./handlers.js";
+import { ArtifactHandler, AssetHandler, LocalHandler, isUtf8Text } from "./handlers.js";
 import { ResourceStore } from "./store.js";
+import { fileText, textPage, type TextPage } from "./text.js";
 
 export { ResourceError, type ResourceErrorCode } from "./errors.js";
 
@@ -40,7 +44,7 @@ export interface SchemeHandler {
 
 /**
  * A parsed resource URL: `scheme://authority/path?view` with the selector
- * chain (`:1-200`, `:raw`) peeled off separately by the read tool.
+ * chain (`:1-200`) peeled off separately by the read tool.
  */
 export interface ResourceUrl {
   scheme: string;
@@ -112,7 +116,7 @@ export class ResourceCenter {
   }
 
   /**
-   * Whether the scheme's URLs take the `:1-200` / `:raw` selector chain:
+   * Whether the scheme's URLs take the `:1-200` selector chain:
    * registered and not opaque. Unknown schemes and opaque wrappers never peel.
    */
   public acceptsSelectors(scheme: string): boolean {
@@ -148,6 +152,37 @@ export class ResourceCenter {
         return await handler.resolveView(url, url.view);
       }
       return await handler.resolve(url);
+    } catch (error) {
+      if (error instanceof ResourceError) throw error;
+      throw new ResourceError("resource_read_failed", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** Stream text from disk before applying the read budget; binary resources use resolve. */
+  public async readTextPage(input: string, range: { start?: number; end?: number; offset?: number }): Promise<TextPage | undefined> {
+    const url = ResourceCenter.parse(input);
+    if (url.query !== undefined && url.view !== "original") return undefined;
+    if (url.scheme !== "artifact" && url.scheme !== "local") return undefined;
+    let file = this.locate(input)!;
+    if (url.scheme === "artifact") {
+      const meta = await this.store.getMeta("artifact", url.authority, url.segments.at(-1)!);
+      if (!meta) throw new ResourceError("resource_not_found", `artifact not found: ${input}`);
+      if (url.view !== "original") {
+        if (meta.viewName) file = path.join(path.dirname(file), meta.viewName);
+        else if (meta.mediaType && !meta.mediaType.startsWith("text/") && meta.mediaType !== "application/json") return undefined;
+      }
+    }
+    try {
+      const handle = await fs.open(file, "r");
+      try {
+        if ((await handle.stat()).isDirectory()) return undefined;
+        const probe = Buffer.alloc(8192);
+        const { bytesRead } = await handle.read(probe, 0, probe.length, 0);
+        if (!isUtf8Text(probe.subarray(0, bytesRead))) return undefined;
+      } finally {
+        await handle.close();
+      }
+      return await textPage(fileText(file), range);
     } catch (error) {
       if (error instanceof ResourceError) throw error;
       throw new ResourceError("resource_read_failed", error instanceof Error ? error.message : String(error));

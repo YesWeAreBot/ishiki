@@ -4,23 +4,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "koishi";
-import { jsonSchema, tool, ResourceError, type ToolResultOutput, type ToolSet } from "koishi-plugin-ishiki";
+import { jsonSchema, tool, ResourceError, type ToolSet } from "koishi-plugin-ishiki";
 
 import type { McpServer } from "./config.js";
-
-export interface OutputLimits {
-  maxImageBytes: number;
-  maxTotalImageBytes: number;
-  maxImageCount: number;
-  maxOutputChars: number;
-}
-
-/** Receives truncated tool output and tool-returned media; wired to the runtime's resource center. */
-export interface OutputSpiller {
-  spill(tool: string, content: string): Promise<{ url: string; sandboxPath: string }>;
-  /** Persist a tool-returned image and return its asset:// URL. */
-  sinkImage?(tool: string, bytes: Uint8Array, mediaType: string): Promise<string>;
-}
 
 export class McpConnection {
   public instructions?: string;
@@ -33,14 +19,10 @@ export class McpConnection {
     public readonly name: string,
     private readonly client: Client,
     private readonly server: McpServer,
-    private readonly limits: OutputLimits,
     private readonly logger: Logger,
   ) {}
 
-  /** Truncated text output spills here when the calling runtime provides a resource center. */
-  public spiller?: OutputSpiller;
-
-  public static async connect(name: string, server: McpServer, limits: OutputLimits, logger: Logger, spiller?: OutputSpiller): Promise<McpConnection> {
+  public static async connect(name: string, server: McpServer, logger: Logger): Promise<McpConnection> {
     const client = new Client({ name, version: "1.0.0" });
     switch (server.type) {
       case "stdio":
@@ -56,8 +38,7 @@ export class McpConnection {
         throw new TypeError(`unsupported transport: ${(server as McpServer).type}`);
     }
 
-    const connection = new McpConnection(name, client, server, limits, logger);
-    connection.spiller = spiller;
+    const connection = new McpConnection(name, client, server, logger);
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       await connection.refresh();
     });
@@ -75,7 +56,25 @@ export class McpConnection {
         description: declared.description,
         inputSchema: jsonSchema(declared.inputSchema as Record<string, unknown>),
         execute: (params) => this.call(declared.name, params),
-        toModelOutput: ({ output }) => this.render(output as McpBlock[], exposed),
+        outputSchema: jsonSchema<McpBlock[]>({
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string" },
+              text: { type: "string" },
+              data: { type: "string", description: "Base64 media bytes" },
+              mimeType: { type: "string" },
+              resource: {
+                type: "object",
+                properties: { uri: { type: "string" }, text: { type: "string" }, blob: { type: "string" }, mimeType: { type: "string" } },
+              },
+            },
+            required: ["type"],
+            additionalProperties: true,
+          },
+        }),
+        toModelOutput: ({ output }) => ({ type: "json", value: output as never }),
       });
     }
     this.tools = Object.fromEntries(Object.entries(tools).sort(([left], [right]) => left.localeCompare(right)));
@@ -110,57 +109,6 @@ export class McpConnection {
     if ("blob" in first) return { uri: first.uri, blob: first.blob, mimeType: first.mimeType };
     return { uri: first.uri, text: first.text, mimeType: first.mimeType };
   }
-
-  private async render(blocks: McpBlock[], exposedTool: string): Promise<ToolResultOutput> {
-    const parts: NonNullable<Extract<ToolResultOutput, { type: "content" }>["value"]> = [];
-    let images = 0;
-    let totalBytes = 0;
-    const lines: string[] = [];
-
-    for (const block of blocks) {
-      if (block.type === "text") {
-        lines.push(block.text ?? "");
-        continue;
-      }
-      if (block.type !== "image") {
-        lines.push(`[${block.type}]`);
-        continue;
-      }
-
-      const mediaType = block.mimeType?.toLowerCase();
-      const bytes = block.data === undefined ? undefined : decodeImage(block.data, this.limits.maxImageBytes);
-      if (mediaType === undefined || bytes === undefined) {
-        lines.push("[图片：数据无效或大小超出限制]");
-        continue;
-      }
-      if (images >= this.limits.maxImageCount || totalBytes + bytes.byteLength > this.limits.maxTotalImageBytes) {
-        lines.push("[图片：超出本次调用的图片限额]");
-        continue;
-      }
-      images += 1;
-      totalBytes += bytes.byteLength;
-      if (this.spiller?.sinkImage) {
-        // 图片固化成 asset：上下文里只留 URL，模型要看图时再 read。
-        const assetUrl = await this.spiller.sinkImage(exposedTool, bytes, mediaType);
-        lines.push(`[image: ${assetUrl}]`);
-      } else {
-        parts.push({ type: "file", mediaType, data: { type: "data", data: bytes } });
-      }
-    }
-
-    const joined = lines.join("\n").trim();
-    let text = joined.slice(0, this.limits.maxOutputChars);
-    if (joined.length > this.limits.maxOutputChars && this.spiller !== undefined) {
-      try {
-        const { url, sandboxPath } = await this.spiller.spill(exposedTool, joined);
-        text += `\n[输出超出 ${this.limits.maxOutputChars} 字符，已截断] 完整输出：${url}（read 它，或在沙箱里访问 ${sandboxPath}）`;
-      } catch (error) {
-        this.logger.warn(`mcp spill failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    if (text.length > 0) parts.unshift({ type: "text", text });
-    return { type: "content", value: parts };
-  }
 }
 
 interface McpBlock {
@@ -168,12 +116,7 @@ interface McpBlock {
   text?: string;
   data?: string;
   mimeType?: string;
-}
-
-function decodeImage(base64: string, maxBytes: number): Uint8Array | undefined {
-  if (base64.length === 0) return undefined;
-  const bytes = Buffer.from(base64, "base64");
-  return bytes.byteLength > 0 && bytes.byteLength <= maxBytes ? bytes : undefined;
+  [key: string]: unknown;
 }
 
 function safeName(name: string): string {

@@ -1,84 +1,103 @@
-import { jsonSchema, tool, type Tool, type ToolResultOutput } from "@yesimagent/core";
+import { jsonSchema, tool, type Tool } from "@yesimagent/core";
 
-import { type ResourceCenter, type ResourcePayload } from "../resources/center.js";
+import type { ResourceCenter } from "../resources/center.js";
 import { concreteMediaType } from "../resources/media.js";
-import { splitSelectors, type Selector } from "../resources/selectors.js";
+import { splitSelectors } from "../resources/selectors.js";
+import { pageDescription, textPage, type TextPage } from "../resources/text.js";
 
 export const READ_TOOL = "read";
+
+/** JSON-safe values remain usable inside codemode regardless of model modality. */
+export type ReadResult =
+  | { type: "ishiki.read"; kind: "text"; url: string; text: string; page: TextPage; end?: number }
+  | { type: "ishiki.read"; kind: "file"; url: string; mediaType: string; data: string; byteLength: number; filename?: string };
 
 export namespace ReadTool {
   export interface Options {
     center: ResourceCenter;
-    /**
-     * When false (default), images resolve to a text description instead of
-     * file parts — the single multimodal degradation point for the pipeline.
-     */
-    imageInput: boolean;
   }
   export interface Input {
     url: string;
   }
 }
 
-const MAX_LINES_OUTPUT = 2000;
-
-/** Text returned for an image when the model cannot see images (modality off). */
-function imageFallbackText(url: string, mediaType: string, byteLength: number): string {
-  const size = byteLength >= 1024 ? `${(byteLength / 1024).toFixed(1)} KiB` : `${byteLength} B`;
-  return `${url}: ${mediaType} image, ${size}. This model cannot view images directly.`;
-}
-
-function applyLineSlice(text: string, selector: Selector & { kind: "lines" }): string {
-  const lines = text.split("\n");
-  const start = Math.max(selector.start, 1);
-  const end = Math.min(selector.end ?? lines.length, lines.length);
-  const sliced = lines.slice(start - 1, end);
-  const gutterWidth = String(end).length;
-  const body = sliced.map((line, index) => `${String(start + index).padStart(gutterWidth)}| ${line}`).join("\n");
-  if (lines.length > MAX_LINES_OUTPUT && selector.end === undefined) {
-    return `${body}\n[truncated: showing lines ${start}-${end} of ${lines.length}; continue with :N+2000]`;
-  }
-  return body;
-}
-
-function textParts(payload: ResourcePayload, selectors: readonly Selector[]): ToolResultOutput {
-  let text = payload.content ?? "";
-  for (const selector of selectors) {
-    if (selector.kind === "lines") text = applyLineSlice(text, selector);
-  }
-  return { type: "text", value: text };
-}
-
-export function createReadTool(options: ReadTool.Options): Tool<ReadTool.Input, ToolResultOutput> {
-  const { center, imageInput } = options;
-
+export function createReadTool({ center }: ReadTool.Options): Tool<ReadTool.Input, ReadResult> {
   return tool({
     description:
-      "Read a resource by URL: asset://<id> (channel media), artifact://<tool>/<name> (tool output), local://<path> (runtime home), or any scheme listed in your instructions. " +
-      "Append selectors to slice text: :1-200 (line range), :50+30 (50 plus 30 lines), :raw (verbatim). Add ?view=meta for a no-download metadata probe.",
-    inputSchema: jsonSchema<ReadTool.Input>({
-      type: "object",
-      properties: {
-        url: { type: "string", description: "resource URL, optionally with a :selector suffix" },
-      },
-      required: ["url"],
+      "Read asset://<id>, artifact://<tool>/<name>, local://<path> or extension resources. Text pages contain at most 2000 lines / 30000 characters. Use :1-200 or :50+30 for lines, #offset=N for character continuation, ?view=meta for metadata, artifact ?view=original for original JSON. File data is base64; preserve structured results when returning from codemode.",
+    inputSchema: jsonSchema<ReadTool.Input>({ type: "object", properties: { url: { type: "string" } }, required: ["url"] }),
+    outputSchema: jsonSchema<ReadResult>({
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            type: { const: "ishiki.read" },
+            kind: { const: "text" },
+            url: { type: "string" },
+            text: { type: "string" },
+            end: { type: "number" },
+            page: {
+              type: "object",
+              properties: Object.fromEntries(
+                ["text", "totalLines", "totalChars", "startLine", "endLine", "offset", "nextOffset"].map((key) => [
+                  key,
+                  { type: key === "text" ? "string" : "number" },
+                ]),
+              ),
+              required: ["text", "totalLines", "totalChars", "startLine", "endLine", "offset"],
+            },
+          },
+          required: ["type", "kind", "url", "text", "page"],
+        },
+        {
+          type: "object",
+          properties: {
+            type: { const: "ishiki.read" },
+            kind: { const: "file" },
+            url: { type: "string" },
+            mediaType: { type: "string" },
+            data: { type: "string", description: "Base64 bytes" },
+            byteLength: { type: "number" },
+            filename: { type: "string" },
+          },
+          required: ["type", "kind", "url", "mediaType", "data", "byteLength"],
+        },
+      ],
     }),
+    toModelOutput: ({ output }) =>
+      output.kind === "text"
+        ? { type: "text", value: output.text }
+        : { type: "content", value: [{ type: "file", mediaType: output.mediaType, filename: output.filename, data: { type: "data", data: output.data } }] },
     execute: async (input) => {
       const { url, selectors } = splitSelectors(input.url.trim(), (scheme) => center.acceptsSelectors(scheme));
-      const payload = await center.resolve(url);
-
-      if (payload.bytes !== undefined) {
-        const mediaType = concreteMediaType(payload.mediaType, payload.bytes);
-        if (mediaType?.startsWith("image/")) {
-          if (imageInput) {
-            return { type: "content", value: [{ type: "file", mediaType, filename: payload.filename, data: { type: "data", data: payload.bytes } }] };
-          }
-          return { type: "text", value: imageFallbackText(url, mediaType, payload.size) };
+      const range: { start?: number; end?: number; offset?: number } = {};
+      for (const selector of selectors) {
+        if (selector.kind === "offset") {
+          range.offset = selector.offset;
+          range.end = selector.end;
+        } else {
+          const base = range.start ?? 1;
+          range.start = base + selector.start - 1;
+          range.end = Math.min(range.end ?? Infinity, selector.end === undefined ? Infinity : base + selector.end - 1);
+          if (range.end === Infinity) range.end = undefined;
         }
-        return { type: "text", value: `${url}: binary ${mediaType ?? "data"}, ${payload.size} bytes` };
       }
-
-      return textParts(payload, selectors);
+      let page = await center.readTextPage(url, range);
+      if (!page) {
+        const payload = await center.resolve(url);
+        if (payload.bytes !== undefined)
+          return {
+            type: "ishiki.read",
+            kind: "file",
+            url,
+            mediaType: concreteMediaType(payload.mediaType, payload.bytes) ?? "application/octet-stream",
+            data: Buffer.from(payload.bytes).toString("base64"),
+            byteLength: payload.bytes.byteLength,
+            filename: payload.filename,
+          };
+        page = await textPage(payload.content ?? "", range);
+      }
+      return { type: "ishiki.read", kind: "text", url, text: pageDescription(page, url, range.end), page, end: range.end };
     },
   });
 }
