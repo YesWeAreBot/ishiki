@@ -5,7 +5,8 @@ import path from "node:path";
 import { ResourceCenter, ResourceStore } from "koishi-plugin-ishiki";
 import { describe, expect, it } from "vitest";
 
-import { createSandbox, resolveLayout, WorkspaceConfig, type SandboxOptions } from "../src/index.js";
+import { WorkspaceConfig } from "../src/config.js";
+import { createSandbox, resolveLayout, SandboxOptions } from "../src/sandbox.js";
 
 describe("truncation spill", () => {
   it("returns complete bash output without internal model-output archival", async () => {

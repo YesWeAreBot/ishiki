@@ -7,11 +7,6 @@ import { pageDescription, textPage, type TextPage } from "../resources/text.js";
 
 export const READ_TOOL = "read";
 
-/** JSON-safe values remain usable inside codemode regardless of model modality. */
-export type ReadResult =
-  | { type: "ishiki.read"; kind: "text"; url: string; text: string; page: TextPage; end?: number }
-  | { type: "ishiki.read"; kind: "file"; url: string; mediaType: string; data: string; byteLength: number; filename?: string };
-
 export namespace ReadTool {
   export interface Options {
     center: ResourceCenter;
@@ -19,14 +14,17 @@ export namespace ReadTool {
   export interface Input {
     url: string;
   }
+  export type Output =
+    | { type: "ishiki.read"; kind: "text"; url: string; text: string; page: TextPage; end?: number }
+    | { type: "ishiki.read"; kind: "file"; url: string; mediaType: string; data: string; byteLength: number; filename?: string };
 }
 
-export function createReadTool({ center }: ReadTool.Options): Tool<ReadTool.Input, ReadResult> {
+export function createReadTool({ center }: ReadTool.Options): Tool<ReadTool.Input, ReadTool.Output> {
   return tool({
     description:
       "Read an existing resource by asset://<id>, artifact://<tool>/<name>, local://<path> or extension URL. Inside codemode, check kind: 'file' has base64 data and mediaType; 'text' has text and page. Return the whole result to view it on the next step while preserving its source and continuation. Newly returned tool images are attached automatically; inspect that attachment before reading the same image again. Text pages contain at most 2000 lines / 30000 characters. Follow the exact continuation URL in the preview; :1-200 or :50+30 selects lines, #offset=N resumes characters, ?view=meta probes metadata, artifact ?view=original reads original JSON/text. Reading cannot bypass model modality or image quotas.",
     inputSchema: jsonSchema<ReadTool.Input>({ type: "object", properties: { url: { type: "string" } }, required: ["url"] }),
-    outputSchema: jsonSchema<ReadResult>({
+    outputSchema: jsonSchema<ReadTool.Output>({
       oneOf: [
         {
           type: "object",

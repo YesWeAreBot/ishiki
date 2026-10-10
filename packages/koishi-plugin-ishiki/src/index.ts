@@ -154,7 +154,7 @@ class Ishiki extends Service<Ishiki.Config> {
         const extensions = Object.entries(profile.extensions).map(([name, config]) => {
           const extension = Extension.GetService(fiber, name);
           try {
-            return { extension, config: extension.parse(config) };
+            return { extension, config: extension.Schema === undefined ? config : extension.Schema(config ?? {}) };
           } catch (error) {
             throw new Error(`extension "${name}" config invalid: ${error instanceof Error ? error.message : String(error)}`);
           }
@@ -182,8 +182,8 @@ class Ishiki extends Service<Ishiki.Config> {
             toolsearch: settings.toolsearch,
             debugStream: this.config.debugStream,
             logger: this.logger,
-            resources,
-            attachmentPolicy: settings.resources,
+            resources: resources,
+            attachment: settings.resources,
           });
           runtimes.set(key, runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);

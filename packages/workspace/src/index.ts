@@ -10,8 +10,7 @@ import { createWorkspaceTools } from "./tools.js";
 
 class WorkspaceExtension extends Extension<WorkspaceConfig> {
   static inject = ["ishiki"];
-  /** 扩展实例配置（profile 的 extends.workspace.config）的 Schema；插件自身的 Koishi 配置见下方 Config。 */
-  static Schema = WorkspaceConfig;
+  public readonly Schema = WorkspaceConfig;
 
   private readonly dataPath: string;
 
@@ -74,6 +73,3 @@ namespace WorkspaceExtension {
 }
 
 export default WorkspaceExtension;
-
-export { WorkspaceConfig } from "./config.js";
-export { createSandbox, resolveLayout, type SandboxOptions, type WorkspaceSandbox } from "./sandbox.js";

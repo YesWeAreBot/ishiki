@@ -48,7 +48,7 @@ export interface AgentRuntimeConfig {
   logger: Logger;
   /** Runtime-scoped resource center; extensions register schemes on it. */
   resources: ResourceCenter;
-  attachmentPolicy?: ResourcesConfig;
+  attachment?: ResourcesConfig;
 }
 
 export class AgentRuntime {
@@ -102,7 +102,7 @@ export class AgentRuntime {
           transformMessages: async (messages, options) => {
             const associated = attachmentMessages(messages);
             const rendered = await (this.context.renderMessages?.(associated, { turnId: options.turnId, signal: options.signal }) ?? associated);
-            return projectAttachments(rendered, this.resources, config.attachmentPolicy ?? { imageInput: false });
+            return projectAttachments(rendered, this.resources, config.attachment ?? { imageInput: false });
           },
           toModelMessages: (message: unknown) => {
             const custom = message as { role?: string; type?: string; data?: { text?: string } };
@@ -181,8 +181,12 @@ export class AgentRuntime {
             if (config.toolsearch.enable && options.stepNumber === 0) {
               const entry = await this.toolsearch.ensureBaselineCatalog();
               if (entry) {
-                const projected = this.toModelMessages(entry.data);
-                if (projected && projected.length > 0) messages = [...projected, ...messages];
+                const custom = entry.data as { role?: string; type?: string; data?: { text?: string } };
+                const projected =
+                  custom.role !== "custom" || custom.type !== "ishiki.tools.catalog"
+                    ? undefined
+                    : ({ role: "user", content: custom.data!.text! } as { role: "user"; content: string } | undefined);
+                if (projected) messages = [projected, ...messages];
               }
             }
             if (!config.toolsearch.enable) return { ...options, messages };
@@ -257,7 +261,6 @@ export class AgentRuntime {
         const kind = MEDIA_KINDS[element.type as keyof typeof MEDIA_KINDS];
         const { src, ...rest } = element.attrs;
         if (!kind || typeof src !== "string") return true;
-        // 除 src 外的全部平台属性原样留存：名字不确定、只作参考，不做语义假设。
         const filename = typeof rest.file === "string" ? rest.file : typeof rest.filename === "string" ? rest.filename : undefined;
         const url = await this.resources.store.registerAsset(src, {
           mediaType: kind === "file" ? undefined : MEDIA_TYPE_HINT[kind],
@@ -273,12 +276,5 @@ export class AgentRuntime {
 
   async stop(): Promise<void> {
     await this.agent.stop();
-  }
-
-  /** Projects a persisted catalog message to its model-visible form (shared with the plugin hook). */
-  private toModelMessages(message: unknown): [{ role: "user"; content: string }] | undefined {
-    const custom = message as { role?: string; type?: string; data?: { text?: string } };
-    if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
-    return [{ role: "user", content: custom.data!.text! }];
   }
 }

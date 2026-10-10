@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { processOutput } from "../src/attachment/output.js";
-import { createReadTool, type ReadResult } from "../src/builtin-tools/read.js";
+import { createReadTool, ReadTool } from "../src/builtin-tools/read.js";
 import { ResourceCenter } from "../src/resources/center.js";
 import { splitSelectors } from "../src/resources/selectors.js";
 import { ResourceStore } from "../src/resources/store.js";
@@ -22,8 +22,8 @@ afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true });
 });
 
-async function read(url: string): Promise<ReadResult> {
-  return (await createReadTool({ center }).execute!({ url }, { toolCallId: "read-1", messages: [] })) as ReadResult;
+async function read(url: string): Promise<ReadTool.Output> {
+  return (await createReadTool({ center }).execute!({ url }, { toolCallId: "read-1", messages: [] })) as ReadTool.Output;
 }
 
 describe("splitSelectors", () => {

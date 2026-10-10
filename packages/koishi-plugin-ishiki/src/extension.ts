@@ -34,7 +34,7 @@ export abstract class Extension<T = any> extends Service {
    * 与插件自身的 Koishi 配置（构造器参数、`Config` 命名空间）无关。
    * 缺省表示实例配置原样透传。
    */
-  static Schema: Schema | undefined;
+  public abstract Schema: Schema<T> | undefined;
 
   static GetName(name: string): `ishiki.ext.${string}` {
     return `ishiki.ext.${name}`;
@@ -49,12 +49,6 @@ export abstract class Extension<T = any> extends Service {
 
   public constructor(ctx: Context, name: string) {
     super(ctx, Extension.GetName(name));
-  }
-
-  /** 用 static Schema（若有）验证实例配置并补默认值；没有 Schema 就原样透传。 */
-  public parse(config: unknown): T {
-    const schema = (this.constructor as typeof Extension).Schema;
-    return (schema === undefined ? config : schema(config ?? {})) as T;
   }
 
   public abstract [Service.invoke](config: T, context: ExtensionContext): ExtensionInstance | undefined;

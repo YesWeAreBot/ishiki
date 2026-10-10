@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { ToolResultOutput } from "@yesimagent/core";
 
-import type { ReadResult } from "../builtin-tools/read.js";
+import type { ReadTool } from "../builtin-tools/read.js";
 import type { ResourceCenter } from "../resources/center.js";
 import { decodeDataUrl } from "../resources/store.js";
 import { pageDescription, textPage } from "../resources/text.js";
@@ -60,7 +60,7 @@ export async function processOutput(
 ): Promise<{ output: ToolResultOutput; items: AttachmentItem[] }> {
   if (converted.type === "error-text" || converted.type === "error-json" || converted.type === "execution-denied") return { output: converted, items: [] };
   const items: AttachmentItem[] = [];
-  const originalRead = record(original)?.type === "ishiki.read" ? (original as ReadResult) : undefined;
+  const originalRead = record(original)?.type === "ishiki.read" ? (original as ReadTool.Output) : undefined;
   const addMedia = async (node: Record<string, unknown>, mediaType: string, data: unknown, source?: string): Promise<string> => {
     const tagged = record(data);
     if (tagged?.type === "reference") return `[unloaded ${mediaType}: ${String(tagged.reference ?? "unknown")}]`;
@@ -128,7 +128,7 @@ export async function processOutput(
     for (const [key, entry] of Object.entries(node)) result[key] = await visit(entry);
     return result;
   };
-  const jsonRead = record(converted.value)?.type === "ishiki.read" ? (converted.value as unknown as ReadResult) : undefined;
+  const jsonRead = record(converted.value)?.type === "ishiki.read" ? (converted.value as unknown as ReadTool.Output) : undefined;
   const read = originalRead ?? jsonRead;
   const isBlock = (value: unknown): boolean => {
     const node = record(value);
