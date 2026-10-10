@@ -69,6 +69,28 @@ describe("attachment output", () => {
     }
     expect(await center.store.namespaces("artifact")).toEqual([]);
   });
+  it("preserves media field descriptions as JSON without extracting attachments", async () => {
+    const metadata = [
+      { type: "text", keys: ["type", "text"] },
+      { type: "image", keys: ["type", "data", "mimeType"], mimeType: "image/png" },
+    ];
+    for (const value of [metadata, metadata[1], { inspected: metadata }, [{ type: "text", text: "fields" }, metadata[1]]]) {
+      const snapshot = JSON.stringify(value);
+      const result = await process(value);
+      expect(result.output).toEqual({ type: "json", value });
+      expect(result.items).toEqual([]);
+      expect(JSON.stringify(value)).toBe(snapshot);
+    }
+    for (const type of ["image", "audio", "video", "file", "media", "image-data", "file-data"]) {
+      const value = { type, mediaType: "image/png", keys: ["data"] };
+      expect((await process(value)).output).toEqual({ type: "json", value });
+    }
+    expect(await center.store.namespaces("artifact")).toEqual([]);
+  });
+  it("still reports invalid data when a media payload is actually present", async () => {
+    await expect(process({ type: "image", mimeType: "image/png", data: "not base64!" })).rejects.toThrow("Invalid image/png media data from probe");
+    expect(await center.store.namespaces("artifact")).toEqual([]);
+  });
   it("reuses tagged artifact URLs and archives mutable local media", async () => {
     const url = await center.store.writeArtifact("source", Buffer.from(PNG, "base64"), { mediaType: "image/png" });
     const result = await process({ type: "content", value: [{ type: "file", mediaType: "image/png", data: { type: "url", url } }] });

@@ -250,21 +250,37 @@ function renderInstructions(root: string): string {
   return [template.trim(), persona].filter((part) => part.length > 0).join("\n\n");
 }
 
-/** One-paragraph system-prompt doc for the resource URL space, driven by live extensions. */
+/** Model-facing resource and attachment workflow, shared by direct tools and codemode. */
 function resourceSchemeDoc(imageInput: boolean): string {
   return [
-    "## Resources",
+    "## Tool results and attachments",
     "",
-    "Return structured results from codemode; do not stringify or slice media or large results. Internal tool values stay JSON-safe and unmodified. The runtime archives final media and full long results, then supplies text previews and attachment references.",
-    "Use read({url}) to read resources. Text pages contain at most 2000 lines / 30000 characters. Use :1-200 or :50+30 for lines, and the returned #offset=N continuation (UTF-16 characters, including newlines).",
-    "Append ?view=meta for metadata without downloading, or artifact ?view=original for the original JSON/text instead of its stable readable view. Original text is also paged.",
+    "Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the current catalog's return type to access fields. You can pass the full value or its base64 data to another tool before returning. Each codemode call starts a new program; return any data needed by your next step.",
+    "Your final return selects what you will see next: return the complete structured result to inspect its text and media; return only a status or field summary when that is all you need. Media discarded by your code is not attached. The runtime handles long-output previews and media storage; keep media structured instead of JSON.stringify(...).slice(...), which loses the image.",
+    "MCP screenshots normally return an array of blocks: {type:'text', text:'...'} and {type:'image', data:'<base64>', mimeType:'image/png'}. The image block already contains the bytes. Use its data and mimeType directly; resource.uri is only valid when the actual return type contains a resource field.",
+    "Screenshot example, when this tool is in your current catalog:",
+    "```js",
+    'const r = await tools["windows-mcp-Screenshot"]({use_annotation: false});',
+    "return r; // Keep the text and image for the next step.",
+    '// Or return r.find(x => x.type === "image"); // Keep just the image.',
+    "```",
+    "After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Inspect that image before taking another screenshot or reading the same URL again. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not load an image.",
+    imageInput
+      ? "Image input is enabled. Inspect the next step's attachment message for the image or its loading reason. A URL alone does not prove the image loaded. If a quota, unsupported format or resource error prevents loading, use the stated reason; repeating read on the same image does not bypass the policy."
+      : "Image input is disabled. You receive attachment references and descriptions, not visual content. Raw image bytes remain usable by tools inside codemode; base64 text does not let you visually inspect the image. Repeating read does not enable vision.",
+    "",
+    "## Reading and sending resources",
+    "",
     "- asset://<32-hex-id>: platform media, fetched lazily.",
     "- artifact://<tool>/<name>: original tool media or full output; sandbox files are /home/.ishiki/artifacts/<tool>/<name>.",
     "- local://<path>: files under the runtime home. Extension schemes may also be available.",
-    "read returns base64 file bytes inside codemode even for text-only models. Unchanged read files reuse their source; modified files become new artifacts.",
-    imageInput
-      ? "Attachments are projected into user image parts subject to the request-wide image quota."
-      : "Attachments remain references and descriptions because image input is disabled.",
+    "Use read({url}) when you need an existing resource. Inside codemode it returns {type:'ishiki.read', kind:'file', url, mediaType, data, byteLength, filename?} for files; data is base64. Text returns {type:'ishiki.read', kind:'text', url, text, page, end?}. Check kind before accessing data or text, and preserve the whole result when returning so media provenance and continuation remain available.",
+    "```js",
+    'const result = await tools.read({url: "artifact://<tool>/<name>"});',
+    "return result; // The runtime reuses unchanged media and displays text with continuation.",
+    "```",
+    "Text pages contain at most 2000 lines / 30000 characters. Follow the exact Continue: read({url: ...}) anchor shown in the preview to resume. :1-200 or :50+30 selects lines; #offset=N counts UTF-16 characters in the stable readable view, including newlines. Append ?view=meta for metadata without downloading, or artifact ?view=original for original JSON/text (also paged).",
+    'To send an existing image to the user, call send_message with mode:"element" and messages:[\'<img src="artifact://<tool>/<name>"/>\']; asset:// URLs also work. Use the actual resource URL from the result. A screenshot or attachment return only makes it available to you; send_message is what sends it to the user.',
   ].join("\n");
 }
 

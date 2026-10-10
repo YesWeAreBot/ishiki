@@ -12,6 +12,15 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
+/** A media label alone may describe fields; extraction also requires a payload or source URL. */
+function isMediaNode(node: Record<string, unknown>): boolean {
+  return (
+    ["image", "audio", "video", "file", "media", "image-data", "file-data"].includes(String(node.type)) &&
+    typeof (node.mediaType ?? node.mimeType) === "string" &&
+    (node.data != null || (typeof node.url === "string" && node.url.length > 0))
+  );
+}
+
 /** Inspect dimensions without decoding, resizing or changing image bytes. */
 export function imageSize(bytes: Uint8Array): { width?: number; height?: number } {
   const data = Buffer.from(bytes);
@@ -106,10 +115,7 @@ export async function processOutput(
         return addMedia(node, node.mediaType, node.data, typeof node.url === "string" ? node.url : undefined);
     }
     if (node.type === "content" && Array.isArray(node.value)) return visit(node.value);
-    if (
-      ["image", "audio", "video", "file", "media", "image-data", "file-data"].includes(String(node.type)) &&
-      typeof (node.mediaType ?? node.mimeType) === "string"
-    ) {
+    if (isMediaNode(node)) {
       return addMedia(node, String(node.mediaType ?? node.mimeType), node.data, typeof node.url === "string" ? node.url : originalRead?.url);
     }
     if (node.type === "resource" && record(node.resource)) {
@@ -124,7 +130,17 @@ export async function processOutput(
   };
   const jsonRead = record(converted.value)?.type === "ishiki.read" ? (converted.value as unknown as ReadResult) : undefined;
   const read = originalRead ?? jsonRead;
-  const isBlock = (value: unknown): boolean => ["text", "image", "audio", "video", "file", "resource", "resource_link"].includes(String(record(value)?.type));
+  const isBlock = (value: unknown): boolean => {
+    const node = record(value);
+    if (!node) return false;
+    if (node.type === "text") return typeof node.text === "string";
+    if (node.type === "resource") {
+      const resource = record(node.resource);
+      return typeof resource?.blob === "string" || typeof resource?.text === "string";
+    }
+    if (node.type === "resource_link") return typeof node.uri === "string";
+    return isMediaNode(node);
+  };
   const content =
     converted.type === "content" ||
     record(converted.value)?.type === "content" ||

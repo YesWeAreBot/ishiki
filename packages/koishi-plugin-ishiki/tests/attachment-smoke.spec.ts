@@ -160,6 +160,44 @@ function results(messages: AgentMessage[]) {
 const emptyInput = jsonSchema({ type: "object", properties: {} });
 
 describe("real Agent / codemode / provider smoke", () => {
+  it.each([true, false])("keeps screenshot field inspection as JSON with codemode=%s", async (codemode) => {
+    const blocks = [
+      { type: "text", text: "fixture" },
+      { type: "image", mimeType: "image/png", data: PNG.toString("base64") },
+    ];
+    const inspect = (values: typeof blocks) => values.map((x) => ({ type: x.type, keys: Object.keys(x), mimeType: x.mimeType }));
+    const metadata = JSON.parse(JSON.stringify(inspect(blocks)));
+    const probe = await scenario({
+      codemode,
+      tools: {
+        Screenshot: tool({ inputSchema: emptyInput, execute: async () => blocks }),
+        inspect: tool({ inputSchema: emptyInput, execute: async () => inspect(blocks) }),
+      },
+      steps: (index) =>
+        index === 0
+          ? [
+              {
+                name: codemode ? "codemode" : "inspect",
+                id: "inspection",
+                input: codemode
+                  ? {
+                      js: "const r = await tools.Screenshot({}); return r.map(x => ({type: x.type, keys: Object.keys(x), mimeType: x.mimeType, uri: x.resource && x.resource.uri}));",
+                    }
+                  : {},
+              },
+            ]
+          : [{ name: "finish", input: {} }],
+    });
+    const messages = await probe.run();
+    expect(results(messages)[0]?.output).toEqual({ type: "json", value: metadata });
+    expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toEqual([]);
+    expect(await probe.resources.store.namespaces("artifact")).toEqual([]);
+    expect(probe.bodies).toHaveLength(2);
+    expect(imageParts(probe.bodies[1])).toHaveLength(0);
+    const toolResult = probe.bodies[1].messages.find((m: any) => m.role === "tool");
+    expect(JSON.parse(toolResult.content)).toEqual(metadata);
+  });
+
   it("passes a result over 1 MiB to a second host tool, archives only the outer return, then sends a user image", async () => {
     const bytes = Buffer.concat([PNG, Buffer.alloc(900000)]);
     const base64 = bytes.toString("base64");

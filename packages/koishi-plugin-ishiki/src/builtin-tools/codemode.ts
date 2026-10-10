@@ -2,6 +2,7 @@ import type { DIRECT_TOOL_CALL, experimental_codeModeTool } from "@ai-sdk/code-m
 import type { Tool, ToolCallers, ToolSet } from "@yesimagent/core";
 
 import type { CodemodeConfig } from "../profile/index.js";
+import { buildCodeModeToolDescription } from "./vendor/tool-prompt.js";
 
 const CODEMODE_PACKAGE = "@ai-sdk/code-mode";
 
@@ -92,13 +93,17 @@ export function createCodemode(config: CodemodeConfig, tools: ToolSet, conversat
     caller.type === "local"
       ? {
           ...caller,
-          bind: (host: ToolSet) => caller.bind(bindWithDiagnostics(host)),
+          bind: (host: ToolSet) => ({
+            ...caller.bind(bindWithDiagnostics(host)),
+            description: buildCodeModeToolDescription(host, conversation ? "conversation" : "description"),
+          }),
           ...(conversation ? { prepareModelMessage: () => null } : {}),
         }
       : caller;
 
   const exposed: Record<string, unknown> = {};
   for (const key of Object.keys(sandboxTool)) exposed[key] = (sandboxTool as Record<string, unknown>)[key];
+  exposed.description = buildCodeModeToolDescription({}, conversation ? "conversation" : "description");
   exposed.experimental_toolCaller = exposedCaller;
   return { tool: exposed as Tool, callers };
 }

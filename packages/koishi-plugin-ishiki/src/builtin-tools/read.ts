@@ -24,7 +24,7 @@ export namespace ReadTool {
 export function createReadTool({ center }: ReadTool.Options): Tool<ReadTool.Input, ReadResult> {
   return tool({
     description:
-      "Read asset://<id>, artifact://<tool>/<name>, local://<path> or extension resources. Text pages contain at most 2000 lines / 30000 characters. Use :1-200 or :50+30 for lines, #offset=N for character continuation, ?view=meta for metadata, artifact ?view=original for original JSON. File data is base64; preserve structured results when returning from codemode.",
+      "Read an existing resource by asset://<id>, artifact://<tool>/<name>, local://<path> or extension URL. Inside codemode, check kind: 'file' has base64 data and mediaType; 'text' has text and page. Return the whole result to view it on the next step while preserving its source and continuation. Newly returned tool images are attached automatically; inspect that attachment before reading the same image again. Text pages contain at most 2000 lines / 30000 characters. Follow the exact continuation URL in the preview; :1-200 or :50+30 selects lines, #offset=N resumes characters, ?view=meta probes metadata, artifact ?view=original reads original JSON/text. Reading cannot bypass model modality or image quotas.",
     inputSchema: jsonSchema<ReadTool.Input>({ type: "object", properties: { url: { type: "string" } }, required: ["url"] }),
     outputSchema: jsonSchema<ReadResult>({
       oneOf: [

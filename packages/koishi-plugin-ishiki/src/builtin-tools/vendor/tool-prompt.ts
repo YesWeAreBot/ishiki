@@ -5,7 +5,7 @@
  * Local changes (keep minimal so future upstream diffs stay readable):
  * - imports resolved from "@yesimagent/core" / local types
  * - `renderToolCatalog` exported for direct-calling catalog rendering
- * - no functional changes
+ * - Ishiki attachment workflow reminder; examples retain full results
  */
 import { asSchema, Tool } from "@yesimagent/core";
 
@@ -32,6 +32,7 @@ export function buildCodeModeToolDescription(tools: CodeModeToolSet, toolDiscove
     "",
     "Put the full program in `js`; top-level `await`/`return` work. Return a JSON-serializable result.",
     "Call host tools only as async `tools.name(input)`; await each or use `Promise.all` for independent calls.",
+    "Host tools return raw JSON-safe values inside this program. Return complete structured results to retain media and read provenance; the runtime supplies text previews and separate attachments on the next step. See the system instructions for the attachment workflow.",
     toolDiscovery === "description"
       ? "Use exact names/types below. `JSON.parse`/`JSON.stringify` are available."
       : "Use exact names/types from the latest capability update. `JSON.parse`/`JSON.stringify` are available.",
@@ -63,6 +64,7 @@ export function buildCodeModeToolCatalogMessage(tools: CodeModeToolSet): string 
     "Code mode capability update.",
     "",
     "This catalog replaces all previous code mode capability catalogs. Only the tools listed below are currently available through `tools`.",
+    "These return types describe raw values inside codemode. Return complete structured results to retain media and read provenance; follow the system instructions for final previews and attachments.",
     "",
     "Tools:",
     typeBlock,
@@ -109,8 +111,7 @@ function renderToolType([toolName, tool]: [string, CodeModeToolSet[string]]): st
 function renderToolExamples(toolEntries: Array<[string, CodeModeToolSet[string]]>): string[] {
   if (toolEntries.length === 1) {
     const toolEntry = toolEntries[0]!;
-    const projection = renderToolProjection("result", toolEntry[1]);
-    return [`const result = await ${renderToolExampleCall(toolEntry)};`, `return ${projection};`];
+    return [`const result = await ${renderToolExampleCall(toolEntry)};`, "return result;"];
   }
 
   const variableNames = uniqueToolVariableNames(toolEntries.map(([toolName]) => toolName));
@@ -120,10 +121,7 @@ function renderToolExamples(toolEntries: Array<[string, CodeModeToolSet[string]]
     ...calls,
     "]);",
     "return {",
-    ...toolEntries.map(([toolName, tool], index) => {
-      const projection = renderToolProjection(variableNames[index]!, tool);
-      return `  ${formatObjectKey(toolName)}: ${projection},`;
-    }),
+    ...toolEntries.map(([toolName], index) => `  ${formatObjectKey(toolName)}: ${variableNames[index]!},`),
     "};",
   ];
 }
@@ -132,21 +130,6 @@ function renderToolExampleCall([toolName, tool]: [string, CodeModeToolSet[string
   const schema = resolveInputSchema(tool);
   const input = firstInputExample(tool) ?? (schema === undefined ? {} : sampleFromSchema(schema, schema));
   return `tools${formatPropertyAccess(toolName)}(${JSON.stringify(input)})`;
-}
-
-function renderToolProjection(variableName: string, tool: CodeModeToolSet[string]): string {
-  const field = firstObjectProperty(resolveOutputSchema(tool));
-  if (field === undefined) {
-    return variableName;
-  }
-  return `{ ${formatObjectKey(field)}: ${variableName}${formatPropertyAccess(field)} }`;
-}
-
-function firstObjectProperty(schema: JsonSchema | undefined): string | undefined {
-  if (schema === undefined || !isRecord(schema.properties)) {
-    return undefined;
-  }
-  return Object.entries(schema.properties).find((entry) => isRecord(entry[1]))?.[0];
 }
 
 function resolveInputSchema(tool: CodeModeToolSet[string]): JsonSchema | undefined {
