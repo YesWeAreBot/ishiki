@@ -3,20 +3,17 @@ import path from "node:path";
 
 import {
   createAgent,
-  createCustomMessage,
   createJsonlStorage,
   LanguageModelV4,
   ToolConflictError,
   type Agent,
   type AgentStorage,
-  type Tool,
   type ToolCallers,
   type ToolSet,
 } from "@yesimagent/core";
-import { h, type Logger } from "koishi";
+import type { Logger } from "koishi";
 
-import { processOutput } from "./attachment/output.js";
-import { attachmentMessages, projectAttachments } from "./attachment/projection.js";
+import { Attachment, type AttachmentConfig } from "./attachment/index.js";
 import { CODEMODE_TOOL, createCodemode } from "./builtin-tools/codemode.js";
 import { FINISH_TOOL } from "./builtin-tools/finish.js";
 import { SEND_MESSAGE_TOOL } from "./builtin-tools/send-message.js";
@@ -24,14 +21,10 @@ import { createSearchTool, SEARCH_TOOL, ToolsearchState } from "./builtin-tools/
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
-import type { CodemodeConfig, ResourcesConfig, ToolsearchConfig } from "./profile/index.js";
+import type { CodemodeConfig, ToolsearchConfig } from "./profile/index.js";
 import { ResourceCenter } from "./resources/center.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
-
-const MEDIA_KINDS = { img: "image", audio: "audio", video: "video", file: "file" } as const;
-
-const MEDIA_TYPE_HINT = { image: "image/*", audio: "audio/*", video: "video/*" } as const;
 
 export interface AgentRuntimeConfig {
   id: string;
@@ -48,7 +41,7 @@ export interface AgentRuntimeConfig {
   logger: Logger;
   /** Runtime-scoped resource center; extensions register schemes on it. */
   resources: ResourceCenter;
-  attachment?: ResourcesConfig;
+  attachment: AttachmentConfig;
 }
 
 export class AgentRuntime {
@@ -56,12 +49,13 @@ export class AgentRuntime {
   readonly home: string;
   readonly storage: AgentStorage;
   readonly resources: ResourceCenter;
+  readonly context: ContextEngineInstance;
+  agent!: Agent;
 
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
-  private readonly context: ContextEngineInstance;
   private readonly extensions: ExtensionInstance[];
-  private readonly agent: Agent;
+  private readonly attachment: Attachment;
   private readonly toolsearch: ToolsearchState;
 
   private disposeContext?: () => void;
@@ -75,6 +69,7 @@ export class AgentRuntime {
     this.context = config.context;
     this.extensions = config.extensions;
     this.resources = config.resources;
+    this.attachment = new Attachment(config.attachment, config.resources, this);
     this.toolsearch = new ToolsearchState(config.toolsearch);
 
     mkdirSync(this.home, { recursive: true });
@@ -99,11 +94,7 @@ export class AgentRuntime {
             this.disposeContext?.();
           },
           transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
-          transformMessages: async (messages, options) => {
-            const associated = attachmentMessages(messages);
-            const rendered = await (this.context.renderMessages?.(associated, { turnId: options.turnId, signal: options.signal }) ?? associated);
-            return projectAttachments(rendered, this.resources, config.attachment ?? { imageInput: false });
-          },
+          transformMessages: (messages, options) => this.attachment.project(messages, options),
           toModelMessages: (message: unknown) => {
             const custom = message as { role?: string; type?: string; data?: { text?: string } };
             if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
@@ -137,39 +128,12 @@ export class AgentRuntime {
               final[CODEMODE_TOOL] = sandbox.tool;
             }
             if (config.toolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
-            for (const [name, original] of Object.entries(final)) {
-              const descriptors = Object.getOwnPropertyDescriptors(original);
-              descriptors.toModelOutput = {
-                enumerable: true,
-                configurable: true,
-                writable: true,
-                value: async (options: Parameters<NonNullable<typeof original.toModelOutput>>[0]) => {
-                  const converted = original.toModelOutput
-                    ? await original.toModelOutput.call(original, options)
-                    : typeof options.output === "string"
-                      ? { type: "text" as const, value: options.output }
-                      : { type: "json" as const, value: options.output as never };
-                  const result = await processOutput(this.resources, name, options.toolCallId, options.output, converted);
-                  if (result.items.length > 0)
-                    this.agent.send(
-                      createCustomMessage("ishiki.attachment", {
-                        source: "tool",
-                        toolName: name,
-                        toolCallId: options.toolCallId,
-                        items: result.items,
-                      }),
-                      { ifBusy: "join", trigger: false },
-                    );
-                  return result.output;
-                },
-              };
-              final[name] = Object.defineProperties({}, descriptors) as Tool;
-            }
+            const wrapped = this.attachment.wrap(final);
             if (config.toolsearch.enable) {
               this.toolsearch.codemodeEnabled = config.codemode.enable;
               this.toolsearch.refresh(final, new Set(this.toolsearch.residentNames()), new Set(Object.keys(toolCallers)));
             }
-            return final;
+            return wrapped;
           },
           prepareStep: async (options) => {
             // The baseline catalog must join the FIRST request itself: joined messages only
@@ -251,24 +215,8 @@ export class AgentRuntime {
 
   async deliver(event: IshikiEvent): Promise<void> {
     if (event.type === "ishiki.message.created") {
-      const { content } = event.data;
-      // Register each media element's source URL as an asset and rewrite the
-      // message content so the model sees `<img src="asset://<id>"/>` instead
-      // of an expiring CDN link. Bytes fetch lazily on first `read` (or
-      // sandbox mount access); the element's remaining attributes stay in
-      // place, so the model still sees whatever the platform provided.
-      event.data.content = await h.transformAsync(content, async (element) => {
-        const kind = MEDIA_KINDS[element.type as keyof typeof MEDIA_KINDS];
-        const { src, ...rest } = element.attrs;
-        if (!kind || typeof src !== "string") return true;
-        const filename = typeof rest.file === "string" ? rest.file : typeof rest.filename === "string" ? rest.filename : undefined;
-        const url = await this.resources.store.registerAsset(src, {
-          mediaType: kind === "file" ? undefined : MEDIA_TYPE_HINT[kind],
-          filename,
-          sourceInfo: Object.keys(rest).length > 0 ? { ...rest } : undefined,
-        });
-        return h(element.type, { ...element.attrs, src: url }, ...element.children);
-      });
+      const { platform, selfId, channelId, messageId, content } = event.data;
+      event.data.content = await this.attachment.capture(content, { platform, selfId, channelId, messageId });
     }
     const trigger = (await this.wakeup.decide(event)) === "trigger";
     this.agent.send(event, { trigger, ifBusy: "join" });

@@ -140,7 +140,7 @@ class Ishiki extends Service<Ishiki.Config> {
     const apply = (fiber: Context): void => {
       try {
         // profile 级装配只做一次：模型、引擎 provider、扩展 Service、instructions。
-        if (settings.resources.imageInput && !supportsImageInput(this.gateway, settings.model)) {
+        if (settings.attachment.imageInput && !supportsImageInput(this.gateway, settings.model)) {
           throw new Error(`profile imageInput requires declared image input on every candidate of "${settings.model}"`);
         }
         const toolcall = ToolcallEngine.GetService(fiber, settings.toolcall.engine);
@@ -169,7 +169,7 @@ class Ishiki extends Service<Ishiki.Config> {
             id: key,
             home,
             model,
-            instructions: [instructions, resourceSchemeDoc(settings.resources.imageInput)].filter(Boolean).join("\n\n"),
+            instructions: [instructions, resourceSchemeDoc(settings.attachment.imageInput)].filter(Boolean).join("\n\n"),
             tools: {
               read: createReadTool({ center: resources }),
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing, resources }),
@@ -183,7 +183,7 @@ class Ishiki extends Service<Ishiki.Config> {
             debugStream: this.config.debugStream,
             logger: this.logger,
             resources: resources,
-            attachment: settings.resources,
+            attachment: settings.attachment,
           });
           runtimes.set(key, runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);
@@ -255,16 +255,17 @@ function resourceSchemeDoc(imageInput: boolean): string {
   return [
     "## Tool results and attachments",
     "",
-    "Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the current catalog's return type to access fields. You can pass the full value or its base64 data to another tool before returning. Each codemode call starts a new program; return any data needed by your next step.",
-    "Your final return selects what you will see next: return the complete structured result to inspect its text and media; return only a status or field summary when that is all you need. Media discarded by your code is not attached. The runtime handles long-output previews and media storage; keep media structured instead of JSON.stringify(...).slice(...), which loses the image.",
-    "MCP screenshots normally return an array of blocks: {type:'text', text:'...'} and {type:'image', data:'<base64>', mimeType:'image/png'}. The image block already contains the bytes. Use its data and mimeType directly; resource.uri is only valid when the actual return type contains a resource field.",
-    "Screenshot example, when this tool is in your current catalog:",
+    "Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the current catalog's return type to access fields, and pass raw values between tools freely; nothing is archived, truncated, or attached inside codemode. Each codemode call starts a new program; return any data needed by your next step.",
+    "Your codemode return is what you will see next step. To carry media out, include an optional top-level `attachment` field holding a plain array of media blocks — nothing else is scanned for media:",
+    '- an MCP image/audio block: {type: "image", mimeType: "image/png", data: "<base64>"}',
+    '- a read file result, as returned: {type: "file", url, mediaType, data, byteLength, filename?}',
+    '- an embedded MCP resource: {type: "resource", resource: {uri, mimeType, blob}}',
+    "The runtime stores each block's bytes, replaces the payload with an artifact:// URL, and supplies the media as an attachment on the next step. Everything outside the attachment array stays plain JSON, subject to the same text budget.",
     "```js",
-    'const r = await tools["windows-mcp-Screenshot"]({use_annotation: false});',
-    "return r; // Keep the text and image for the next step.",
-    '// Or return r.find(x => x.type === "image"); // Keep just the image.',
+    'const shot = await tools["windows-mcp-Screenshot"]({use_annotation: false});',
+    "return { text: shot[0].text, attachment: [shot[1]] }; // keep the text and carry the image out",
     "```",
-    "After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Inspect that image before taking another screenshot or reading the same URL again. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not load an image.",
+    "After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Inspect that image before taking another screenshot. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not carry media out.",
     imageInput
       ? "Image input is enabled. Inspect the next step's attachment message for the image or its loading reason. A URL alone does not prove the image loaded. If a quota, unsupported format or resource error prevents loading, use the stated reason; repeating read on the same image does not bypass the policy."
       : "Image input is disabled. You receive attachment references and descriptions, not visual content. Raw image bytes remain usable by tools inside codemode; base64 text does not let you visually inspect the image. Repeating read does not enable vision.",
@@ -272,14 +273,14 @@ function resourceSchemeDoc(imageInput: boolean): string {
     "## Reading and sending resources",
     "",
     "- asset://<32-hex-id>: platform media, fetched lazily.",
-    "- artifact://<tool>/<name>: original tool media or full output; sandbox files are /home/.ishiki/artifacts/<tool>/<name>.",
+    "- artifact://<tool>/<name>: full tool output or media; sandbox files are /home/.ishiki/artifacts/<tool>/<name>.",
     "- local://<path>: files under the runtime home. Extension schemes may also be available.",
-    "Use read({url}) when you need an existing resource. Inside codemode it returns {type:'ishiki.read', kind:'file', url, mediaType, data, byteLength, filename?} for files; data is base64. Text returns {type:'ishiki.read', kind:'text', url, text, page, end?}. Check kind before accessing data or text, and preserve the whole result when returning so media provenance and continuation remain available.",
+    "read({url}) returns the full content of the requested line range as plain text, or {type:'file', url, mediaType, data(base64), byteLength, filename?} for binary files. :1-200 or :50+30 selects lines; whole reads are size-capped. ?view=meta probes metadata without fetching.",
     "```js",
-    'const result = await tools.read({url: "artifact://<tool>/<name>"});',
-    "return result; // The runtime reuses unchanged media and displays text with continuation.",
+    'const image = await tools.read({url: "asset://<id>"});',
+    "return { attachment: [image] }; // carry the media to the next step",
     "```",
-    "Text pages contain at most 2000 lines / 30000 characters. Follow the exact Continue: read({url: ...}) anchor shown in the preview to resume. :1-200 or :50+30 selects lines; #offset=N counts UTF-16 characters in the stable readable view, including newlines. Append ?view=meta for metadata without downloading, or artifact ?view=original for original JSON/text (also paged).",
+    'Direct results show at most 2000 lines / 30000 characters with a Continue anchor; follow the exact read({url: "..."}) anchor shown in the preview to resume from that line. A single line longer than the budget is cut and its remainder is only reachable inside codemode or the sandbox.',
     'To send an existing image to the user, call send_message with mode:"element" and messages:[\'<img src="artifact://<tool>/<name>"/>\']; asset:// URLs also work. Use the actual resource URL from the result. A screenshot or attachment return only makes it available to you; send_message is what sends it to the user.',
   ].join("\n");
 }

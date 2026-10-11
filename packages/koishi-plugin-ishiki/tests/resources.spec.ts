@@ -198,12 +198,15 @@ describe("ResourceStore artifacts", () => {
     await expect(store.putInHand("artifact", "bash", ".hidden", new Uint8Array(), {})).rejects.toMatchObject({ code: "invalid_resource_uri" });
   });
 
-  it("spills truncated output as a text artifact", async () => {
+  it("writes content-addressed artifacts with readable names", async () => {
     const { store, center } = assemble();
     const url = await store.writeArtifact("bash-stdout", Buffer.from("line\n".repeat(1000)), { mediaType: "text/plain" });
-    expect(url).toMatch(/^artifact:\/\/bash-stdout\/.*\.blob$/);
+    expect(url).toMatch(/^artifact:\/\/bash-stdout\/[a-f0-9]{16}\.bin$/);
     const payload = await center.resolve(url);
     expect(payload.content?.split("\n").length).toBe(1001);
+    // the same bytes map to the same name: replays overwrite idempotently
+    const again = await store.writeArtifact("bash-stdout", Buffer.from("line\n".repeat(1000)), { mediaType: "text/plain" });
+    expect(again).toBe(url);
   });
 });
 

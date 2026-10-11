@@ -1,12 +1,11 @@
 import * as fs from "node:fs/promises";
-import path from "node:path";
 
 import type { Awaitable } from "koishi";
 
 import { ResourceError } from "./errors.js";
 import { ArtifactHandler, AssetHandler, LocalHandler, isUtf8Text } from "./handlers.js";
 import { ResourceStore } from "./store.js";
-import { fileText, textPage, type TextPage } from "./text.js";
+import { fileText, selectLines } from "./text.js";
 
 export { ResourceError, type ResourceErrorCode } from "./errors.js";
 
@@ -25,7 +24,6 @@ export interface ResourcePayload {
   /** Extra model-facing context (e.g. "metadata only" notes). */
   notes?: string[];
 }
-
 /**
  * Per-runtime handler for one URL scheme. Handlers own their scheme's path
  * semantics entirely; the center owns routing, the view/selector grammar, and
@@ -158,20 +156,17 @@ export class ResourceCenter {
     }
   }
 
-  /** Stream text from disk before applying the read budget; binary resources use resolve. */
-  public async readTextPage(input: string, range: { start?: number; end?: number; offset?: number }): Promise<TextPage | undefined> {
+  /**
+   * Stream text lines from a file-backed resource (artifact://, local://)
+   * without loading the whole payload first. Returns undefined when the URL
+   * carries a view, points at another scheme, or is not UTF-8 text — callers
+   * fall back to {@link resolve}, which also materializes lazy assets.
+   */
+  public async readTextLines(input: string, range: { start?: number; end?: number }): Promise<string | undefined> {
     const url = ResourceCenter.parse(input);
-    if (url.query !== undefined && url.view !== "original") return undefined;
-    if (url.scheme !== "artifact" && url.scheme !== "local") return undefined;
-    let file = this.locate(input)!;
-    if (url.scheme === "artifact") {
-      const meta = await this.store.getMeta("artifact", url.authority, url.segments.at(-1)!);
-      if (!meta) throw new ResourceError("resource_not_found", `artifact not found: ${input}`);
-      if (url.view !== "original") {
-        if (meta.viewName) file = path.join(path.dirname(file), meta.viewName);
-        else if (meta.mediaType && !meta.mediaType.startsWith("text/") && meta.mediaType !== "application/json") return undefined;
-      }
-    }
+    if (url.query !== undefined || (url.scheme !== "artifact" && url.scheme !== "local")) return undefined;
+    const file = this.locate(input);
+    if (file === undefined) return undefined;
     try {
       const handle = await fs.open(file, "r");
       try {
@@ -182,9 +177,10 @@ export class ResourceCenter {
       } finally {
         await handle.close();
       }
-      return await textPage(fileText(file), range);
+      return await selectLines(fileText(file), range);
     } catch (error) {
       if (error instanceof ResourceError) throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw new ResourceError("resource_read_failed", error instanceof Error ? error.message : String(error));
     }
   }

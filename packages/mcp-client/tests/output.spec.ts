@@ -50,11 +50,27 @@ it("keeps real MCP text and image blocks intact until the outer conversion", asy
     expect(output).toEqual(blocks);
     expect(exposed.outputSchema).toBeDefined();
     expect(await center.store.namespaces("artifact")).toEqual([]);
+    // Native conversion is a pure format change: blocks become content parts.
     const native = await exposed.toModelOutput!({ toolCallId: "c", input: {}, output });
-    const processed = await processOutput(center, "fixture-screenshot", "c", output, native);
+    expect(native).toMatchObject({
+      type: "content",
+      value: [
+        { type: "text", text: text },
+        { type: "file", mediaType: "image/png", data: { type: "data", data: image } },
+      ],
+    });
+    // The unified wrapper externalizes the media; the long text overflows the
+    // shared budget, so the result becomes a truncated preview over an artifact.
+    const processed = await processOutput(center, "fixture-screenshot", native);
     expect(processed.items).toHaveLength(1);
     expect(JSON.stringify(processed.output)).not.toContain(image);
     expect(processed.output).toMatchObject({ type: "text", value: expect.stringContaining("long MCP text") });
+    expect(processed.output).toMatchObject({ type: "text", value: expect.stringContaining("Continue: read(") });
+    // the marker lives in the archived view; the preview is fully consumed by the long text
+    const viewUrl = /Full result: (artifact:\/\/\S+)/.exec((processed.output as { value: string }).value)![1]!;
+    const parsed = ResourceCenter.parse(viewUrl);
+    const view = Buffer.from(await center.store.readBytes("artifact", parsed.authority, parsed.segments.at(-1)!)).toString();
+    expect(view).toContain("[attachment: artifact://fixture-screenshot/");
     expect(output).toEqual(blocks);
   } finally {
     await connection.close();

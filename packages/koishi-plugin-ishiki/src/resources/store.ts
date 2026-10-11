@@ -21,12 +21,6 @@ export interface ResourceMeta {
   byteLength?: number;
   /** sha256 of the bytes; filled on fetch / put-in-hand. */
   contentHash?: string;
-  toolName?: string;
-  toolCallId?: string;
-  /** Stable readable representation for JSON outputs; original bytes remain in the blob. */
-  viewName?: string;
-  width?: number;
-  height?: number;
   createdAt: number;
   /** Last successful byte materialization; absent means lazy fetch has not run. */
   fetchedAt?: number;
@@ -47,23 +41,20 @@ export interface PutOptions {
   kind: ResourceKind;
   /** Tool namespace for artifacts; empty for assets. */
   namespace: string;
-  /** Explicit name. When omitted for assets, derived from `src`; for artifacts required. */
+  /** Explicit name. When omitted for assets, derived from `src`; for artifacts derived from content. */
   name?: string;
   mediaType?: string;
   filename?: string;
   /** Original source URL the id derives from (assets). */
   src?: string;
-  /** Free-form inbound element attributes, stored verbatim. */
-  toolName?: string;
-  toolCallId?: string;
-  viewName?: string;
-  width?: number;
-  height?: number;
   sourceInfo?: Record<string, unknown>;
 }
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const ID_RE = /^[a-f0-9]{32}$/;
+
+/** Extension appended to artifact names so `ls` inside the sandbox stays readable. */
+const ARTIFACT_EXT = "bin";
 
 /** Fetch guard rails for lazy media. */
 const MAX_FETCH_BYTES = 20 * 1024 * 1024;
@@ -104,18 +95,15 @@ export class ResourceStore {
     return `asset://${name}`;
   }
 
-  /** Content-addressed tool artifact. A readable view shares the original artifact URL. */
-  public async writeArtifact(tool: string, bytes: Uint8Array, meta: Omit<Partial<PutOptions>, "kind" | "namespace"> = {}, view?: string): Promise<string> {
+  /**
+   * Content-addressed tool artifact named `<sha256 first 16>.bin`. Old
+   * `<hash>-<type><hash>.blob` names from earlier runtimes stay readable:
+   * they resolve through the same sidecar lookup.
+   */
+  public async writeArtifact(tool: string, bytes: Uint8Array, meta: { mediaType?: string; filename?: string } = {}): Promise<string> {
     const namespace = tool.replace(/[^a-zA-Z0-9_-]/g, "_") || "tool";
-    const hash = createHash("sha256").update(bytes).digest("hex");
-    const viewHash = view === undefined ? "" : `-${createHash("sha256").update(view).digest("hex").slice(0, 16)}`;
-    const name = `${hash}-${createHash("sha256")
-      .update(meta.mediaType ?? "")
-      .digest("hex")
-      .slice(0, 8)}${viewHash}.blob`;
-    const viewName = view === undefined ? undefined : `${name}.view`;
-    if (viewName) await this.putBlob("artifact", namespace, viewName, Buffer.from(view!, "utf8"));
-    return this.putInHand("artifact", namespace, name, bytes, { ...meta, toolName: tool, viewName });
+    const name = `${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ARTIFACT_EXT}`;
+    return this.putInHand("artifact", namespace, name, bytes, meta);
   }
 
   /**
@@ -135,11 +123,6 @@ export class ResourceStore {
       mediaType,
       byteLength: bytes.byteLength,
       contentHash: createHash("sha256").update(bytes).digest("hex"),
-      toolName: meta.toolName ?? existing?.toolName,
-      toolCallId: meta.toolCallId ?? existing?.toolCallId,
-      viewName: meta.viewName ?? existing?.viewName,
-      width: meta.width ?? existing?.width,
-      height: meta.height ?? existing?.height,
       createdAt: existing?.createdAt ?? Date.now(),
       fetchedAt: Date.now(),
       src: meta.src ?? existing?.src,
@@ -247,9 +230,18 @@ export class ResourceStore {
     const temp = path.join(dir, `.${name}.${randomUUID()}.tmp`);
     try {
       await fs.writeFile(temp, bytes, { flag: "wx" });
-      await fs.rename(temp, file);
-    } finally {
+      // Concurrent writers of the same content-addressed name race on the
+      // rename: Windows denies renaming over a just-created target (EPERM),
+      // and any winner leaves identical bytes behind, so losing the race is
+      // fine — only drop the temp file.
+      try {
+        await fs.rename(temp, file);
+      } catch {
+        await fs.rm(temp, { force: true });
+      }
+    } catch (error) {
       await fs.rm(temp, { force: true });
+      throw error;
     }
   }
 
@@ -259,9 +251,17 @@ export class ResourceStore {
     const temp = `${file}.${randomUUID()}.tmp`;
     try {
       await fs.writeFile(temp, JSON.stringify(meta, null, 2), { flag: "wx" });
-      await fs.rename(temp, file);
-    } finally {
+      // Same race as putBlob: content-addressed names collide when concurrent
+      // calls archive identical bytes, and the losing rename still leaves a
+      // correct sidecar behind.
+      try {
+        await fs.rename(temp, file);
+      } catch {
+        await fs.rm(temp, { force: true });
+      }
+    } catch (error) {
       await fs.rm(temp, { force: true });
+      throw error;
     }
   }
 

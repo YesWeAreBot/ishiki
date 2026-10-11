@@ -47,6 +47,14 @@ export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
         },
         required: ["stdout", "stderr", "exitCode"],
       }),
+      // 纯文本渲染让 stdout 保持多行形态；JSON 转义会把整段输出折成一行，
+      // 超长截断后的行锚点就失效了。
+      toModelOutput: ({ output }) => {
+        const sections = [`exit code: ${output.exitCode}`];
+        if (output.stdout.length > 0) sections.push(`stdout:\n${output.stdout}`);
+        if (output.stderr.length > 0) sections.push(`stderr:\n${output.stderr}`);
+        return { type: "text" as const, value: sections.join("\n\n") };
+      },
       execute: (input, options) => sandbox.exec(input.command, options.abortSignal),
     }),
     read_file: tool({
@@ -69,6 +77,7 @@ export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
         },
         required: ["content"],
       }),
+      toModelOutput: ({ output }) => ({ type: "text" as const, value: output.content }),
       execute: async (input) => ({ content: await sandbox.read(resolveIn(sandbox, input.path)) }),
     }),
     write_file: tool({

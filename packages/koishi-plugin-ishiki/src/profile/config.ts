@@ -1,5 +1,6 @@
 import { Schema } from "koishi";
 
+import { AttachmentConfig } from "../attachment/config.js";
 import { ContextEngines } from "../context/index.js";
 import { ToolcallEngines } from "../toolcall/index.js";
 import { WakeupEngines } from "../wakeup/index.js";
@@ -134,30 +135,8 @@ export interface ProfileSettings {
   codemode: CodemodeConfig;
   toolsearch: ToolsearchConfig;
   typing: TypingConfig;
-  resources: ResourcesConfig;
+  attachment: AttachmentConfig;
 }
-
-/** Resource center knobs; see packages/koishi-plugin-ishiki/src/resources. */
-export interface ResourcesConfig {
-  /** True when the profile's model can consume image file parts. */
-  imageInput: boolean;
-  maxImageBytes?: number;
-  maxTotalImageBytes?: number;
-  maxImageCount?: number;
-  maxImageDimension?: number;
-}
-
-export const ResourcesConfig: Schema<ResourcesConfig> = Schema.object({
-  imageInput: Schema.boolean().default(false),
-  maxImageBytes: Schema.number()
-    .min(0)
-    .default(5 * 1024 * 1024),
-  maxTotalImageBytes: Schema.number()
-    .min(0)
-    .default(10 * 1024 * 1024),
-  maxImageCount: Schema.number().min(0).default(4),
-  maxImageDimension: Schema.number().min(1).default(8000),
-});
 
 export interface ProfileConfig {
   model: string;
@@ -171,7 +150,7 @@ export interface ProfileConfig {
   codemode?: CodemodeConfig;
   toolsearch?: ToolsearchConfig;
   typing?: TypingConfig;
-  resources?: ResourcesConfig;
+  attachment?: AttachmentConfig;
 }
 
 export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
@@ -186,7 +165,7 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   codemode: CodemodeConfig,
   toolsearch: ToolsearchConfig,
   typing: TypingConfig,
-  resources: ResourcesConfig,
+  attachment: AttachmentConfig,
 });
 
 /** 解析产物：一个 profile 的全部静态信息，装配期只读它。 */
@@ -216,7 +195,7 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       codemode: CodemodeConfig((config.codemode ?? {}) as CodemodeConfig),
       toolsearch: ToolsearchConfig((config.toolsearch ?? {}) as ToolsearchConfig),
       typing: TypingConfig((config.typing ?? {}) as TypingConfig),
-      resources: ResourcesConfig((config.resources ?? {}) as ResourcesConfig),
+      attachment: AttachmentConfig((config.attachment ?? {}) as AttachmentConfig),
     },
     extensions: resolveExtensions(config.extends ?? {}),
   };

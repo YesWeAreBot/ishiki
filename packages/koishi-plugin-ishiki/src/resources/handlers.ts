@@ -99,11 +99,6 @@ export class ArtifactHandler implements SchemeHandler {
     const name = url.segments.at(-1)!;
     const bytes = await this.store.readBytes("artifact", url.authority, name);
     const meta = await this.store.getMeta("artifact", url.authority, name);
-    if (meta?.viewName) {
-      const payload = textPayload(url.href, new Uint8Array(await fs.readFile(path.join(path.dirname(this.locate(url)), meta.viewName))));
-      payload.mediaType = "text/plain";
-      return payload;
-    }
     if (meta?.mediaType && !meta.mediaType.startsWith("text/") && meta.mediaType !== "application/json") {
       return binaryPayload(url.href, bytes, meta.mediaType, meta.filename);
     }
@@ -117,10 +112,6 @@ export class ArtifactHandler implements SchemeHandler {
 
   /** Zero-fetch metadata probe. */
   public async resolveView(url: ResourceUrl, view: string): Promise<ResourcePayload> {
-    if (view === "original") {
-      const bytes = await this.store.readBytes("artifact", url.authority, url.segments.at(-1)!);
-      return textPayload(url.href, bytes);
-    }
     if (view !== "meta") throw new ResourceError("unsupported_view", `artifact scheme has no "${view}" view`);
     const name = url.segments.at(-1)!;
     const meta = await this.store.getMeta("artifact", url.authority, name);

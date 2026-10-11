@@ -16,8 +16,6 @@ export interface AttachmentItem {
   mediaType: string;
   filename?: string;
   byteLength?: number;
-  width?: number;
-  height?: number;
 }
 
 export type IshikiAttachment =

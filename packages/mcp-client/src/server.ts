@@ -4,7 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "koishi";
-import { jsonSchema, tool, ResourceError, type ToolSet } from "koishi-plugin-ishiki";
+import { jsonSchema, tool, ResourceError, type ToolResultOutput, type ToolSet } from "koishi-plugin-ishiki";
 
 import type { McpServer } from "./config.js";
 
@@ -74,7 +74,13 @@ export class McpConnection {
             additionalProperties: true,
           },
         }),
-        toModelOutput: ({ output }) => ({ type: "json", value: output as never }),
+        toModelOutput: ({ output }): ToolResultOutput => ({
+          // Pure format conversion: MCP blocks become standard content parts.
+          // Archiving, truncation and attachment emission belong to the unified
+          // output wrapper, so nothing is lost before it sees the parts.
+          type: "content",
+          value: output.map(convertBlock),
+        }),
       });
     }
     this.tools = Object.fromEntries(Object.entries(tools).sort(([left], [right]) => left.localeCompare(right)));
@@ -116,7 +122,30 @@ interface McpBlock {
   text?: string;
   data?: string;
   mimeType?: string;
+  resource?: { uri?: string; text?: string; blob?: string; mimeType?: string };
+  uri?: string;
   [key: string]: unknown;
+}
+
+/** MCP block → standard content part; bytes stay in the block for the wrapper to externalize. */
+function convertBlock(block: McpBlock): { type: "text"; text: string } | { type: "file"; mediaType: string; data: { type: "data"; data: string } } {
+  switch (block.type) {
+    case "image":
+    case "audio":
+      return { type: "file", mediaType: block.mimeType ?? "application/octet-stream", data: { type: "data", data: block.data ?? "" } };
+    case "resource": {
+      const resource = block.resource;
+      if (resource === undefined) return { type: "text", text: "[resource: unknown]" };
+      if (typeof resource.blob === "string")
+        return { type: "file", mediaType: resource.mimeType ?? "application/octet-stream", data: { type: "data", data: resource.blob } };
+      if (typeof resource.text === "string") return { type: "text", text: resource.text };
+      return { type: "text", text: `[resource: ${resource.uri ?? "unknown"}]` };
+    }
+    case "resource_link":
+      return { type: "text", text: `[resource link: ${block.uri ?? "unknown"}]` };
+    default:
+      return { type: "text", text: typeof block.text === "string" ? block.text : JSON.stringify(block) };
+  }
 }
 
 function safeName(name: string): string {

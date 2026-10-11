@@ -33,3 +33,32 @@ export function sniffMediaType(bytes: Uint8Array): string | undefined {
   if (bytes.length >= 8 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) return "video/mp4";
   return undefined;
 }
+
+/** Inspect image dimensions without decoding, resizing or changing bytes. */
+export function imageSize(bytes: Uint8Array): { width?: number; height?: number } {
+  const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (data.length >= 24 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+    return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+  if (data.length >= 10 && /^GIF8[79]a$/.test(data.subarray(0, 6).toString())) return { width: data.readUInt16LE(6), height: data.readUInt16LE(8) };
+  if (data[0] === 0xff && data[1] === 0xd8) {
+    let at = 2;
+    while (at + 9 < data.length && data[at] === 0xff) {
+      const marker = data[at + 1]!;
+      const length = data.readUInt16BE(at + 2);
+      if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker))
+        return { height: data.readUInt16BE(at + 5), width: data.readUInt16BE(at + 7) };
+      if (length < 2) break;
+      at += 2 + length;
+    }
+  }
+  if (data.length >= 30 && data.subarray(0, 4).toString() === "RIFF" && data.subarray(8, 12).toString() === "WEBP") {
+    const encoding = data.subarray(12, 16).toString();
+    if (encoding === "VP8X") return { width: 1 + data.readUIntLE(24, 3), height: 1 + data.readUIntLE(27, 3) };
+    if (encoding === "VP8 ") return { width: data.readUInt16LE(26) & 0x3fff, height: data.readUInt16LE(28) & 0x3fff };
+    if (encoding === "VP8L" && data[20] === 0x2f) {
+      const bits = data.readUInt32LE(21);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+    }
+  }
+  return {};
+}
