@@ -2,9 +2,11 @@ import { Logger, Schema, Service, type Context } from "koishi";
 import { Extension, type ExtensionContext, type ToolSet } from "koishi-plugin-ishiki";
 
 import { WorkspaceConfig } from "./config.js";
+import { createNativeShell } from "./native.js";
 import { workspaceInstructions } from "./prompt.js";
 import { SkillHandler, WorkspaceHandler } from "./resource-schemes.js";
-import { createSandbox, resolveLayout, type WorkspaceSandbox } from "./sandbox.js";
+import { createSandbox } from "./sandbox.js";
+import { resolveLayout, type WorkspaceShell } from "./shell.js";
 import { skillCatalog } from "./skills.js";
 import { createWorkspaceTools } from "./tools.js";
 
@@ -21,27 +23,20 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
   }
 
   public [Service.invoke](config: WorkspaceConfig, context: ExtensionContext) {
-    const layout = resolveLayout({
+    const shellOptions = {
       config,
       home: context.home,
       root: context.root,
       dataPath: this.dataPath,
       logger: this.logger,
       resources: context.resources,
-    });
+    };
+    const layout = resolveLayout(shellOptions);
 
-    let sandbox: Promise<WorkspaceSandbox> | undefined;
+    let shell: Promise<WorkspaceShell> | undefined;
     let tools: ToolSet | undefined;
-    // 懒加载单例：tools 与 instructions 共用同一个沙箱。
-    const box = (): Promise<WorkspaceSandbox> =>
-      (sandbox ??= createSandbox(layout, {
-        config,
-        home: context.home,
-        root: context.root,
-        dataPath: this.dataPath,
-        logger: this.logger,
-        resources: context.resources,
-      }));
+    // 懒加载单例：tools 与 instructions 共用同一个 shell。
+    const box = (): Promise<WorkspaceShell> => (shell ??= layout.backend === "native" ? createNativeShell(layout) : createSandbox(layout, shellOptions));
     const disposers: Array<() => void> = [];
     // 资源 URL 面：技能内容与 workspace 持久根，与沙箱挂载同源。
     disposers.push(context.resources?.attach(new SkillHandler(layout.skills)));
@@ -51,7 +46,7 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
       extendTools: async () => (tools ??= createWorkspaceTools(await box())),
       extendInstructions: async () => {
         const built = await box();
-        return [workspaceInstructions(built), skillCatalog(built.skills)].filter((text) => text.length > 0).join("\n\n");
+        return [workspaceInstructions(built), skillCatalog(built.skills, built.backend === "native")].filter((text) => text.length > 0).join("\n\n");
       },
       stop: async () => {
         for (const dispose of disposers) {

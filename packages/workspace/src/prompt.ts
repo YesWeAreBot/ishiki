@@ -1,7 +1,27 @@
 import { HOME_MOUNT, ISHIKI_MOUNT, SKILLS_MOUNT, WORKSPACE_MOUNT } from "./mounts.js";
-import type { WorkspaceSandbox } from "./sandbox.js";
+import type { WorkspaceShell } from "./shell.js";
 
-export function workspaceInstructions(sandbox: WorkspaceSandbox): string {
+export function workspaceInstructions(sandbox: WorkspaceShell): string {
+  return sandbox.backend === "native" ? nativeInstructions(sandbox) : sandboxInstructions(sandbox);
+}
+
+function nativeInstructions(sandbox: WorkspaceShell): string {
+  return [
+    "## 工作区",
+    `你在宿主机上直接执行命令：真实 shell（${sandbox.shellPath}），不是隔离环境，宿主机上的文件与命令都可见，改动直接落盘。`,
+    `当前工作目录：${sandbox.cwd}`,
+    "没有虚拟挂载点：相对路径相对当前工作目录解析，其余写宿主机绝对路径。",
+    "网络：可用，走宿主机真实网络。",
+    `命令时限：${sandbox.timeoutMs} 毫秒，超时按退出码 124 返回`,
+    `执行器输出安全上限 ${sandbox.maxExecutionOutputBytes} 字节；codemode 内拿到原始输出，最终返回模型的预览和归档由运行时统一处理。返回结构化结果，不自行 stringify/slice。`,
+    "调用之间不保留 shell 状态：cd、别名、函数与导出变量都不跨调用，切换目录写在同一行（cd <目录> && <命令>）",
+    // 平台媒体与长输出不落宿主文件系统，bash 读不到，只能走运行时的资源 URL。
+    "平台收到的媒体与工具长输出经运行时 read 工具的 asset:// 与 artifact:// URL 访问，bash 读不到它们",
+    "读已知文件用 read_file，整体写入用 write_file，局部修改用 edit_file，列目录、搜索与管道用 bash",
+  ].join("\n");
+}
+
+function sandboxInstructions(sandbox: WorkspaceShell): string {
   return [
     "## 工作区",
     "你在一个按实例隔离的沙箱里读写文件，它不是宿主机：命令由 JavaScript 解释执行，只有下列挂载点存在，宿主机上的其它路径与命令都不可见。",

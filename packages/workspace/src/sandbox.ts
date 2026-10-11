@@ -1,73 +1,16 @@
-import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 import { Bash, InMemoryFs, MountableFs, OverlayFs, ReadWriteFs, type FsStat } from "just-bash";
-import type { Logger } from "koishi";
-import type { ResourceCenter } from "koishi-plugin-ishiki";
 
-import type { WorkspaceConfig } from "./config.js";
-import { HOME_MOUNT, ISHIKI_MOUNT, resolveMounts, resolveSkillMounts, WORKSPACE_MOUNT, type HostMount } from "./mounts.js";
+import { HOME_MOUNT, ISHIKI_MOUNT, WORKSPACE_MOUNT } from "./mounts.js";
 import { ResourceFs } from "./resource-fs.js";
-import { discoverSkills, type Skill } from "./skills.js";
-
-export interface ExecResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}
-
-export interface WorkspaceLayout {
-  readonly cwd: string;
-  readonly timeoutMs: number;
-  readonly maxExecutionOutputBytes: number;
-  readonly network: boolean;
-  readonly javascript: boolean;
-  readonly python: boolean;
-  readonly mounts: readonly HostMount[];
-  readonly skills: readonly Skill[];
-  /** True when the resource center is mounted at /home/.ishiki. */
-  readonly resourcesMounted: boolean;
-}
-
-export interface WorkspaceSandbox extends WorkspaceLayout {
-  exec(command: string, signal?: AbortSignal): Promise<ExecResult>;
-  read(virtualPath: string): Promise<string>;
-  write(virtualPath: string, content: string): Promise<void>;
-}
-
-export interface SandboxOptions {
-  config: WorkspaceConfig;
-  home: string;
-  root: string;
-  dataPath: string;
-  logger: Logger;
-  /** Resource center providing the /home/.ishiki mount; undefined disables it. */
-  resources?: ResourceCenter;
-}
+import type { ShellOptions, WorkspaceLayout, WorkspaceShell } from "./shell.js";
 
 function traversable(stat: FsStat): FsStat {
   return stat.isDirectory ? { ...stat, mode: stat.mode | 0o111 } : stat;
 }
 
-export function resolveLayout(options: SandboxOptions): WorkspaceLayout {
-  const { config } = options;
-  const skills = discoverSkills([path.join(options.dataPath, "skills"), ...config.skills.map((dir) => path.resolve(options.root, dir))], options.logger);
-  const mounts = [...resolveMounts(config.mounts, options.root), ...resolveSkillMounts(skills, options.root)];
-  mkdirSync(path.join(options.home, "workspace"), { recursive: true });
-  return {
-    cwd: config.cwd,
-    timeoutMs: config.timeoutMs,
-    maxExecutionOutputBytes: config.maxExecutionOutputBytes,
-    network: config.network,
-    javascript: config.javascript,
-    python: config.python,
-    mounts,
-    skills,
-    resourcesMounted: options.resources !== undefined,
-  };
-}
-
-export async function createSandbox(layout: WorkspaceLayout, options: SandboxOptions): Promise<WorkspaceSandbox> {
+export async function createSandbox(layout: WorkspaceLayout, options: ShellOptions): Promise<WorkspaceShell> {
   const { home } = options;
   class Writable extends ReadWriteFs {
     override async stat(path: string): Promise<FsStat> {
@@ -113,11 +56,17 @@ export async function createSandbox(layout: WorkspaceLayout, options: SandboxOpt
         return { stdout: "", stderr: `bash: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };
       }
     },
-    read: (virtualPath) => fs.readFile(virtualPath, "utf8"),
-    async write(virtualPath, content) {
+    read: (target) => fs.readFile(resolveVirtualPath(layout, target), "utf8"),
+    async write(target, content) {
+      const virtualPath = resolveVirtualPath(layout, target);
       const parent = path.posix.dirname(virtualPath);
       if (parent !== "/") await fs.mkdir(parent, { recursive: true });
       await fs.writeFile(virtualPath, content, "utf8");
     },
   };
+}
+
+/** 路径解析收进 adapter：相对路径相对 cwd，绝对虚拟路径原样。 */
+function resolveVirtualPath(layout: WorkspaceLayout, target: string): string {
+  return target.startsWith("/") ? target : path.posix.join(layout.cwd, target);
 }

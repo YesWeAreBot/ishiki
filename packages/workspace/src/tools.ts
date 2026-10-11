@@ -1,12 +1,6 @@
-import path from "node:path";
-
 import { jsonSchema, tool, type ToolSet } from "koishi-plugin-ishiki";
 
-import type { ExecResult, WorkspaceSandbox } from "./sandbox.js";
-
-function resolveIn(sandbox: WorkspaceSandbox, target: string): string {
-  return target.startsWith("/") ? target : path.posix.join(sandbox.cwd, target);
-}
+import type { ExecResult, WorkspaceShell } from "./shell.js";
 
 interface PathInput {
   path: string;
@@ -22,15 +16,23 @@ interface EditInput extends PathInput {
   replace_all?: boolean;
 }
 
-export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
+export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
+  const native = sandbox.backend === "native";
   return {
     bash: tool({
-      description: [
-        "在沙箱内执行一条 bash 命令。",
-        "沙箱是 JavaScript 解释执行的虚拟环境，不是宿主机 shell：只有挂载点内的文件可见，命令集也不是宿主机那一套。",
-        "当前工作目录之外的路径要写全；cd、别名、函数、导出变量都不跨调用保留。",
-        "返回 stdout、stderr 与退出码。退出码非 0 表示命令本身失败，内容仍然有效，先读 stderr 再决定重试。",
-      ].join("\n"),
+      description: native
+        ? [
+            "在宿主机 shell（" + sandbox.shellPath + "）里执行一条命令。",
+            "这是真实 shell 与真实文件系统：宿主机上的文件与命令都可见，改动直接落盘。",
+            "当前工作目录之外的路径要写全；cd、别名、函数、导出变量都不跨调用保留。",
+            "返回 stdout、stderr 与退出码。退出码非 0 表示命令本身失败，内容仍然有效，先读 stderr 再决定重试。",
+          ].join("\n")
+        : [
+            "在沙箱内执行一条 bash 命令。",
+            "沙箱是 JavaScript 解释执行的虚拟环境，不是宿主机 shell：只有挂载点内的文件可见，命令集也不是宿主机那一套。",
+            "当前工作目录之外的路径要写全；cd、别名、函数、导出变量都不跨调用保留。",
+            "返回 stdout、stderr 与退出码。退出码非 0 表示命令本身失败，内容仍然有效，先读 stderr 再决定重试。",
+          ].join("\n"),
       inputSchema: jsonSchema<{ command: string }>({
         type: "object",
         properties: {
@@ -59,8 +61,8 @@ export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
     }),
     read_file: tool({
       description: [
-        "读取沙箱内一个文件的全部内容。",
-        "path 可以是沙箱内的绝对路径，也可以是相对当前工作目录的路径。",
+        native ? "读取宿主机上一个文件的全部内容。" : "读取沙箱内一个文件的全部内容。",
+        "path 可以是绝对路径，也可以是相对当前工作目录的路径。",
         "不知道文件在哪时先用 bash 的 ls、find、grep 定位。",
       ].join("\n"),
       inputSchema: jsonSchema<PathInput>({
@@ -78,11 +80,11 @@ export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
         required: ["content"],
       }),
       toModelOutput: ({ output }) => ({ type: "text" as const, value: output.content }),
-      execute: async (input) => ({ content: await sandbox.read(resolveIn(sandbox, input.path)) }),
+      execute: async (input) => ({ content: await sandbox.read(input.path) }),
     }),
     write_file: tool({
       description: [
-        "把内容整体写入沙箱内一个文件，已存在则覆盖，父目录会自动创建。",
+        native ? "把内容整体写入宿主机上一个文件，已存在则覆盖，父目录会自动创建。" : "把内容整体写入沙箱内一个文件，已存在则覆盖，父目录会自动创建。",
         "只改文件里的一小段时用 edit_file，不要整文件重写。",
         "返回写入后的字节数。",
       ].join("\n"),
@@ -103,8 +105,7 @@ export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
         required: ["ok", "bytes"],
       }),
       execute: async (input) => {
-        const target = resolveIn(sandbox, input.path);
-        await sandbox.write(target, input.content);
+        await sandbox.write(input.path, input.content);
         return { ok: true as const, bytes: Buffer.byteLength(input.content, "utf8") };
       },
     }),
@@ -134,8 +135,7 @@ export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
         required: ["ok", "replacements"],
       }),
       execute: async (input) => {
-        const target = resolveIn(sandbox, input.path);
-        const content = await sandbox.read(target);
+        const content = await sandbox.read(input.path);
         if (input.old_string === input.new_string) throw new Error("old_string 与 new_string 相同，文件未改动");
         if (input.old_string.length === 0) throw new Error("old_string 不能为空");
         const occurrences = content.split(input.old_string).length - 1;
@@ -144,7 +144,10 @@ export function createWorkspaceTools(sandbox: WorkspaceSandbox): ToolSet {
         if (!replaceAll && occurrences > 1) {
           throw new Error(`old_string 在文件中出现 ${occurrences} 次；把 replace_all 设为 true 全部替换，或写一段能唯一定位的 old_string`);
         }
-        await sandbox.write(target, replaceAll ? content.replaceAll(input.old_string, input.new_string) : content.replace(input.old_string, input.new_string));
+        await sandbox.write(
+          input.path,
+          replaceAll ? content.replaceAll(input.old_string, input.new_string) : content.replace(input.old_string, input.new_string),
+        );
         return { ok: true as const, replacements: replaceAll ? occurrences : 1 };
       },
     }),
