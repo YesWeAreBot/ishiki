@@ -106,8 +106,12 @@ export class AgentRuntime {
             this.disposeWakeup?.();
             this.disposeContext?.();
           },
-          transformEntries: (entries, options) => this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries,
-          transformMessages: (messages, options) => this.attachment.project(messages, options),
+          transformEntries: (entries, options) => {
+            return this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries;
+          },
+          transformMessages: (messages, options) => {
+            return this.attachment.project(messages, options);
+          },
           toModelMessages: (message: unknown) => {
             const custom = message as { role?: string; type?: string; data?: { text?: string } };
             if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
@@ -123,7 +127,9 @@ export class AgentRuntime {
             if (extended.length > 0) parts.push(extended);
             return parts.filter((text) => text.length > 0).join("\n\n");
           },
-          extendTools: () => this.assembleTools(),
+          extendTools: () => {
+            return this.assembleTools();
+          },
           prepareStep: (options) => {
             if (!config.toolsearch.enable) return options;
             const visible = this.toolsearch.visibleTools();

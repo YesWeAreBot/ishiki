@@ -34,7 +34,7 @@ export abstract class Extension<T = any> extends Service {
    * 与插件自身的 Koishi 配置（构造器参数、`Config` 命名空间）无关。
    * 缺省表示实例配置原样透传。
    */
-  public abstract Schema: Schema<T> | undefined;
+  public Schema?: Schema<T>;
 
   static GetName(name: string): `ishiki.ext.${string}` {
     return `ishiki.ext.${name}`;
