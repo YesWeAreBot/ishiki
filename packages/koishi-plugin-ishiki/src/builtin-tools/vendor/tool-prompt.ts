@@ -5,7 +5,8 @@
  * Local changes (keep minimal so future upstream diffs stay readable):
  * - imports resolved from "@yesimagent/core" / local types
  * - `renderToolCatalog` exported for direct-calling catalog rendering
- * - Ishiki attachment workflow reminder; examples retain full results
+ * - "Tool call examples" block removed: it restates the type block's
+ *   signatures; the attachment workflow reminder stays
  */
 import { asSchema, Tool } from "@yesimagent/core";
 
@@ -48,18 +49,14 @@ export function buildCodeModeToolDescription(tools: CodeModeToolSet, toolDiscove
     return sections.join("\n");
   }
 
-  const { typeBlock, exampleBlock } = renderToolCatalog(tools);
+  const typeBlock = renderToolCatalog(tools);
   sections.push("", "Tools:", typeBlock);
-
-  if (exampleBlock.length > 0) {
-    sections.push(exampleBlock);
-  }
 
   return sections.join("\n");
 }
 
 export function buildCodeModeToolCatalogMessage(tools: CodeModeToolSet): string {
-  const { typeBlock, exampleBlock } = renderToolCatalog(tools);
+  const typeBlock = renderToolCatalog(tools);
   const sections = [
     "Code mode capability update.",
     "",
@@ -70,26 +67,14 @@ export function buildCodeModeToolCatalogMessage(tools: CodeModeToolSet): string 
     typeBlock,
   ];
 
-  if (exampleBlock.length > 0) {
-    sections.push(exampleBlock);
-  }
-
   return sections.join("\n");
 }
 
-export function renderToolCatalog(tools: CodeModeToolSet): {
-  typeBlock: string;
-  exampleBlock: string;
-} {
+export function renderToolCatalog(tools: CodeModeToolSet): string {
   const toolEntries = Object.entries(tools);
-  const typeBlock =
-    toolEntries.length === 0
-      ? "No host tools. Do not call `tools.*`."
-      : ["```ts", "declare const tools: {", ...toolEntries.flatMap(renderToolType), "};", "```"].join("\n");
-
-  const exampleBlock = toolEntries.length === 0 ? "" : ["", "Tool call examples:", "```ts", ...renderToolExamples(toolEntries), "```"].join("\n");
-
-  return { typeBlock, exampleBlock };
+  return toolEntries.length === 0
+    ? "No host tools. Do not call `tools.*`."
+    : ["```ts", "declare const tools: {", ...toolEntries.flatMap(renderToolType), "};", "```"].join("\n");
 }
 
 function renderToolType([toolName, tool]: [string, CodeModeToolSet[string]]): string[] {
@@ -106,30 +91,6 @@ function renderToolType([toolName, tool]: [string, CodeModeToolSet[string]]): st
 
   lines.push(`  ${formatObjectKey(toolName)}: (input: ${indentType(inputType, 2)}) => Promise<${indentType(outputType, 2)}>;`);
   return lines;
-}
-
-function renderToolExamples(toolEntries: Array<[string, CodeModeToolSet[string]]>): string[] {
-  if (toolEntries.length === 1) {
-    const toolEntry = toolEntries[0]!;
-    return [`const result = await ${renderToolExampleCall(toolEntry)};`, "return result;"];
-  }
-
-  const variableNames = uniqueToolVariableNames(toolEntries.map(([toolName]) => toolName));
-  const calls = toolEntries.map((toolEntry) => `  ${renderToolExampleCall(toolEntry)},`);
-  return [
-    `const [${variableNames.join(", ")}] = await Promise.all([`,
-    ...calls,
-    "]);",
-    "return {",
-    ...toolEntries.map(([toolName], index) => `  ${formatObjectKey(toolName)}: ${variableNames[index]!},`),
-    "};",
-  ];
-}
-
-function renderToolExampleCall([toolName, tool]: [string, CodeModeToolSet[string]]): string {
-  const schema = resolveInputSchema(tool);
-  const input = firstInputExample(tool) ?? (schema === undefined ? {} : sampleFromSchema(schema, schema));
-  return `tools${formatPropertyAccess(toolName)}(${JSON.stringify(input)})`;
 }
 
 function resolveInputSchema(tool: CodeModeToolSet[string]): JsonSchema | undefined {
@@ -289,106 +250,6 @@ function arrayType(schema: JsonSchema, context: SchemaContext): string {
   return "unknown[]";
 }
 
-function sampleFromSchema(schema: JsonSchema, root: JsonSchema): unknown {
-  return sampleFromSchemaInner(schema, {
-    root,
-    seenRefs: new Set(),
-    depth: 0,
-  });
-}
-
-function sampleFromSchemaInner(schema: JsonSchema, context: SchemaContext): unknown {
-  if (context.depth > MAX_SCHEMA_DEPTH) {
-    return null;
-  }
-
-  if (schema.default !== undefined) {
-    return schema.default;
-  }
-
-  const ref = firstString(schema.$ref);
-  if (ref !== undefined) {
-    const resolved = resolveRef(ref, context.root, context.seenRefs);
-    return resolved === undefined ? null : sampleFromSchemaInner(resolved, nextContext(context));
-  }
-
-  if (schema.const !== undefined) {
-    return schema.const;
-  }
-
-  const enumValues = asArray(schema.enum);
-  if (enumValues !== undefined) {
-    return enumValues[0] ?? null;
-  }
-
-  const oneOf = schemaArray(schema.oneOf);
-  if (oneOf !== undefined) {
-    return sampleFromSchemaInner(oneOf[0] ?? {}, nextContext(context));
-  }
-
-  const anyOf = schemaArray(schema.anyOf);
-  if (anyOf !== undefined) {
-    return sampleFromSchemaInner(anyOf[0] ?? {}, nextContext(context));
-  }
-
-  const type = schema.type;
-  if (Array.isArray(type)) {
-    return sampleFromSchemaInner({ ...schema, type: type.find((part) => part !== "null") ?? type[0] }, context);
-  }
-
-  if (type === "object" || isRecord(schema.properties)) {
-    const properties = isRecord(schema.properties) ? schema.properties : {};
-    return Object.fromEntries(
-      Object.entries(properties)
-        .filter((entry): entry is [string, JsonSchema] => isRecord(entry[1]))
-        .map(([name, value]) => [name, sampleFromSchemaInner(value, nextContext(context))]),
-    );
-  }
-
-  if (type === "array" || schema.items !== undefined) {
-    const items = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-    return [isRecord(items) ? sampleFromSchemaInner(items, nextContext(context)) : null];
-  }
-
-  if (type === "number" || type === "integer") {
-    return 1;
-  }
-
-  if (type === "boolean") {
-    return true;
-  }
-
-  if (type === "null") {
-    return null;
-  }
-
-  if (type === "string" || type === undefined) {
-    const examples = asArray(schema.examples);
-    if (examples?.[0] !== undefined) {
-      return examples[0];
-    }
-    const format = firstString(schema.format);
-    if (format === "uri" || format === "url") {
-      return "https://example.com";
-    }
-    if (format === "date-time") {
-      return "2026-01-01T00:00:00.000Z";
-    }
-    if (format === "date") {
-      return "2026-01-01";
-    }
-    return "string";
-  }
-
-  return null;
-}
-
-function firstInputExample(tool: CodeModeToolSet[string]): unknown {
-  const examples = asArray(tool.inputExamples);
-  const first = examples?.[0];
-  return isRecord(first) && "input" in first ? first.input : undefined;
-}
-
 function resolveRef(ref: string, root: JsonSchema, seenRefs: Set<string>): JsonSchema | undefined {
   if (!ref.startsWith("#/") || seenRefs.has(ref)) {
     return undefined;
@@ -445,25 +306,6 @@ function needsParentheses(type: string): boolean {
 
 function formatObjectKey(key: string): string {
   return isIdentifier(key) ? key : JSON.stringify(key);
-}
-
-function formatPropertyAccess(key: string): string {
-  return isIdentifier(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
-}
-
-function uniqueToolVariableNames(toolNames: string[]): string[] {
-  const seen = new Map<string, number>();
-  return toolNames.map((toolName) => {
-    const base = toIdentifier(toolName);
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return count === 0 ? base : `${base}${count + 1}`;
-  });
-}
-
-function toIdentifier(value: string): string {
-  const identifier = value.replace(/[^A-Za-z0-9_$]/g, "_").replace(/^[^A-Za-z_$]+/, "");
-  return identifier.length === 0 ? "tool" : identifier;
 }
 
 function isIdentifier(value: string): boolean {

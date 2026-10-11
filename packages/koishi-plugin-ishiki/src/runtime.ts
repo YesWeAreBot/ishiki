@@ -60,6 +60,10 @@ export class AgentRuntime {
 
   private disposeContext?: () => void;
   private disposeWakeup?: () => void;
+  private readonly toolCallers: ToolCallers = {};
+  private readonly configTools: ToolSet;
+  private readonly configCodemode: CodemodeConfig;
+  private readonly configToolsearch: ToolsearchConfig;
 
   constructor(config: AgentRuntimeConfig) {
     this.id = config.id;
@@ -71,11 +75,12 @@ export class AgentRuntime {
     this.resources = config.resources;
     this.attachment = new Attachment(config.attachment, config.resources, this);
     this.toolsearch = new ToolsearchState(config.toolsearch);
+    this.configTools = config.tools;
+    this.configCodemode = config.codemode;
+    this.configToolsearch = config.toolsearch;
 
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
-
-    const toolCallers: ToolCallers = {};
 
     this.agent = createAgent({
       id: this.id,
@@ -84,10 +89,18 @@ export class AgentRuntime {
       plugins: [
         {
           name: "ishiki.core",
-          init: (agent) => {
+          init: async (agent) => {
             this.disposeContext = this.context.attach?.(agent);
             this.disposeWakeup = this.wakeup.attach?.(agent);
             this.toolsearch.bind(agent);
+            // Assemble the toolset now so the baseline catalog persists before
+            // any user message: the core writes turn input only after init
+            // resolves, so storage order — and therefore every request's
+            // catalog slot, the first request included — is [catalog, user...].
+            if (config.toolsearch.enable) {
+              await this.assembleTools();
+              await this.toolsearch.ensureBaselineCatalog();
+            }
           },
           stop: () => {
             this.disposeWakeup?.();
@@ -110,54 +123,13 @@ export class AgentRuntime {
             if (extended.length > 0) parts.push(extended);
             return parts.filter((text) => text.length > 0).join("\n\n");
           },
-          extendTools: async () => {
-            const merged: ToolSet = { ...config.tools };
-            for (const ext of this.extensions) {
-              const contributed = await ext.extendTools?.();
-              if (contributed === undefined) continue;
-              for (const [name, tool] of Object.entries(contributed)) {
-                if (name in merged) throw new ToolConflictError(name);
-                merged[name] = tool;
-              }
-            }
-            const final: ToolSet = { ...merged };
-            for (const name of Object.keys(toolCallers)) delete toolCallers[name];
-            if (config.codemode.enable) {
-              const sandbox = createCodemode(config.codemode, merged, config.toolsearch.enable);
-              Object.assign(toolCallers, sandbox.callers);
-              final[CODEMODE_TOOL] = sandbox.tool;
-            }
-            if (config.toolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
-            const wrapped = this.attachment.wrap(final);
-            if (config.toolsearch.enable) {
-              this.toolsearch.codemodeEnabled = config.codemode.enable;
-              this.toolsearch.refresh(final, new Set(this.toolsearch.residentNames()), new Set(Object.keys(toolCallers)));
-            }
-            return wrapped;
-          },
-          prepareStep: async (options) => {
-            // The baseline catalog must join the FIRST request itself: joined messages only
-            // flush after a step's output (core turn.ts), so anything sent during the turn
-            // would be invisible to every request of that turn. Persist it now and prepend
-            // the projected message to the messages about to be sent. flushCatalog's key
-            // bookkeeping mirrors this emission, so a later flush only fires on real changes.
-            let messages = options.messages;
-            if (config.toolsearch.enable && options.stepNumber === 0) {
-              const entry = await this.toolsearch.ensureBaselineCatalog();
-              if (entry) {
-                const custom = entry.data as { role?: string; type?: string; data?: { text?: string } };
-                const projected =
-                  custom.role !== "custom" || custom.type !== "ishiki.tools.catalog"
-                    ? undefined
-                    : ({ role: "user", content: custom.data!.text! } as { role: "user"; content: string } | undefined);
-                if (projected) messages = [projected, ...messages];
-              }
-            }
-            if (!config.toolsearch.enable) return { ...options, messages };
+          extendTools: () => this.assembleTools(),
+          prepareStep: (options) => {
+            if (!config.toolsearch.enable) return options;
             const visible = this.toolsearch.visibleTools();
             const prior = options.activeTools;
             const activeTools = prior === undefined ? visible : [...new Set([...prior, ...visible])];
-            return { ...options, messages, activeTools };
+            return { ...options, activeTools };
           },
           onStepFinish: (info) => {
             // Emit at most one catalog per step, after the step's search results
@@ -209,8 +181,40 @@ export class AgentRuntime {
         },
         ...(config.debugStream ? [createDebugPlugin(config.id, config.logger)] : []),
       ],
-      ...(config.codemode.enable ? { toolCallers } : {}),
+      ...(config.codemode.enable ? { toolCallers: this.toolCallers } : {}),
     });
+  }
+
+  /**
+   * Merge base tools with extension contributions and builtin routing, then
+   * sync the toolsearch state with the final set. Runs on every turn (core
+   * `assemblePrompt`) and once at init, so both see the same assembled toolset;
+   * re-entry rebuilds the routing tables instead of accumulating wrappers.
+   */
+  private async assembleTools(): Promise<ToolSet> {
+    const merged: ToolSet = { ...this.configTools };
+    for (const ext of this.extensions) {
+      const contributed = await ext.extendTools?.();
+      if (contributed === undefined) continue;
+      for (const [name, tool] of Object.entries(contributed)) {
+        if (name in merged) throw new ToolConflictError(name);
+        merged[name] = tool;
+      }
+    }
+    const final: ToolSet = { ...merged };
+    for (const name of Object.keys(this.toolCallers)) delete this.toolCallers[name];
+    if (this.configCodemode.enable) {
+      const sandbox = createCodemode(this.configCodemode, merged, this.configToolsearch.enable);
+      Object.assign(this.toolCallers, sandbox.callers);
+      final[CODEMODE_TOOL] = sandbox.tool;
+    }
+    if (this.configToolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
+    const wrapped = this.attachment.wrap(final);
+    if (this.configToolsearch.enable) {
+      this.toolsearch.codemodeEnabled = this.configCodemode.enable;
+      this.toolsearch.refresh(final, new Set(this.toolsearch.residentNames()), new Set(Object.keys(this.toolCallers)));
+    }
+    return wrapped;
   }
 
   async deliver(event: IshikiEvent): Promise<void> {

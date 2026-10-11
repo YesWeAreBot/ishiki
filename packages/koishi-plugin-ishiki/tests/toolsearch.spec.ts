@@ -1,7 +1,14 @@
-import { jsonSchema, tool, type Agent, type Tool, type ToolSet } from "@yesimagent/core";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { createUserMessage, jsonSchema, tool, type Agent, type LanguageModelV4, type Tool, type ToolSet } from "@yesimagent/core";
+import type { Logger } from "koishi";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SEARCH_TOOL, ToolsearchState, createSearchTool } from "../src/builtin-tools/toolsearch.js";
+import { ResourceCenter } from "../src/resources/center.js";
+import { AgentRuntime, type AgentRuntimeConfig } from "../src/runtime.js";
 
 const makeTool = (name: string, description: string, inputProps: Record<string, unknown> = {}): Tool =>
   tool({
@@ -74,6 +81,30 @@ describe("ToolsearchState", () => {
     expect(gmail.tools.map((match) => match.name).sort()).toEqual(["gmail_get_message", "gmail_list_messages"]);
   });
 
+  it("truncates match descriptions to a one-line 60-char hint", () => {
+    const { state } = makeState();
+    const long =
+      "Retrieve the complete attachment listing for a message, including inline media references, sizes and read provenance. Details stay in the catalog.";
+    state.refresh(
+      {
+        [SEARCH_TOOL]: makeTool(SEARCH_TOOL, "Search deferred tools by keyword."),
+        attachment_list: makeTool("attachment_list", long),
+        note_search: makeTool("note_search", "Find notes.\n\nListing behavior matches attachment_list."),
+      },
+      new Set(state.residentNames()),
+      new Set(),
+    );
+
+    // Only the first line survives multiline descriptions.
+    const notes = state.search("note");
+    expect(notes.tools[0]!.name).toBe("note_search");
+    expect(notes.tools[0]!.description).toBe("Find notes.");
+
+    const out = state.search("attachment");
+    expect(out.tools[0]!.name).toBe("attachment_list");
+    expect(out.tools[0]!.description).toBe(`${long.slice(0, 60)}…`);
+  });
+
   it("accumulates discovery across searches and reports no matches twice", () => {
     const { state } = makeState();
     state.search("weather");
@@ -127,16 +158,14 @@ describe("ToolsearchState", () => {
 
   it("persists the baseline catalog once via ensureBaselineCatalog and suppresses the duplicate flush", async () => {
     const { state, catalogs, appended } = makeState();
-    const entry = await state.ensureBaselineCatalog();
-    expect(entry).toBeDefined();
-    expect(entry!.type).toBe("message");
+    await state.ensureBaselineCatalog();
     const persisted = appended as Array<{ type: string; data: { type: string; data: { tools: string[] } } }>;
     expect(persisted).toHaveLength(1);
     expect(persisted[0]!.data.type).toBe("ishiki.tools.catalog");
     expect(persisted[0]!.data.data.tools).toEqual(expect.arrayContaining(["finish", "send_message", "read", SEARCH_TOOL]));
 
     // Second call is a no-op: the baseline exists once in history.
-    await expect(state.ensureBaselineCatalog()).resolves.toBeUndefined();
+    await state.ensureBaselineCatalog();
     expect((appended as unknown[]).length).toBe(1);
 
     // The flush key was synced by the baseline, so no duplicate joins at the step boundary.
@@ -173,7 +202,9 @@ describe("ToolsearchState", () => {
     state.flushCatalog();
     const last = catalogs.at(-1)!;
     expect(last.text).toContain("Code mode capability update.");
-    expect(last.text).toContain("tools.calendar_create_event(");
+    // Signatures come from the type block; the redundant call-examples block is gone.
+    expect(last.text).toContain("calendar_create_event: (input:");
+    expect(last.text).not.toContain("Tool call examples:");
     expect(last.tools).toContain("send_message");
     expect(last.text).not.toContain("send_message");
   });
@@ -195,5 +226,78 @@ describe("ToolsearchState", () => {
       tools: unknown[];
     };
     expect(out.tools).toEqual([]);
+  });
+});
+
+describe("AgentRuntime baseline catalog", () => {
+  const homes: string[] = [];
+
+  interface MessageData {
+    role?: string;
+    type?: string;
+    data?: { type?: string; text?: string };
+  }
+
+  function makeRuntime(config: Partial<AgentRuntimeConfig> = {}): AgentRuntime {
+    const home = mkdtempSync(path.join(tmpdir(), "ishiki-runtime-"));
+    homes.push(home);
+    return new AgentRuntime({
+      id: "test",
+      home,
+      // No turn runs in these tests: init and non-trigger sends never touch the model.
+      model: {} as LanguageModelV4,
+      instructions: "system prompt",
+      tools: {},
+      extensions: [],
+      context: {} as AgentRuntimeConfig["context"],
+      wakeup: {} as AgentRuntimeConfig["wakeup"],
+      codemode: { enable: false, direct: [], timeoutMs: 1000 },
+      toolsearch: { enable: true, resident: [], maxResults: 5 },
+      debugStream: false,
+      logger: {} as Logger,
+      resources: new ResourceCenter("test", home),
+      attachment: { imageInput: false },
+      ...config,
+    });
+  }
+
+  afterEach(() => {
+    for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+  });
+
+  it("persists the baseline catalog during init, before any user message lands", async () => {
+    const runtime = makeRuntime();
+    await runtime.agent.init();
+
+    // Non-trigger send mirrors the joined-message persist path: init first, then the user message.
+    runtime.agent.send(createUserMessage("hello"), { trigger: false });
+    await vi.waitFor(async () => {
+      const entries = await runtime.storage.read();
+      expect(entries.some((entry) => (entry.data as MessageData).role === "user")).toBe(true);
+    });
+
+    const messages = (await runtime.storage.read()).filter((entry) => entry.type === "message");
+    const kinds = messages.map((entry) => {
+      const data = entry.data as MessageData;
+      return data.type === "ishiki.tools.catalog" ? "catalog" : data.role;
+    });
+    // Every request's catalog slot is decided by storage: [catalog, user...], first request included.
+    expect(kinds).toEqual(["catalog", "user"]);
+
+    const catalog = messages[0]!.data as MessageData;
+    expect(catalog.type).toBe("ishiki.tools.catalog");
+    expect(catalog.data!.text).toContain("Tool catalog update.");
+  });
+
+  it("appends nothing when toolsearch is disabled", async () => {
+    const runtime = makeRuntime({ toolsearch: { enable: false, resident: [], maxResults: 5 } });
+    await runtime.agent.init();
+    runtime.agent.send(createUserMessage("hello"), { trigger: false });
+    await vi.waitFor(async () => {
+      const entries = await runtime.storage.read();
+      expect(entries.some((entry) => (entry.data as MessageData).role === "user")).toBe(true);
+    });
+    const messages = (await runtime.storage.read()).filter((entry) => entry.type === "message");
+    expect(messages.map((entry) => (entry.data as MessageData).role)).toEqual(["user"]);
   });
 });

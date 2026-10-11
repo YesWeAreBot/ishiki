@@ -1,4 +1,4 @@
-import { jsonSchema, tool, createCustomMessage, createEntry, type Agent, type AgentEntry, type Tool, type ToolSet } from "@yesimagent/core";
+import { jsonSchema, tool, createCustomMessage, createEntry, type Agent, type Tool, type ToolSet } from "@yesimagent/core";
 
 import type { ToolsearchConfig } from "../profile/index.js";
 import { CODEMODE_TOOL } from "./codemode.js";
@@ -8,6 +8,9 @@ import { SEND_MESSAGE_TOOL } from "./send-message.js";
 import { buildCodeModeToolCatalogMessage, renderToolCatalog } from "./vendor/tool-prompt.js";
 
 export const SEARCH_TOOL = "search";
+
+/** Search results stay a name plus a one-line hint; full signatures live in the catalog. */
+const MATCH_HINT_LIMIT = 60;
 
 /** Tools that must stay visible on every step regardless of discovery state. */
 const ALWAYS_ON: readonly string[] = [FINISH_TOOL, SEND_MESSAGE_TOOL, READ_TOOL, CODEMODE_TOOL, SEARCH_TOOL];
@@ -111,7 +114,7 @@ export class ToolsearchState {
       .filter((match) => match.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, this.config.maxResults)
-      .map(({ name, description }) => ({ name, description }));
+      .map(({ name, description }) => ({ name, description: toMatchHint(description) }));
 
     if (hits.length === 0) return { tools: [] };
 
@@ -120,26 +123,23 @@ export class ToolsearchState {
   }
 
   /**
-   * Persist the first catalog directly into storage so it is part of history
-   * before the very first model request is assembled. Step-boundary emission
-   * (joined messages) only lands after a step's output, so it can never reach
-   * the model in the turn that triggered it — this covers the gap where a
-   * fresh conversation's first request carries no tool signatures.
-   *
-   * Must be called during `prepareStep` (after `collectModelMessages`, before
-   * the model call) so the appended message can be projected and appended to
-   * the very request about to be sent. Later changes still go through
-   * {@link flushCatalog} at step boundaries.
+   * Persist the first catalog during plugin `init`, before any user message
+   * can land: the core writes turn input only after `ensureInit` resolves,
+   * so the storage order is [catalog, user...] and every request's catalog
+   * slot is defined by storage alone — the very first request included, with
+   * no prepareStep-side prepending. Step-boundary emission (joined messages)
+   * only lands after a step's output; this baseline covers the fresh
+   * runtime's first turn. Must run after the toolset is assembled
+   * ({@link ToolsearchState.refresh}). flushCatalog's key bookkeeping
+   * mirrors this append, so a later flush only fires on real changes.
    */
-  async ensureBaselineCatalog(): Promise<AgentEntry<"message"> | undefined> {
-    if (this.baselineEmitted || this.agent === undefined) return undefined;
+  async ensureBaselineCatalog(): Promise<void> {
+    if (this.baselineEmitted || this.agent === undefined) return;
     this.baselineEmitted = true;
     const text = this.renderCatalogText();
     const message = createCustomMessage("ishiki.tools.catalog", { text, tools: [...this.visibleTools()] });
-    const entry = createEntry("message", message);
-    await this.agent.storage.append(entry);
+    await this.agent.storage.append(createEntry("message", message));
     this.lastEmittedKey = [...this.visibleTools()].sort().join("\n");
-    return entry;
   }
 
   /**
@@ -173,7 +173,7 @@ export class ToolsearchState {
     // not JS, so `tools.x()` examples would mislead.
     const visible: Record<string, Tool> = {};
     for (const name of this.visibleTools()) visible[name] = this.allTools.get(name)!;
-    const { typeBlock } = renderToolCatalog(visible);
+    const typeBlock = renderToolCatalog(visible);
     return [
       "Tool catalog update.",
       "",
@@ -193,6 +193,14 @@ function tokenize(text: string): string[] {
       .toLowerCase()
       .match(/[\p{L}\p{N}]+/gu) ?? []
   );
+}
+
+/** One-line hint, bounded at {@link MATCH_HINT_LIMIT}; signatures stay in the catalog. */
+function toMatchHint(description: string | undefined): string | undefined {
+  if (description === undefined) return undefined;
+  const line = description.split("\n", 1)[0]!.trim();
+  if (line.length === 0) return undefined;
+  return line.length <= MATCH_HINT_LIMIT ? line : `${line.slice(0, MATCH_HINT_LIMIT)}…`;
 }
 
 export function createSearchTool(state: ToolsearchState): Tool<SearchTool.Input, SearchTool.Output> {
