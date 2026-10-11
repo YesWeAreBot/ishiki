@@ -1,4 +1,4 @@
-# Profile 示例：一个 profile.yaml 定义一个心智，目录名就是它的全局唯一 id。
+# Profile 示例：
 # 放在 <dataPath>/profiles/<目录名>/profile.yml（或 .yaml）。
 #
 # 下面的四段是四份**互相独立**的文件（四个目录），用注释分开，方便对照着看：

@@ -50,7 +50,7 @@ export class AgentRuntime {
   readonly storage: AgentStorage;
   readonly resources: ResourceCenter;
   readonly context: ContextEngineInstance;
-  agent!: Agent;
+  readonly agent: Agent;
 
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;

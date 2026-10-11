@@ -2,6 +2,8 @@ import type { DIRECT_TOOL_CALL, experimental_codeModeTool } from "@ai-sdk/code-m
 import type { Tool, ToolCallers, ToolSet } from "@yesimagent/core";
 
 import type { CodemodeConfig } from "../profile/index.js";
+import { FINISH_TOOL } from "./finish.js";
+import { SEND_MESSAGE_TOOL } from "./send-message.js";
 import { buildCodeModeToolDescription } from "./vendor/tool-prompt.js";
 
 const CODEMODE_PACKAGE = "@ai-sdk/code-mode";
@@ -34,9 +36,9 @@ function codemode(): CodemodeModule {
 
 export const CODEMODE_TOOL = "codemode";
 
-const BOTH_REACHABLE: readonly string[] = ["send_message"];
+const BOTH_REACHABLE: readonly string[] = [SEND_MESSAGE_TOOL];
 
-const DIRECT_ONLY: readonly string[] = ["finish"];
+const DIRECT_ONLY: readonly string[] = [FINISH_TOOL];
 
 export interface CodemodeSurface {
   tool: Tool;
