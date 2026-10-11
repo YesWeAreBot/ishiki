@@ -9,7 +9,7 @@ export const docsContentRoute = '/llms.mdx/docs';
 export const gitConfig = {
   user: 'YesWeAreBot',
   repo: 'ishiki',
-  branch: 'feat/koishi-plugin',
+  branch: 'main',
 };
 
 const getContentUrl = createGetUrl(docsContentRoute);

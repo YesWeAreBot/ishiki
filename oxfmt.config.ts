@@ -13,6 +13,7 @@ export default defineConfig({
     "**/dist/**",
     "**/lib/**",
     "**/node_modules/**",
+    "docs/**",
   ],
   sortImports: {
     newlinesBetween: true,
