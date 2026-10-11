@@ -1,0 +1,122 @@
+---
+title: 仓库维护手册
+description: 面向维护者的构建、测试与文档工作流
+---
+
+本文面向本仓库的维护者与协作者，记录构建链、验证手段与文档站维护方式。用户向内容一概不在此处出现。
+
+## 仓库布局
+
+```files
+ishiki
+├── packages
+│   ├── koishi-plugin-ishiki
+│   ├── workspace
+│   ├── mcp-client
+│   └── ishiki
+├── docs
+├── yakumo.yml
+├── oxlint.config.ts
+├── oxfmt.config.ts
+├── vitest.config.ts
+└── tsconfig.base.json
+```
+
+- `packages/koishi-plugin-ishiki`：主插件，所有核心逻辑。
+- `packages/workspace` / `packages/mcp-client`：两个扩展。
+- `packages/ishiki`：占位聚合包（仅 Hello World，预留）。
+- `docs/`：Fumadocs 文档站（本手册）。
+- `yakumo.yml`：构建流水线（tsc + esbuild）；`oxlint.config.ts` / `oxfmt.config.ts` 负责 lint 与格式；`vitest.config.ts` 为测试配置。
+- `tsconfig.base.json`：ES2024 / ESNext / bundler resolution / strict。
+
+包名与目录的映射（workspace 通配符只认 `packages/*`，包名以各自 `package.json` 的 `name` 为准）：
+
+| 目录 | 包名 |
+| --- | --- |
+| `packages/koishi-plugin-ishiki` | `koishi-plugin-ishiki` |
+| `packages/workspace` | `koishi-plugin-ishiki-workspace` |
+| `packages/mcp-client` | `koishi-plugin-ishiki-mcp-client` |
+| `packages/ishiki` | `ishiki` |
+
+依赖方向：两个扩展包 peer 依赖主包；主包 peer 依赖 `koishi ^4.18.11`，运行时依赖 `@yesimagent/core` 与 `@yesimagent/gateway`（同为 0.0.x，独立仓库 YesWeAreBot/yesimagent）。
+
+## 常用命令
+
+根目录（Bun 工作区）：
+
+```bash
+bun install              # 安装
+bun run build            # yakumo build：全包 tsc + esbuild
+bun run lint             # oxlint
+bun run format           # oxfmt 写回
+bun run format:check
+bun run test             # vitest run（根级配置）
+```
+
+单包构建按包名传给 yakumo：`bun run build koishi-plugin-ishiki`。
+
+文档站（`docs/` 目录，属于根 Bun 工作区，没有独立 lock 文件）：
+
+```bash
+bun install                          # 在仓库根执行，会一并安装 docs 依赖
+bun run --filter @ishiki/docs dev         # next dev，http://localhost:3000/ishiki
+bun run --filter @ishiki/docs build       # 静态导出到 docs/out（output: 'export'）
+bun run --filter @ishiki/docs types:check # next typegen + tsc --noEmit
+```
+
+`dev` 与 `build` 都带 `next.config.mjs` 里的 `basePath: '/ishiki'`，本地访问要带前缀（`http://localhost:3000/ishiki/docs`）。
+
+## 测试
+
+现有测试覆盖（vitest）：
+
+- `packages/koishi-plugin-ishiki/tests/`：toolsearch（发现/目录去重）、attachment（配额投影）、read（行选择器/截断锚点）、resources（存储/scheme 解析）。
+- `packages/workspace/tests/native.spec.ts`：shell 判定、参数拼装、msys 路径转换、超时 124、输出上限。
+
+**没有自动化测试的部分**（改动时手工验证）：sandbox 的虚拟文件系统与挂载、引擎实例行为（standard 压缩、v3 意愿、jev 判定）、mcp-client 连接池、profile 装配流水线。这些依赖 Koishi 运行时或外部进程，回归验证走真实启动。
+
+手工验证的最小路径：把三个包 link 进本地 Koishi 应用（bun link），用测试 profile 启动，观察装配日志与一次完整对话。`dumpRequests` + `debugStream` 打开可看到全部请求细节。
+
+## 文档站维护
+
+- 内容在 `docs/content/docs/`，MDX 格式，frontmatter 必须含 `title`。
+- 导航：每个目录的 `meta.json`（字段：`title`、`pages`、`description`、`root`、`defaultOpen`、`collapsible`、`icon`）。`pages` 里 `---文字---` 渲染为分隔符；fumadocs 默认按文件名排序，meta 声明优先。
+- 组件：`src/components/mdx.tsx` 是 MDX 组件注册表。`Callout`、`Card` / `Cards` 来自 fumadocs 默认集；`Tabs`、`Steps`、`Accordion`、`TypeTable` 与本地复制的 `Files`、`Mermaid`、`DocsGraph` 也在其中——MDX 里直接写标签即可，不需要 import。
+- 代码围栏：`source.config.ts` 注册了两个 remark 插件——```` ```mermaid ```` 转 `<Mermaid />`，```` ```files ```` 转 `<Files />`。文件树用 `├──` / `└──` 加缩进表达层级，**名字后面的注释会被当成文件名**，要写说明就放到围栏外的段落或列表里。
+- 文档地图：首页的 `<DocsGraph />` 依赖 `lib/source.ts` 里的 `extractLinkReferences: true`（提取页间链接），页内链接写 `[文字](/docs/...)` 即可参与构图。
+- 布局：文档路由使用 Notebook 布局，源码由 Fumadocs CLI 复制到 `src/layouts/`（别名配置见 `cli.json`），`app/docs/layout.tsx` 与 `app/docs/[[...slug]]/page.tsx` 指向本地副本；升级 fumadocs 后可用 `npx @fumadocs/cli customize` 重新拉取。
+- 站点身份：`lib/shared.ts` 的 `appName` 与 `gitConfig`（页面上「在 GitHub 上编辑」的仓库与分支）、`app/layout.tsx` 的 metadata、`next.config.mjs` 的 `basePath` / `trailingSlash`（GitHub Pages 项目页）。部署由 `.github/workflows/pages.yml` 在 `main` 上 `docs/**` 变更时触发。
+- 事实同步：配置字段以 `packages/koishi-plugin-ishiki/src/profile/config.ts` 为准；工具行为以 `src/builtin-tools/` 为准；资源方案以 `src/resources/` 为准。文档与源码冲突时改文档。
+- 已知待修正的源码内不一致（文档已按现状处理，改源码时同步）：`mcp.schema.json` 描述的工具名前缀（连字符）与实现（下划线）不符。
+- 新增页面记得同步对应目录的 `meta.json`。
+- 改完跑 `bun run --filter @ishiki/docs build`（内含 tsc 类型检查与静态导出）验证，组件新增或围栏语法变动后浏览器目测一遍。
+
+## 发布前检查单
+
+<Steps>
+<Step>
+
+`bun run lint && bun run format:check` 通过。
+
+</Step>
+<Step>
+
+`bun run test` 通过。
+
+</Step>
+<Step>
+
+`bun run build` 产物完整（各包 `lib/` 生成，`files` 字段只含 `lib` 与 `resources`）。
+
+</Step>
+<Step>
+
+手工冒烟：quickstart 教程的完整流程走一遍。
+
+</Step>
+<Step>
+
+版本号仍在 0.0.x 阶段时，接口变更必须在本文档「事实同步」处留痕并在 profile.example.yml 注释中体现。
+
+</Step>
+</Steps>

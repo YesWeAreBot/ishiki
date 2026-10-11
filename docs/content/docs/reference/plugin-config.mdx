@@ -1,0 +1,297 @@
+---
+title: 插件与 profile 配置
+description: 全部配置字段：插件级、profile 级、引擎配置段
+---
+
+本文是配置字段的完整清单，以仓库当前源码为准（`packages/koishi-plugin-ishiki/src/`）。字段含义的展开见各指南。
+
+## 插件级配置（koishi.yml 的 ishiki 段）
+
+来源：`src/index.ts` 的 `Ishiki.Config`。
+
+<TypeTable
+  type={{
+    dataPath: {
+      type: 'string',
+      default: 'data/ishiki',
+      description: '数据存储根目录，相对 Koishi 应用目录',
+    },
+    dumpRequests: {
+      type: 'boolean',
+      default: 'false',
+      description: '将模型请求/响应落盘到 <dataPath>/requests/',
+    },
+    debugStream: {
+      type: 'boolean',
+      default: 'false',
+      description: '模型流分片实时输出到控制台',
+    },
+    logLevel: {
+      type: '0 | 1 | 2 | 3',
+      default: '2（INFO）',
+      description: '日志级别',
+    },
+  }}
+/>
+
+两个扩展插件各自的插件级配置只有一项：`logLevel`（同上，默认 2），作用于扩展自身的日志。
+
+## profile 级配置（profile.yml）
+
+来源：`src/profile/config.ts` 的 `ProfileConfig`。
+
+<TypeTable
+  type={{
+    model: {
+      type: 'string',
+      description: '模型引用：provider:model[:档位] 或组名',
+      required: true,
+    },
+    mode: {
+      type: '"channel" | "cross"',
+      default: 'channel',
+      description: '实例派生粒度',
+    },
+    channels: {
+      type: 'Record<"platform:selfId", string[]>',
+      default: '{}（必填至少一项）',
+      description: '频道认领名单；* 全部、尾随 * 前缀、! 排除',
+    },
+    extends: {
+      type: 'Record<扩展包名, { enable?, config? }>',
+      default: '{}',
+      description: '启用的扩展及其实例配置；enable: false 静态剔除',
+    },
+    failover: {
+      type: 'FailoverConfig',
+      description: '重试策略，见下',
+    },
+    context: {
+      type: 'ContextConfig',
+      default: '{ engine: "standard" }',
+      description: '上下文引擎',
+    },
+    wakeup: {
+      type: 'WakeupConfig',
+      default: '{ engine: "standard" }',
+      description: '唤醒引擎',
+    },
+    toolcall: {
+      type: 'ToolcallConfig',
+      default: '{ engine: "native" }',
+      description: '工具调用引擎',
+    },
+    codemode: {
+      type: 'CodemodeConfig',
+      description: '代码模式，见下',
+    },
+    toolsearch: {
+      type: 'ToolsearchConfig',
+      description: '工具渐进披露，见下',
+    },
+    typing: {
+      type: 'TypingConfig',
+      description: '打字延迟模拟，见下',
+    },
+    attachment: {
+      type: 'AttachmentConfig',
+      description: '附件策略，见下',
+    },
+  }}
+/>
+
+同目录 `persona.md`：人设，注入系统提示词；`memory/`（v3 上下文且 `memoryBlocks: true` 时）：记忆块；`mcp.json`（mcp-client 扩展）：见[参考：mcp.json](/docs/reference/mcp-json)。
+
+### failover
+
+<TypeTable
+  type={{
+    attempts: {
+      type: 'number',
+      default: '组候选数跑完一轮',
+      description: '最大尝试次数',
+    },
+    backoffMs: {
+      type: 'number',
+      default: '500',
+      description: '重试基础退避，逐次翻倍封顶 8 秒，加半抖动',
+    },
+    failoverOn: {
+      type: '"unavailable" | "any"',
+      default: 'unavailable',
+      description: 'unavailable 只在服务类错误（401/403/404/408/409/429 等）时换候选；any 连参数类错误也换',
+    },
+  }}
+/>
+
+<Callout>
+模型是组名、或 `attempts > 1` 时启用重试包装器；组候选按声明顺序尝试，熔断中的候选跳过。
+</Callout>
+
+### codemode
+
+<TypeTable
+  type={{
+    enable: {
+      type: 'boolean',
+      default: 'false',
+      description: '开关',
+    },
+    direct: {
+      type: 'string[]',
+      default: '[]',
+      description: '保持「模型直调」的工具名；未列出的收进沙箱只能由程序调用',
+    },
+    timeoutMs: {
+      type: 'number',
+      default: '30000',
+      description: '单次沙箱执行总时限（毫秒）',
+    },
+    maxToolInputBytes: {
+      type: 'number',
+      default: '32 MiB',
+      description: '单次工具入参预算',
+    },
+    maxToolOutputBytes: {
+      type: 'number',
+      default: '32 MiB',
+      description: '单次工具输出预算',
+    },
+    maxResultBytes: {
+      type: 'number',
+      default: '32 MiB',
+      description: '沙箱返回结果预算',
+    },
+    memoryLimitBytes: {
+      type: 'number',
+      default: '256 MiB',
+      description: 'QuickJS 内存预算',
+    },
+  }}
+/>
+
+<Callout>
+`send_message` 在目录与沙箱两处都可达；`finish` 只留在模型目录。`direct` 只调整其余工具的归属。
+</Callout>
+
+### toolsearch
+
+<TypeTable
+  type={{
+    enable: {
+      type: 'boolean',
+      default: 'false',
+      description: '开关',
+    },
+    resident: {
+      type: 'string[]',
+      default: '[]',
+      description: '额外常驻工具名；其余工具进入延迟池，经 search 发现后可见',
+    },
+    maxResults: {
+      type: 'number',
+      default: '5',
+      description: '单次 search 最多发现的工具数',
+    },
+  }}
+/>
+
+### typing
+
+<TypeTable
+  type={{
+    baseDelay: {
+      type: 'number',
+      default: '500',
+      description: '每条消息的基础延迟（毫秒）',
+    },
+    charPerSecond: {
+      type: 'number',
+      default: '5',
+      description: '打字速度基准（字符/秒）；中文字符按此速度，拉丁字符按 1.5 倍',
+    },
+    minDelay: {
+      type: 'number',
+      default: '800',
+      description: '单条消息延迟下限（毫秒）',
+    },
+    maxDelay: {
+      type: 'number',
+      default: '4000',
+      description: '单条消息延迟上限（毫秒）',
+    },
+  }}
+/>
+
+延迟按消息文本长度计算并带随机抖动，逐条消息之间等待。
+
+### attachment
+
+<TypeTable
+  type={{
+    imageInput: {
+      type: 'boolean',
+      default: 'false',
+      description: '能力上限开关；开启要求模型/组内候选全部声明 input: [text, image]',
+    },
+    maxImageBytes: {
+      type: 'number',
+      default: '5 MiB',
+      description: '单图字节上限',
+    },
+    maxTotalImageBytes: {
+      type: 'number',
+      default: '10 MiB',
+      description: '单次请求图片累计上限',
+    },
+    maxImageCount: {
+      type: 'number',
+      default: '4',
+      description: '单次请求图片张数上限',
+    },
+    maxImageDimension: {
+      type: 'number',
+      default: '8000',
+      description: '已知尺寸的单边像素上限',
+    },
+  }}
+/>
+
+配额为每请求一份，平台与工具附件共用，最新优先分配。
+
+## 引擎配置段
+
+三族引擎的 `engine` 字段取值与对应配置段：
+
+### context
+
+| engine | 配置段 | 字段 |
+| --- | --- | --- |
+| `standard` | `standard` | `maxTokens: number`（默认 32000）、`refillRatio?: number`（0–1，默认 0.8） |
+| `v3` | `v3` | `maxMessages: number`（默认 50）、`keepFullTurnCount: number`（默认 2）、`memoryBlocks: boolean` |
+
+### wakeup
+
+| engine | 配置段 | 字段 |
+| --- | --- | --- |
+| `standard` | `standard` | `direct/atSelf/quoteSelf: boolean`（均默认 true）、`keywords: string[]`（默认空） |
+| `v3` | `v3` | `base: 12`、`atMention: 100`、`isQuote: 15`、`isDirectMessage: 40`、`keywords: []`、`keywordMultiplier: 1.2`、`defaultMultiplier: 1`、`maxWillingness: 100`、`decayHalfLifeSeconds: 600`、`probabilityThreshold: 55`、`probabilityAmplifier: 0.04`、`replyCost: 35` |
+| `jev` | `jev` | `apiKey`（或环境变量 `TYPESAFE_API_KEY`，**必需**）、`model: "jev-latest"`、`endpoint: "https://api.typesafe.ai/v1/systemone"`、`threshold: 0.5`、`cooldownMs: 30000`、`timeoutMs: 1500`、`historyMessages: 8`、`instruction: ""`、`interests: []`、`rules: Partial<standard>`（默认 `{ direct: true, atSelf: true, quoteSelf: false, keywords: [] }`） |
+
+### toolcall
+
+| engine | 说明 |
+| --- | --- |
+| `native` | 模型原生 function call，无配置段 |
+| `v3` | JSON OUTPUT 协议，每步输出 `thoughts`（observe/analyze_infer/plan 三段）+ `actions` |
+| `hermes` / `qwen3coder` / `morph-xml` / `yaml-xml` | 对应文本输出协议，由解析引擎从纯文本中提取调用，无需模型原生支持 |
+
+协议引擎均无 profile 级配置段。
+
+## 默认 profile 示例
+
+仓库 `packages/koishi-plugin-ishiki/resources/profile.example.yml` 是带逐段注释的官方示例，包含 channel/cross/v3/jev 四份完整配置，与本文档字段一一对应，是最权威的样例。
+
+## 旧字段迁移
+
+早期版本（如 boilerplate 中的 `Cat` 示例）使用过 `scenes`、`innerThoughts`、`description`、`context.standard.maxChars` 等字段，当前 Schema 不再支持：场景拆分由 `channels` 认领承担，字符预算改为 `maxTokens`，`innerThoughts` 已移除（内心独白始终私有）。加载含未知字段的 profile 不报错（字段被忽略），但行为以当前默认值为准；建议迁移。

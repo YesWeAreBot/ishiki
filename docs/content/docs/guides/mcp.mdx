@@ -1,0 +1,119 @@
+---
+title: 接入 MCP 服务器
+description: 用 mcp-client 扩展把外部工具与资源带进对话
+---
+
+MCP（Model Context Protocol）服务器是标准化的外部工具来源：抓网页、操作桌面、读写记忆等。`koishi-plugin-ishiki-mcp-client` 扩展把一组 MCP 服务器的工具接入 Ishiki，并以 `mcp://` 协议暴露其资源。
+
+## 开始接入
+
+<Steps>
+<Step>
+
+### 启用扩展
+
+扩展是独立 Koishi 插件，按[快速上手](/docs/tutorial/quickstart)同样的方式构建并链接（构建目录为 `packages/mcp-client`，包名 `koishi-plugin-ishiki-mcp-client`），在 `koishi.yml` 启用：
+
+```yaml
+plugins:
+  ishiki-mcp-client: {}
+```
+
+然后在目标 profile 中声明依赖它：
+
+```yaml
+extends:
+  mcp-client: {}     # 只写包名即启用，无需 config
+```
+
+<Callout title="extends 的键是扩展包名">
+profile 缺少某个已声明的扩展服务时会停在等待态并报 `missing required service`；插件装好、Koishi 重载后自动装配。
+</Callout>
+
+</Step>
+<Step>
+
+### 写 mcp.json
+
+配置文件有两个位置：
+
+- **profile 基线**：`<dataPath>/.mcp.json` —— 对所有 profile 生效的默认配置。
+- **profile 覆盖**：`<profile 目录>/mcp.json` —— 该 profile 存在此文件时**整体替换**基线（不是合并）。
+
+最小示例（stdio 方式，本地拉起子进程）：
+
+```json
+{
+  "$schema": "../../node_modules/koishi-plugin-ishiki-mcp-client/resources/mcp.schema.json",
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  }
+}
+```
+
+`$schema` 指向包内 schema，编辑器可获得补全；路径按你的 Koishi 应用实际目录调整。
+
+</Step>
+</Steps>
+
+## 三种连接方式
+
+| type | 字段 | 适用 |
+| --- | --- | --- |
+| `stdio`（默认，可省略 type） | `command`（必填）、`args`、`env`、`cwd` | 本地命令行服务器，最常见 |
+| `http` | `url`（必填）、`headers` | 远程 Streamable HTTP 服务 |
+| `sse` | `url`（必填）、`headers` | 旧版 SSE 服务 |
+
+完整字段说明见[参考：mcp.json](/docs/reference/mcp-json)。几个容易踩的点：
+
+- `env` **只覆盖列出的键**，不继承父进程的其余环境变量。
+- `timeout` 是单次工具调用的毫秒上限，`0` 表示不限，不写用 SDK 默认。
+- `instructions: true`（默认）时，服务器声明的使用说明会注入系统提示词；只想拿工具不要说明文，设为 `false`。
+
+## 控制哪些服务器生效
+
+三个层面的优先级，从高到低：
+
+1. **`enabledServers`**（全局白名单）：列出的服务器强行启用，压过一切禁用设置。
+2. **`disabledServers`**（全局黑名单）：列出的服务器一律不连。
+3. **单服务器 `enabled: false`**：单独停用。
+
+```json
+{
+  "mcpServers": { "fetch": { "…": "…" }, "danger": { "…": "…", "enabled": false } },
+  "disabledServers": ["fetch"],
+  "enabledServers": []
+}
+```
+
+上例中 `fetch` 因进黑名单而不连；`danger` 虽自身 `enabled: false`，但只要把名字加进 `enabledServers` 就会被强行启用。排障时可利用这个机制不改动服务器定义临时启停。
+
+## 工具如何出现在模型面前
+
+- **命名**：`<服务器名>_<工具名>`，如服务器 `windows-mcp` 的工具 `Screenshot` 暴露为 `windows-mcp_Screenshot`。
+- **发现**：连接成功后立即拉取工具列表；服务器运行中变更工具列表（如动态开关能力）会自动刷新。
+- **冲突**：工具名与内置工具或其它扩展重名会让 profile 装配失败（`ToolConflictError`），重名服务器需改名。
+- 每个工具的输出经统一的输出包装器处理：媒体归档为 `artifact`，超长文本截断，规则见[参考：模型工具](/docs/reference/tools)。
+
+<Callout type="warn" title="文档与实现的一处不一致">
+包内 JSON Schema 的描述文字写的是连字符 `-`，与实际实现的下划线 `_` 不一致，以下划线为准。
+</Callout>
+
+## 验证与排错
+
+启动后日志逐台报告：
+
+```text
+mcp server "fetch" connected
+mcp pool for <profile 目录>: 2/3 servers connected
+```
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `connection failed: …` | 命令不存在、依赖未装、URL 不通 | 手动执行 `command + args` 验证；检查 `env` 是否漏了必要变量 |
+| 2/3 connected 但少的那台无报错详情 | 服务器自身启动失败 | 用日志级别 3（DEBUG）重跑看子进程输出 |
+| 工具在对话里「不存在」 | profile 没写 `extends`；或进了 `disabledServers`；或该 profile 用了自己的 mcp.json 覆盖了基线 | 逐项核对 |
+| stdio 服务器反复崩溃 | 子进程即起即崩 | 单独跑该命令确认能常驻 |

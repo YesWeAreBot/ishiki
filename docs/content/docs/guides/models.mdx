@@ -1,0 +1,142 @@
+---
+title: 接入模型供应商
+description: 在 models.yaml 中声明 provider、模型与故障转移组
+---
+
+`models.yaml` 回答一个问题：Ishiki 可以用哪些模型。本文给出完整写法：供应商声明、多协议接入、环境变量、故障转移组。
+
+文件位置：`<dataPath>/models.yaml`（默认 `data/ishiki/models.yaml`）。插件启动时若文件不存在会自动创建空文件。修改后需重启 Koishi 生效。
+
+<Callout title="前置知识">
+文件由 `@yesimagent/gateway` 的模型注册表读取，顶层只有两个键：`providers`（供应商）和 `groups`（组）。profile 通过「模型引用」指向其中条目。
+</Callout>
+
+## 声明一个供应商
+
+```yaml
+providers:
+  deepseek:
+    api: openai-completions
+    baseUrl: https://api.deepseek.com
+    apiKey: sk-xxxxxxxx
+    models:
+      - id: deepseek-chat
+        name: DeepSeek Chat          # 可选，日志与错误信息里显示的名字
+        reasoning: true              # 可选，标记为推理模型
+        input: [text, image]         # 模型接受的输入模态
+        contextWindow: 128000        # 上下文窗口（token）
+        maxTokens: 8192              # 输出上限（token）
+        thinking:                    # 可选，思考档位（见下文）
+          mode: effort
+          efforts: [none, low, high, max]
+```
+
+<TypeTable
+  type={{
+    api: {
+      type: 'string',
+      description: '协议方言，取值见下方「协议方言」表',
+      required: true,
+    },
+    baseUrl: {
+      type: 'string',
+      description: '接口地址，视方言而定',
+    },
+    apiKey: {
+      type: 'string',
+      description: '密钥，支持 ${ENV_VAR} 形式的环境变量插值',
+      required: true,
+    },
+    headers: {
+      type: 'object',
+      description: '附加请求头，如 { "X-Custom": "value" }',
+    },
+    settings: {
+      type: 'object',
+      description: '透传给 AI SDK provider 的默认参数',
+    },
+    models: {
+      type: 'array',
+      description: '模型目录；省略时该 provider 下没有可引用的模型',
+    },
+  }}
+/>
+
+## 选择协议方言
+
+`api` 决定请求按哪种协议发出：
+
+| 方言值 | 适用场景 | baseUrl |
+| --- | --- | --- |
+| `openai-completions` | 一切 OpenAI `/chat/completions` 兼容接口：DeepSeek、Kimi、GLM、Groq、SiliconFlow、本地 llama.cpp 等 | 必填 |
+| `openai-responses` | OpenAI Responses API | 按需 |
+| `anthropic-messages` | Anthropic Claude 及其兼容接口 | 按需 |
+| `google-generative-ai` | Google Gemini 及其兼容接口 | 按需 |
+| `typesafe-ai` | Typesafe 平台（含 decision 判定模型，供 `jev` 唤醒引擎使用） | 按需 |
+
+选型口诀：官方 OpenAI/Anthropic/Google 账号用对应方言；国内聚合站和本地推理框架几乎都走 `openai-completions`。
+
+## 用环境变量存密钥
+
+`apiKey`（以及 `headers` 的值）支持 `${VAR}` 插值，从 Koishi 进程的环境变量展开：
+
+```yaml
+apiKey: ${DEEPSEEK_KEY}
+```
+
+<Callout type="warn">
+插值发生在网关构造期，环境变量缺失时该引用无法解析，启动即报错。
+</Callout>
+
+## 声明思考档位
+
+支持思考（reasoning）的模型可以声明档位集合：
+
+```yaml
+thinking:
+  mode: effort
+  efforts: [none, low, medium, high, xhigh, max]
+```
+
+声明后，模型引用可以带第三段选择档位，如 `deepseek:deepseek-chat:high`。档位全集为 `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`。档位写错（不在 `efforts` 列表里）会在启动校验时报错；引用尾部长得像档位名的模型 ID（如 `qwen3:32b`）不受影响，会正常解析为模型名。
+
+## 故障转移组
+
+`groups` 把多个模型引用编成一个候选列表。profile 的 `model` 写组名即使用整组：
+
+```yaml
+groups:
+  chat:
+    strategy: failover
+    models:
+      - deepseek:deepseek-chat
+      - kimi:kimi-latest
+    circuitBreaker:
+      failureThreshold: 3    # 连续失败 3 次后熔断该候选（默认 3）
+      cooldownSeconds: 60    # 熔断 60 秒后放回候选（默认 60）
+```
+
+- `strategy: failover`：按声明顺序逐个尝试，失败切换。也支持 `round-robin` 与 `random`。
+- 熔断器按候选记账：连续失败达到 `failureThreshold` 的候选在冷却期内被跳过，避免每次请求都在坏模型上浪费超时。
+
+<Callout type="warn">
+组只负责「选谁」，profile 的 `failover` 段负责「怎么重试」，两者配合见[参考：插件与 profile 配置](/docs/reference/plugin-config)的 failover 说明。
+</Callout>
+
+## 模型引用怎么写
+
+profile 里 `model` 字段的合法写法：
+
+| 写法 | 含义 |
+| --- | --- |
+| `deepseek:deepseek-chat` | 指定供应商的指定模型 |
+| `deepseek:deepseek-chat:high` | 同上，并要求 `high` 思考档位（需模型声明） |
+| `chat` | 名为 `chat` 的组 |
+
+<Callout type="warn">
+组与单模型是二选一：写组名就享受组内故障转移；写单模型引用时，除非 profile 配置了 `failover.attempts` 大于 1，否则失败直接报错。
+</Callout>
+
+## 验证
+
+重启 Koishi，日志无 `GatewayError` 类报错即说明文件合法。用一个只含该模型的 profile 发一条私聊消息做端到端验证。接口本身不通（网络、密钥）的报错发生在对话时而不是启动时，可在[调试与排障](/docs/guides/debugging)中开启 `dumpRequests` 查看实际请求。

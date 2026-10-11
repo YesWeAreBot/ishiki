@@ -1,0 +1,68 @@
+---
+title: 数据目录参考
+description: dataPath 下每个文件与目录的含义
+---
+
+Ishiki 的全部持久数据在 `<dataPath>`（默认 `data/ishiki`）。本文按布局逐项说明，帮你回答「这个文件是什么、能不能删」。
+
+```files
+data/ishiki
+├── models.yaml
+├── .mcp.json
+├── requests
+├── skills
+└── profiles
+    └── <profile ID>
+        ├── profile.yml
+        ├── persona.md
+        ├── mcp.json
+        ├── memory
+        └── runtimes
+            └── <实例 key>
+                ├── events.jsonl
+                ├── workspace
+                └── resources
+                    ├── assets
+                    └── artifacts
+```
+
+每项的归属与含义见下面两张表。
+
+## 你维护的部分
+
+| 路径 | 说明 |
+| --- | --- |
+| `models.yaml` | 见[参考：models.yaml](/docs/reference/models-yaml)；首次启动自动创建空文件 |
+| `profiles/<ID>/profile.yml` | 见[参考：插件与 profile 配置](/docs/reference/plugin-config) |
+| `profiles/<ID>/persona.md` | 人设，原样注入系统提示词 |
+| `profiles/<ID>/mcp.json` | 存在时**整体替换** `.mcp.json` 基线，不是合并 |
+| `profiles/<ID>/memory/*.md` | v3 上下文记忆块，frontmatter 格式见[管理上下文窗口](/docs/guides/context) |
+| `skills/` 与 profile 内技能目录 | workspace 扩展的技能库，格式见[启用工作区](/docs/guides/workspace) |
+
+## 自动生成的部分
+
+### runtimes/ 实例目录
+
+实例目录在 profile 装配时按需创建：`channel` 模式每个认领频道一个（key 为 `<ID>/<platform:selfId>/<频道号>`），`cross` 模式整个 profile 一个（key 为 `<ID>/main`）。删除某实例目录等于抹掉该频道的全部记忆与资源；profile 未激活时删除不会自动重建，下次该频道触发时重建空实例。
+
+### events.jsonl
+
+实例的完整事件流，每行一个 JSON 对象（`{ id, type, data, timestamp, turnId }`），包含消息、事件与状态条目。它是实例记忆的**唯一事实源**：每轮请求的历史投影、上下文压缩都从它出发。持续追加，不要手工编辑；文件损坏（某行非法 JSON）会影响该实例的恢复。
+
+### resources/assets/
+
+平台媒体（聊天里的图片等）。文件名是 32 位十六进制（源 URL 的 SHA-256 前 32 位），旁有同名 `.json` 元数据（含 `src` 原始 URL、`mediaType`、来源信息）。惰性拉取：消息里的图只在被读取时才下载落盘。
+
+### resources/artifacts/
+
+工具输出的归档：内容寻址命名（SHA-256 前 16 位 + `.bin`），旁有 `.json` 元数据。沙箱内以 `/home/.ishiki/artifacts/<tool>/<name>` 只读可见。早期版本的 `<hash>-<type><hash>.blob` 命名仍可通过元数据解析读取。
+
+### requests/
+
+`dumpRequests: true` 时每次模型调用写一对 `<时间戳>-<序号>-request.json` 与 `-response.sse`。纯调试产物，可整目录删除。
+
+## 权限与备份建议
+
+- `.gitignore` 应排除整个 `data/`（含密钥的 `models.yaml` 与聊天数据都不该入库）。
+- 备份「你维护的部分」即可恢复人格与配置；`runtimes/` 是运行态，体积增长快，按需取舍。
+- 跨机迁移时保持相对布局（`profiles/`、`models.yaml`）不变，`dataPath` 可在插件配置里改。

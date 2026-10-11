@@ -1,0 +1,149 @@
+---
+title: 启用工作区
+description: 给 bot 配一个可执行命令、读写文件的沙箱或宿主工作区
+---
+
+workspace 扩展给每个意识实例一个工作目录和四个工具（`bash`、`read_file`、`write_file`、`edit_file`），外加技能（skills）注入。适合让 bot 处理文件、跑脚本、维护自己的「桌面」。
+
+## 第一步：启用扩展
+
+构建并链接 `packages/workspace`（包名 `koishi-plugin-ishiki-workspace`），在 `koishi.yml` 启用后，在 profile 中声明：
+
+```yaml
+extends:
+  workspace:
+    config:              # 全部字段可省略，以下是常用项
+      backend: sandbox   # sandbox | native
+      network: false
+      javascript: false
+      python: false
+      skills: []         # 额外技能目录，相对 profile 目录
+      mounts: []         # 仅 sandbox：宿主目录挂载
+```
+
+## 第二步：选后端
+
+`backend` 决定命令跑在哪：
+
+| | `sandbox`（默认） | `native` |
+| --- | --- | --- |
+| 文件系统 | 虚拟的、按实例隔离 | 宿主机真实文件系统 |
+| 命令解释 | JavaScript 实现的 bash 解释器（just-bash） | 真实 shell 子进程 |
+| 网络 | 默认关闭；开启后仍拒绝私有地址段 | 走宿主机真实网络，插件无法限制 |
+| 可见范围 | 只有挂载点内的文件 | 整台机器（受运行 Koishi 的账号权限约束） |
+| 默认工作目录 | `/home/workspace`（虚拟路径） | `<runtime 目录>/workspace`（真实路径） |
+| Windows shell | 不适用 | 默认 pwsh，兜底 powershell；可用 `shell` 指定，如 Git Bash |
+
+**默认 sandbox 足够大多数场景**：bot 能在自己的小天地里跑命令、管理文件，弄不坏宿主机。native 适合「让 bot 操作真实项目目录」的场景，用前想清楚权限暴露面：
+
+```yaml
+extends:
+  workspace:
+    config:
+      backend: native
+      shell: "D:\\Application\\Scoop\\apps\\git\\current\\bin\\bash.exe"   # Windows 下换 bash 的写法
+```
+
+<Callout type="warn" title="native 模式没有隔离">
+`network`、`javascript`、`python`、`mounts` 都不生效（bot 天然全都有），也没有任何隔离。
+</Callout>
+
+## sandbox 的世界长什么样
+
+实例内的路径布局固定：
+
+| 虚拟路径 | 内容 |
+| --- | --- |
+| `/home/workspace` | 实例的持久工作目录，落盘到 `<runtime 目录>/workspace`，读写自由 |
+| `/home/skills/<技能名>` | 技能目录，只读 |
+| `/home/.ishiki` | 资源中心：`assets/` 与 `artifacts/`，只读 |
+| `/home` | 实例自身目录（事件日志等），只读 |
+| `mounts` 挂载点 | 你声明的宿主目录 |
+
+宿主目录挂载的写法是 `"source:target[:ro]"`，source 相对 profile 目录解析：
+
+```yaml
+      mounts:
+        - "./shared:/opt/shared"          # 可读写
+        - "D:/datasets:/data:ro"          # 只读
+```
+
+规则：target 必须是绝对路径、不能互相嵌套、不能落在 `/home` 之下；可写挂载的 source 目录不存在时会自动创建，只读挂载则直接报错。
+
+## 加法：JavaScript 与 Python
+
+sandbox 默认只有 bash。开启后 bot 能在沙箱里跑 JS/TS（QuickJS）或 Python（wasm 编译的 CPython），只能访问沙箱内的文件：
+
+```yaml
+      javascript: true
+      python: true
+```
+
+两者都会扩大代码执行面，按需开启。
+
+## 第三步（可选）：放技能
+
+技能（skill）是一个含 `SKILL.md` 的目录，bot 启动时发现它们并把目录注入系统提示词，bot 用 `bash` 等工具按目录里的说明行事。
+
+两个放置位置：
+
+- **数据根技能库**：`<dataPath>/skills/<技能名>/SKILL.md`，对启用 workspace 的所有 profile 生效。
+- **profile 专属**：profile 里 `skills: ["./my-skills"]` 指向的目录（相对 profile 目录），同名技能优先于数据根。
+
+以数据根技能库为例，一个技能目录长这样：
+
+```files
+data/ishiki/skills
+└── report-builder
+    └── SKILL.md
+```
+
+`SKILL.md` 用 YAML frontmatter：
+
+```markdown
+---
+name: report-builder
+description: 按模板把周报数据整理成 Markdown 表格
+---
+
+## 用法
+1. 读取 /home/workspace/weekly.csv …
+```
+
+约束：目录名必须与 `name` 一致且只含小写字母、数字、连字符（如 `report-builder`）；`description` 必填，缺失的技能被跳过并记警告。后发现的同名技能覆盖先发现的。
+
+## 工具行为速查
+
+<TypeTable
+  type={{
+    bash: {
+      type: 'tool',
+      description: '执行一条命令，返回 {stdout, stderr, exitCode}；超时按退出码 124 返回（timeoutMs 默认 30 秒）',
+    },
+    read_file: {
+      type: 'tool',
+      description: '按路径读取文件',
+    },
+    write_file: {
+      type: 'tool',
+      description: '按路径写入文件，返回写入字节数',
+    },
+    edit_file: {
+      type: 'tool',
+      description: '精确字符串替换；old_string 找不到或出现多次而未开 replace_all 都会报错且不改文件',
+    },
+  }}
+/>
+
+命令输出超过 `maxExecutionOutputBytes`（默认 32 MiB）会被截断，模型可见的展示还受全局文本预算约束（见[参考：模型工具](/docs/reference/tools)）。
+
+## 验证
+
+激活 profile 后在日志确认扩展装配无 `missing required service`。然后私聊 bot：「用 bash 看看你的工作目录里有什么」。sandbox 后端它应列出 `/home/workspace`（初始为空）；native 后端列出真实目录。
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `missing required service "ishiki.ext.workspace"` | 插件未安装/未启用，或 profile 拼错扩展名 | 检查 koishi.yml 与 extends 键名 |
+| bash 报命令不存在 | sandbox 只实现了常用命令集 | 换用等价基础命令；或评估切 native |
+| Windows 下中文乱码 | native + cmd/powershell 编码 | 在 `shell` 指定 Git Bash 的 bash.exe |
+| 挂载报 target 冲突 | 挂载点互相嵌套或落在保留路径 | 调整 target 路径 |

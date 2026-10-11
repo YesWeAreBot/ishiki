@@ -1,0 +1,181 @@
+---
+title: 扩展 API 参考
+description: 为 Ishiki 编写扩展、引擎与资源方案的接口契约
+---
+
+本文面向二次开发者：Ishiki 的可编程面由三部分组成——扩展（Extension）、引擎（Context/Wakeup/Toolcall Engine）、资源方案（SchemeHandler）。全部接口由主包 `koishi-plugin-ishiki` 导出（源码：`packages/koishi-plugin-ishiki/src/`）。
+
+## 扩展：贡献工具与提示词
+
+扩展是一个继承 `Extension` 的 Koishi Service，按 profile 的 `extends.<包名>` 被装配。基类契约（`src/extension.ts`）：
+
+```ts
+import { Extension, type ExtensionContext, type ExtensionInstance } from "koishi-plugin-ishiki";
+import { Service, type Context, type Schema } from "koishi";
+
+export default class MyExt extends Extension<MyConfig> {
+  static inject = ["ishiki"];
+
+  // 可选：实例配置的 Schema（来自 profile 的 extends.<名>.config）。
+  // 缺省时配置原样透传。注意这不是插件自身的 Koishi 配置。
+  public Schema?: Schema<MyConfig>;
+
+  constructor(ctx: Context, config: MyExt.Config) {
+    super(ctx, "my-ext");                 // 注册为 ishiki.ext.my-ext 服务
+    ctx.ishiki;                            // 主插件服务（dataPath 等）
+  }
+
+  // 每个 runtime 实例装配期调用一次；返回 undefined 表示该实例不贡献
+  public [Service.invoke](config: MyConfig, context: ExtensionContext): ExtensionInstance {
+    return {
+      extendInstructions?: () => string | Promise<string>,  // 追加系统提示词
+      extendTools?: () => ToolSet | Promise<ToolSet>,        // 追加工具
+      stop?: () => void | Promise<void>,                     // 实例停止时清理
+    };
+  }
+}
+
+namespace MyExt {
+  export interface Config { logLevel: number }   // 插件自身配置（koishi.yml）
+  export const Config: Schema<Config> = /* … */;
+}
+```
+
+要点与约束：
+
+<Callout title="能贡献的只有工具与提示词">
+这是刻意的边界：扩展不改变控制流。要改变「理不理」「看什么」「怎么调」，请写引擎。
+</Callout>
+- 工具名与内置工具或其它扩展重名会让该 profile 装配失败（`ToolConflictError`）。
+- `context.resources.attach(handler)` 注册自定义资源方案；`stop()` 里应 `dispose()` 注销。
+- 同一 profile 的所有实例共享你 `[Service.invoke]` 的每次调用产物之间的隔离取决于你自己——每个实例独立调用一次。
+
+### ExtensionContext 字段
+
+<TypeTable
+  type={{
+    runtimeId: {
+      type: 'string',
+      description: '实例 key（如 my-profile/onebot:123/456789）',
+    },
+    domain: {
+      type: 'InstanceDomain',
+      description: 'channel 模式含 platform/selfId/channelId；cross 模式含频道名单',
+    },
+    home: {
+      type: 'string',
+      description: '实例目录（宿主绝对路径）',
+    },
+    root: {
+      type: 'string',
+      description: 'profile 目录',
+    },
+    fiber: {
+      type: 'Context',
+      description: 'profile 级上下文；profile 级共享资源的 dispose 挂这里',
+    },
+    logger: {
+      type: 'Logger',
+      description: '主插件日志器',
+    },
+    resources: {
+      type: 'ResourceCenter',
+      description: '实例资源中心，注册自定义 scheme 用',
+    },
+  }}
+/>
+
+### 可复用的工具构造件
+
+从主包导出（`@yesimagent/core` 再导出 AI SDK 全量）：
+
+- `tool({ description, inputSchema, outputSchema, execute, toModelOutput? })`：定义工具；`inputSchema` 用 `jsonSchema<T>()` 声明。
+- `jsonSchema`、`ToolSet`、`ToolCallers`（供 codemode 收编的工具路由）。
+- 工具返回值最终会过统一输出出口（截断、媒体归档），你不需要（也不应该）在工具内自行截断。
+
+### 现成范例
+
+- `packages/workspace`：完整扩展——四个工具、技能发现、两个自定义 scheme、profile 级配置 Schema。
+- `packages/mcp-client`：按 profile 建连接池、`mcp://` 不透明 scheme、工具名冲突规避。
+
+## 引擎：替换三族行为之一
+
+三族引擎（上下文/唤醒/工具调用）都是继承各自基类的 Koishi Service，按名字注册为 `ishiki.engine.<族>.<名字>`：
+
+```ts
+import { ContextEngine, type ContextEngineInstance } from "koishi-plugin-ishiki";
+
+export class MyContextEngine extends ContextEngine<"my-engine"> {
+  constructor(ctx: Context) {
+    super(ctx, "my-engine");
+  }
+
+  public [Service.invoke](config, context: ExtensionContext): ContextEngineInstance {
+    return new MyContextInstance(config.myEngine, context);
+  }
+}
+```
+
+实例接口（按族）：
+
+<TypeTable
+  type={{
+    ContextEngineInstance: {
+      type: 'interface',
+      description: 'prepareEntries?(entries, { turnId, signal }) 请求前整理条目；instructions?() 追加系统提示词；attach?(agent) / 随 dispose 清理。内置两例：standard 的压缩水位、v3 的 WorldState 渲染。',
+    },
+    WakeupEngineInstance: {
+      type: 'interface',
+      description: 'decide(event) → "trigger" | "wait"，纯判定、无副作用。',
+    },
+    ToolcallEngineInstance: {
+      type: 'interface',
+      description: 'middleware() 返回 AI SDK 工具中间件（native 返回 undefined 表示用原生 function call）。',
+    },
+  }}
+/>
+
+把配置写进引擎 map（`declare module` 合并 `ContextEngines` 等）即可获得 profile 配置段的类型支持；用户在 profile 里写 `engine: my-engine` 即可启用。主插件构造时只注册内置引擎；自定义引擎作为普通 Koishi 插件安装，profile 激活时按服务名发现，缺了就停在等待态。
+
+## 资源方案：让 read/send_message 认识你的 URL
+
+实现 `SchemeHandler` 并 `context.resources.attach(handler)`：
+
+```ts
+import { SchemeHandler, ResourceError, ResourcePayload, ResourceUrl } from "koishi-plugin-ishiki";
+
+export class MyHandler implements SchemeHandler {
+  readonly scheme = "myscheme";
+
+  public async resolve(url: ResourceUrl): Promise<ResourcePayload> {
+    // url.authority / url.segments / url.query / url.rawTail 已解析
+    if (无效) throw new ResourceError("resource_not_found", "…");
+    return { url: url.href, content: "文本…", size: 42 };      // 文本载荷
+    // 或 { url, bytes: Uint8Array, mediaType, size }            // 二进制载荷
+  }
+
+  public async resolveView?(url: ResourceUrl, view: string): Promise<ResourcePayload> {
+    if (view !== "meta") throw new ResourceError("unsupported_view", `no "${view}" view`);
+    /* … */
+  }
+
+  public locate?(url: ResourceUrl): string { /* 宿主路径（可选） */ }
+}
+```
+
+约束：
+
+- `asset` / `artifact` / `local` 是保留方案，注册同名 handler 会被拒绝。
+- 错误用 `ResourceError` 并给出标准错误码（`invalid_resource_uri`、`resource_not_found`、`resource_too_large`、`unsupported_view` 等），read 工具会把原因透给模型。
+- 文本上限 1 MiB（超限抛 `resource_too_large`）是扩展方案的约定俗成，`skill`/`workspace` 方案遵循它；核心三方案走统一文本预算。
+- 行选择器（`:1-200`）由资源中心统一处理，handler 无需关心；`opaque: true` 声明（如 `mcp`）则连 URI 都不解析。
+
+## 事件与消息类型
+
+`IshikiEvent`（`src/types.ts`）是实例收到的输入：`ishiki.message.created` / `ishiki.message.deleted` / `ishiki.attachment` / `ishiki.tools.catalog`，字段见源码。扩展一般不直接消费事件——唤醒引擎与上下文引擎才是事件的第一读者。
+
+## 版本与兼容提示
+
+- 全部接口随 0.0.x 演进，**以主包导出的 TypeScript 类型为准**；本文描述与类型冲突时以类型为准。
+- 主包 re-export `@yesimagent/core`（Agent 运行时）与 `@yesimagent/gateway`（模型网关），扩展可直接 import 主包而不必声明这两个依赖。
+- 装配失败（服务缺失、工具重名、配置校验不过）一律表现为 profile 停在等待态或被跳过，开发期把 `logLevel` 开到 3 定位。

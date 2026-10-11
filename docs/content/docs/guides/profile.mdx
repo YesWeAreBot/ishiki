@@ -1,0 +1,94 @@
+---
+title: 编写 profile
+description: 认领频道、选择运行模式与安置人设
+---
+
+profile 是 Ishiki 的生效单位：一个 profile 声明「用哪个模型、在哪些账号的哪些频道活动、以什么模式运行」。本文覆盖频道认领语法、两种运行模式的选择、多 profile 共存和人设写法。
+
+文件位置：`<dataPath>/profiles/<目录名>/profile.yml`（`.yaml` 后缀也可以）。**目录名就是 profile ID**，出现在日志和运行时目录名里，建议用有意义的短名。
+
+<Callout title="前置知识">
+插件启动时扫描 `profiles/` 下所有子目录，按目录名排序逐个加载；解析失败或频道冲突的 profile 会被跳过（日志有 `[<ID>] profile skipped: …` 说明），不影响其他 profile。
+</Callout>
+
+## 认领频道
+
+`channels` 的键是机器人账号（`platform:selfId`），值是频道名单：
+
+```yaml
+channels:
+  "onebot:10000":
+    - "group_*"          # 前缀匹配：以 group_ 开头的频道
+    - "123456"           # 精确匹配：频道号 123456
+    - "!987654"          # 排除：认领范围里去掉频道 987654
+  "onebot:704162514":
+    - "private_*"        # 这个账号的全部私聊
+```
+
+匹配规则：
+
+- 一个频道被认领，需要**命中至少一个正项**（不带 `!` 的项）**且不命中任何排除项**，与书写顺序无关。
+- `*` 单独成项表示全部；尾随 `*` 按前缀匹配；其余按字符串精确匹配。
+- 排除项（`!` 开头）不能为空串，整份名单至少要有一个正项。
+- 键必须含 `:`（即合法的 `platform:selfId`），一个 profile 必须认领至少一个账号，否则加载报错。
+
+两个 profile 的认领范围**不允许重叠**：启动时逐一检查新 profile 与已加载 profile 在同一账号下的名单是否有交集（考虑排除项）。有冲突的 profile 整体跳过。让路的惯用写法是给后来者加排除项，见[参考：插件与 profile 配置](/docs/reference/plugin-config)。
+
+## 选择运行模式：channel 还是 cross
+
+`mode` 决定这个 profile 派生几个「意识实例」（runtime）：
+
+| mode | 行为 | 适用 |
+| --- | --- | --- |
+| `channel`（默认） | 每个认领的频道各派生一个独立实例，历史互不相通 | 大多数场景；群聊与私聊各自独立，互不干扰 |
+| `cross` | 整个 profile 只有一个实例，全部认领频道共享同一块事实流 | 想让 bot 跨群保持同一个「正在进行的对话」，如同时活跃在多个群和私聊里 |
+
+```yaml
+mode: cross
+```
+
+<Callout type="warn" title="cross 模式的两个代价">
+1. **Token 消耗**：所有频道的消息进同一个上下文窗口，认领范围越大消耗越快。
+2. **发言必须带坐标**：合流后没有「当前频道」，模型调用 `send_message` 时必须显式给 `target` 参数（消息事件头里带有可复制的 target）。channel 模式则不需要。规则详见[参考：模型工具](/docs/reference/tools)的 send_message 条目。
+</Callout>
+
+模式只影响实例粒度，不改变认领规则本身；两种模式的唤醒、上下文、引擎配置完全一致。
+
+## 安置人设
+
+profile 目录下的 `persona.md` 是人设文件，内容原样注入系统提示词末尾。不写也可以运行，但 bot 会缺少身份感。
+
+```files
+profiles/my-first
+├── profile.yml
+└── persona.md
+```
+
+写法没有固定格式，中文即可。两条经验：
+
+- 把「行为约束」（何时插话、说话风格、底线）写具体，比堆砌形容词有效。
+- 文件会全文进入每轮请求，太长会持续消耗上下文，控制在与模型能力的匹配范围内。
+
+## 多 profile 共存
+
+一个账号可以拆给多个 profile（用排除项划界），多个账号也可以合给一个 profile。典型布局：
+
+```text
+profiles/
+├── main-bot/        # onebot:10000 的大部分群 + 私聊，channel 模式
+│   ├── profile.yml
+│   └── persona.md
+├── work-bot/        # onebot:10000 的某个工作群，cross 模式接另一批账号
+│   ├── profile.yml
+│   └── persona.md
+└── test-bot/        # 测试号，单独认领
+    └── profile.yml
+```
+
+<Callout type="warn">
+同一账号的同一批频道只能归一个 profile；加载顺序按目录名排序，先加载者优先占住频道。
+</Callout>
+
+## profile 的其余配置去哪查
+
+本文只覆盖了结构性的字段（`model`、`mode`、`channels`、`persona.md`）。唤醒、上下文、工具调用引擎、打字延迟等段落是独立的配置面，各有一篇指南：[唤醒](/docs/guides/wakeup)、[上下文](/docs/guides/context)、[MCP](/docs/guides/mcp)、[工作区](/docs/guides/workspace)。全部字段的表格见[参考：插件与 profile 配置](/docs/reference/plugin-config)。

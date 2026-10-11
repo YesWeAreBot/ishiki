@@ -1,0 +1,5 @@
+{
+  "title": "Ishiki 文档",
+  "defaultOpen": true,
+  "pages": ["index", "tutorial", "guides", "reference", "explanations", "dev"]
+}

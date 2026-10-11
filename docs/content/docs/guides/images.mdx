@@ -1,0 +1,80 @@
+---
+title: 配置图片与附件
+description: 让 bot 看得见图、也发得出图
+---
+
+Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能看见）由 `attachment.imageInput` 与模型声明共同决定；**出站**（bot 怎么把图发出去）由 `send_message` 的元素模式完成。本文两侧都讲。
+
+配置位置：profile 的 `attachment` 段。
+
+## 让 bot 看见图
+
+```yaml
+attachment:
+  imageInput: true           # 本 profile 的能力上限开关
+  maxImageBytes: 5242880     # 单图上限，默认 5 MiB
+  maxTotalImageBytes: 10485760   # 整次请求所有图累计，默认 10 MiB
+  maxImageCount: 4           # 单次请求图片张数上限，默认 4
+  maxImageDimension: 8000    # 单边像素上限，默认 8000
+```
+
+<Callout type="error" title="imageInput 的硬前提">
+profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml` 里声明 `input: [text, image]`。只要有任何一个候选没声明，profile 装配即失败并报 `profile imageInput requires declared image input on every candidate of …`。这是故意的——故障转移不能把请求落到看不见图的模型上。
+</Callout>
+
+配额是**每次请求一份预算**，平台图片和工具图片共用，按「最新优先」分配：历史很久的图会被新图挤出预算，旧图保留引用与描述，不保留像素。
+
+几个明确的行为边界：
+
+- 图片不自动缩放；超过任一配额的图保留 URL 与原因说明，不加载。
+- 加载失败（配额、格式不支持、源失效）时，下一条附件消息会带原因，重试同样的 read 不会绕过。
+- 即使 `imageInput: false`，模型仍可在 codemode 里把图片字节传给其他工具（比如交给 OCR 工具），只是它自己「看不见」。
+
+## 让 bot 发图
+
+模型发消息只有一条路：`send_message`。发图用元素模式，图片写进消息体：
+
+```json
+{ "messages": ["看这张 <img src=\"artifact://codemode/abc123.bin\"/>"], "mode": "element" }
+```
+
+`src` 支持的协议白名单：`asset://`、`artifact://`、`local://`、`workspace://`。解析失败（图不存在、读取失败）的图**从消息里剔除但消息照发**，并在工具结果里报告哪些被丢掉了。
+
+引导 bot 正确发图，靠 persona 或指令里写清楚流程：
+
+<Steps>
+<Step>
+
+模型先拿到图（工具返回、或 codemode 返回值的 `attachment` 字段），此时图只是「可用」；
+
+</Step>
+<Step>
+
+从返回里取 `artifact://…` 这样的资源 URL；
+
+</Step>
+<Step>
+
+用 `mode: "element"` 把 `<img src="…"/>` 放进 `send_message`。
+
+</Step>
+</Steps>
+
+<Callout type="warn" title="常见出错点在第 2 步">
+模型自己「看到」了截图不等于用户看到了，必须走 send_message。系统提示词已内置这段引导，自定义 persona 时不要与之矛盾。
+</Callout>
+
+## 附件在历史里如何呈现
+
+- 入站图片在到达时注册为 `asset://<id>` 资源，随后以一条「附件消息」进入对话；原消息被撤回时，附件消息自动从历史投影中消失。
+- 工具返回的媒体统一归档为 `artifact://<tool>/<name>`，模型看到的是占位标记 `[attachment: artifact://…; image/png; …]`，真实字节在资源里。
+- 模型想回看某张图，用 `read` 工具按 URL 读（`imageInput` 开启时投为图像，关闭时得到描述与元数据）。
+
+## 排错
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 装配报 `requires declared image input` | 模型/failover 候选未声明 `input: [text, image]` | 补全 models.yaml 的模型声明 |
+| 图发出去是空的或没发出去 | `src` 不在白名单协议、资源已失效 | 用工具结果里的原样 URL |
+| bot 说「看不见图」 | `imageInput` 关着；或配额把图挡了 | 开启开关；调大配额；看附件消息里的原因 |
+| 历史里的图「不见了」 | 被 newer 附件挤出请求预算 | 正常行为；需要时让 bot 重新 read 对应 URL |

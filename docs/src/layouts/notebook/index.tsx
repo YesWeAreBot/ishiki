@@ -1,0 +1,61 @@
+import {
+  type AIChatOptions,
+  type GetLayoutTabsOptions,
+  type LayoutTab,
+  type NavOptions,
+  type BaseLayoutProps,
+  getLayoutTabs,
+} from "@fumadocs/base-ui/layouts/shared";
+import type * as PageTree from "fumadocs-core/page-tree";
+import { type HTMLAttributes, useMemo } from "react";
+
+import { type DocsSlots, LayoutBody } from "./client";
+import type { SidebarProps, SidebarProviderProps } from "./slots/sidebar";
+
+export interface DocsLayoutProps extends Omit<BaseLayoutProps, "nav"> {
+  tree: PageTree.Root;
+  tabs?: LayoutTab[] | GetLayoutTabsOptions | false;
+  tabMode?: "sidebar" | "navbar";
+  sidebar?: SidebarOptions;
+  nav?: NavOptions & { mode?: "top" | "auto" };
+  containerProps?: HTMLAttributes<HTMLDivElement>;
+  aiChat?: AIChatOptions;
+  slots?: Partial<DocsSlots>;
+}
+
+interface SidebarOptions extends SidebarProps, SidebarProviderProps {
+  /**
+   * @deprecated use layout-level `tabs` option instead.
+   */
+  tabs?: LayoutTab[] | GetLayoutTabsOptions | false;
+}
+
+export function DocsLayout({
+  tree,
+  tabMode = "sidebar",
+  sidebar: { tabs: defaultTabs, ...sidebarProps } = {},
+  children,
+  tabs = defaultTabs,
+  ...props
+}: DocsLayoutProps) {
+  const resolvedTabs = useMemo(() => {
+    if (Array.isArray(tabs)) {
+      return tabs;
+    }
+    if (typeof tabs === "object") {
+      return getLayoutTabs(tree, tabs);
+    }
+    if (tabs !== false) {
+      return getLayoutTabs(tree);
+    }
+    return [];
+  }, [tabs, tree]);
+
+  return (
+    <LayoutBody tree={tree} tabs={resolvedTabs} tabMode={tabMode} sidebar={sidebarProps} {...props}>
+      {children}
+    </LayoutBody>
+  );
+}
+
+export { useNotebookLayout, type DocsSlots } from "./client";

@@ -11,6 +11,7 @@ export default defineConfig({
     ".pi/**",
     ".omp/**",
     ".specify/**",
+    "docs/**",
     "tools/oxlint/anti-slop/**",
   ],
   plugins: ["eslint", "import", "node", "oxc", "promise", "typescript", "unicorn", "vitest", "vue"],

@@ -1,0 +1,208 @@
+---
+title: mcp.json 参考
+description: MCP 服务器配置的字段与校验规则
+---
+
+`mcp.json` 由 mcp-client 扩展读取，位置与覆盖关系见[接入 MCP 服务器](/docs/guides/mcp)。JSON Schema 位于包内 `resources/mcp.schema.json`（推荐用 `$schema` 引用获得编辑器校验）。
+
+## 顶层结构
+
+<TypeTable
+  type={{
+    $schema: {
+      type: 'string',
+      description: 'Schema 路径，仅编辑器用',
+    },
+    mcpServers: {
+      type: 'Record<名称, ServerConfig>',
+      default: '{}',
+      description: '服务器定义',
+    },
+    disabledServers: {
+      type: 'string[]',
+      default: '[]',
+      description: '黑名单：列出的服务器一律不连，压过其余任何设置',
+    },
+    enabledServers: {
+      type: 'string[]',
+      default: '[]',
+      description: '白名单：列出的服务器强行启用，压过 enabled: false 与黑名单',
+    },
+  }}
+/>
+
+<Callout>
+`mcpServers` 的键须匹配 `^[A-Za-z0-9_-]{1,64}$`；`disabledServers`/`enabledServers` 的项非空且不重复。
+</Callout>
+
+## 服务器定义（三选一）
+
+三种形态按 `type` 区分，互斥（stdio 形态禁止 `url`，http/sse 形态禁止 `command`）。
+
+<Tabs groupId="mcp-transport" items={['stdio', 'http', 'sse']}>
+<Tab value="stdio">
+
+```json
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": {}
+    }
+  }
+}
+```
+
+</Tab>
+<Tab value="http">
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+</Tab>
+<Tab value="sse">
+
+```json
+{
+  "mcpServers": {
+    "legacy": {
+      "type": "sse",
+      "url": "https://example.com/sse"
+    }
+  }
+}
+```
+
+</Tab>
+</Tabs>
+
+### stdio（type 可省略，默认）
+
+<TypeTable
+  type={{
+    type: {
+      type: 'string',
+      default: '"stdio"',
+      description: '默认值，可省略',
+    },
+    command: {
+      type: 'string',
+      description: '可执行文件（命令名或绝对路径）',
+      required: true,
+    },
+    args: {
+      type: 'string[]',
+      description: '参数列表',
+    },
+    env: {
+      type: 'Record<string, string>',
+      description: '环境变量；只覆盖列出的键，不继承父进程其余环境',
+    },
+    cwd: {
+      type: 'string',
+      description: '子进程工作目录',
+    },
+  }}
+/>
+
+### http / sse
+
+<TypeTable
+  type={{
+    type: {
+      type: '"http" | "sse"',
+      description: 'Streamable HTTP 或 SSE 传输',
+      required: true,
+    },
+    url: {
+      type: 'string',
+      description: '服务端点',
+      required: true,
+    },
+    headers: {
+      type: 'Record<string, string>',
+      description: '附加请求头（如 Authorization）',
+    },
+  }}
+/>
+
+### 公共字段（三型共有）
+
+<TypeTable
+  type={{
+    enabled: {
+      type: 'boolean',
+      default: 'true',
+      description: '单服务器开关',
+    },
+    timeout: {
+      type: 'number',
+      default: 'SDK 默认',
+      description: '单次工具调用超时（毫秒，≥0）；0 表示不限',
+    },
+    instructions: {
+      type: 'boolean',
+      default: 'true',
+      description: '是否把服务器声明的使用说明注入系统提示词；false 只关说明，工具照常提供',
+    },
+  }}
+/>
+
+## 完整示例
+
+来自仓库 `resources/mcp.example.json`：
+
+```json
+{
+  "$schema": "./mcp.schema.json",
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": {}
+    },
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer <token>" },
+      "timeout": 30000,
+      "instructions": true
+    },
+    "legacy": {
+      "type": "sse",
+      "url": "https://example.com/sse"
+    },
+    "sandbox": {
+      "command": "node",
+      "args": ["./sandbox-mcp.js"],
+      "enabled": false
+    }
+  },
+  "disabledServers": [],
+  "enabledServers": []
+}
+```
+
+## 加载行为
+
+- 解析：JSON 解析或 Schema 校验失败时**回退到空配置**（无服务器、全默认），日志有 error；不会因此阻塞其它启动流程。
+- 逐服务器校验：某个服务器定义不合法只跳过该服务器，其余照常连接。
+- 连接失败只记日志并跳过该服务器，不影响其余服务器。
+
+<Callout type="warn" title="没有自动重连">
+连接在启动（profile 装配）时建立，失败的服务器在下次重载前不会重试；服务器运行中变更**工具列表**会自动刷新。
+</Callout>
+
+<Callout type="warn" title="Schema 与实现的一处不一致">
+Schema 中描述的工具名前缀为 `<服务器名>-<工具名>`（连字符），实现实际用 `<服务器名>_<工具名>`（下划线）；同服务器内重名工具自动加 `_2`、`_3` 后缀。以下划线为准。
+</Callout>

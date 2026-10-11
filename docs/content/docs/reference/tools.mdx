@@ -1,0 +1,118 @@
+---
+title: 模型工具与资源协议
+description: 内置工具的输入输出与资源 URL 的完整语法
+---
+
+本文是模型侧可调用面的参考：五个内置工具、资源 URL 方案、文本预算。
+
+## 内置工具
+
+### send_message
+
+发送可见消息，**模型对用户说话的唯一通道**。
+
+<TypeTable
+  type={{
+    messages: {
+      type: 'string[]',
+      description: '要发送的消息（≥1 项），按序发送，条间按打字延迟等待',
+      required: true,
+    },
+    mode: {
+      type: '"element" | "raw"',
+      default: 'element',
+      description: 'element：按消息元素解析（可含 <img/>、<at/> 等）；raw：纯文本',
+    },
+    continue: {
+      type: 'boolean',
+      default: 'false',
+      description: 'true 时某条失败后继续发余下消息；默认失败即停',
+    },
+    target: {
+      type: '{ sid, channelId }',
+      description: '目标频道坐标，cross 模式必填，从频道事实块头部原样复制',
+    },
+  }}
+/>
+
+输出：成功 `{ ok: true, ids: string[] }`；失败 `{ ok: false, error: { name, message }, sent, failedAt }`（`failedAt` 是第几条失败的，从 0 计）。
+
+行为要点：
+
+- 消息里的媒体 `src` 支持 `asset://`、`artifact://`、`local://`、`workspace://`，解析为内联数据发送；解析失败的媒体被剔除并报告，不阻塞消息。
+- cross 模式必须带 `target`，且目标必须在 profile 认领范围内。
+- 打字延迟按 `typing` 配置逐条计算（中文按 `charPerSecond`、拉丁按其 1.5 倍，带抖动）。
+- 结束轮次的隐式规则：一轮内只调了 `send_message` 且全部成功，轮次自动结束；显式调 `finish` 也一样。
+
+### read
+
+读取资源。输入 `{ url }`：
+
+```text
+read({ url: "artifact://codemode/abc123.bin:1-200" })   # 行选择器取 1–200 行
+read({ url: "asset://<32位十六进制>" })                  # 平台媒体
+read({ url: "local://notes.txt?view=meta" })             # 只看元数据不取字节
+```
+
+- 行选择器 `:start-end` 或 `:start+count` 贴在 URL 后。
+- 文本资源返回该范围的全文；二进制返回 `{ type: "file", url, mediaType, data(base64), byteLength, filename? }`。
+- `?view=meta` 只返回元数据。
+- 直接调用的展示上限见下文「文本预算」；截断时结果尾部的 Continue 锚点给出续读起点（按锚点里的 URL 再 read 即可续读）。
+- codemode 内 read 始终返回完整 JSON 安全值（二进制即 base64 节点），可把文件节点原样传给其他工具或放进 `attachment` 数组。
+
+### codemode
+
+把一批工具收进 QuickJS 沙箱，模型改写一段 JS 程序在其中调用工具。开关与配额见[参考：插件与 profile 配置](/docs/reference/plugin-config)的 codemode 段。
+
+- 程序内 `await tools.name(input)` / `await tools["server_tool"](input)` 返回工具的原始 JSON 安全值；中间数据不出上下文。
+- `direct` 名单内的工具只留模型目录（程序够不着），未列出的收进沙箱（目录里消失）；`send_message` 两处都可达，`finish` 只留目录。
+- 传媒体出沙箱的唯一方式：返回值顶层带 `attachment` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。
+- 每次调用是一个独立程序；需要分步传递的数据放进返回值，下一步以观察形式看到。
+
+### search（toolsearch 开启时）
+
+按名称与描述关键词发现延迟池里的工具：输入 `{ query }`，输出 `{ tools: [{ name, description? }] }`。命中的工具**下一步**起可调用；每步结束时目录有变化则持久化一条全量目录消息。常驻工具（`finish`、`send_message`、`read`、`codemode`、`search` 加 `resident` 名单）永远可见。
+
+### finish
+
+结束当前轮次：输入 `{ reason? }`，输出 `{ ok: true }`。收尾动作应由模型直调发起。
+
+## 资源 URL 方案
+
+| 方案 | 语法 | 内容 |
+| --- | --- | --- |
+| `asset` | `asset://<32位十六进制>` | 平台媒体，惰性拉取：首次访问才下载并落盘 |
+| `artifact` | `artifact://<tool>/<name>` | 工具输出归档；沙箱内对应 `/home/.ishiki/artifacts/<tool>/<name>` |
+| `local` | `local://<相对路径>` | 实例目录（runtime home）内的文件；不可越出实例目录 |
+| `skill` | `skill://<技能名>/<路径>` | workspace 扩展注册；路径缺省为 `SKILL.md`；限 1 MiB 文本 |
+| `workspace` | `workspace://<路径>` | workspace 扩展注册；实例工作目录；目录路径返回条目列表 |
+| `mcp` | `mcp://<服务器>/<资源URI>` | mcp-client 扩展注册；URI 部分原样透传，不解析选择器 |
+
+保留方案 `asset` / `artifact` / `local` 由资源中心内置，扩展不能占用这三个名字。选择器与 `?view=meta` 适用于前三者；`skill`/`workspace` 支持行选择器；`mcp` 是不透明协议，一律不支持。
+
+## 文本预算
+
+所有「模型可见的文本结果」共用一份预算（`read` 与统一输出包装器同源）：
+
+<TypeTable
+  type={{
+    maxLines: {
+      type: '2000 行',
+      description: '最大行数',
+    },
+    maxLineLength: {
+      type: '2000 字符',
+      description: '单行最大字符',
+    },
+    maxTotalChars: {
+      type: '30,000',
+      description: '总字符（UTF-16）',
+    },
+  }}
+/>
+
+超长时保留完整行并附 Continue 锚点；被截掉的单行余文只能在 codemode 或沙箱内继续读。不带行选择器的整读另有 8 MiB 的硬读取上限。
+
+## 工具结果的统一出口
+
+每个工具结果在给模型前经过统一处理：文本按预算截断；媒体字节归档为 `artifact` 并替换为占位标记 `[attachment: <url>; <mediaType>; …]`；codemode 返回值顶层 `attachment` 数组里的块作为附件消息在下一步投给模型。工具自己声明的展示转换（如 `bash` 的 stdout/stderr 拼排）优先于默认渲染。

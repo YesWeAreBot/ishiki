@@ -1,0 +1,93 @@
+---
+title: 引擎系统
+description: 三族引擎的分工、组合与扩展原理
+---
+
+Ishiki 把「一次对话中的模型侧行为」拆成三族正交的引擎：上下文（看什么）、唤醒（理不理）、工具调用（怎么做）。本文讲清这个拆分为什么成立、组合如何实现、以及自己写一个引擎意味着什么。
+
+## 为什么是三族
+
+一次群聊交互里，模型侧要回答三个互相独立的问题：
+
+1. **这条消息要不要理？** —— 唤醒引擎（wakeup）
+2. **这一轮给模型看什么？** —— 上下文引擎（context）
+3. **模型怎么表达「用工具」？** —— 工具调用引擎（toolcall）
+
+三个问题的答案组合爆炸但彼此无依赖：意愿唤醒配 WorldState 上下文、规则唤醒配线性历史、模型判定唤醒配任何工具协议……都是合法组合。把每一维做成可替换的引擎，而不是做一个「预设方案」的大开关，是这个设计的全部动机。
+
+正交性落实在配置上：profile 的三个段（`wakeup`/`context`/`toolcall`）各自带 `engine` 字段，各自带引擎私有参数，互不引用。
+
+## 组合机制：Koishi Service
+
+每个引擎是一个 Koishi Service，按约定名字注册：`ishiki.engine.context.standard`、`ishiki.engine.wakeup.jev`……主插件启动时注册全部内置引擎；第三方引擎作为普通 Koishi 插件安装即可。
+
+profile 激活时，主插件按名字取服务（`ContextEngine.GetService(fiber, "standard")` 等），调用它的 `[Service.invoke](配置, 上下文)` 产出实例。三个关键性质：
+
+- **按名发现，缺了等待**。profile 写了不存在的引擎名，profile 停在等待态并报 `missing required service`；插件装好重载后自动装配。这让「先写 profile、后装引擎包」的工作流成立。
+- **实例按 runtime 派生**。每个意识实例调用一次 `[Service.invoke]`，所以 v3 唤醒的意愿值天然按频道隔离（channel 模式下）。
+- **扩展与引擎同机制**。扩展（`ishiki.ext.<名>`）也是同样的 Service 契约，只是贡献面被限定在工具与提示词。
+
+## 三族引擎各自的设计约束
+
+**唤醒引擎是纯函数。** 输入一条事件，输出 `trigger` 或 `wait`，不允许副作用。这保证唤醒判定可以随意更换而不影响事实流。有状态的需求（如 v3 的意愿值、jev 的冷却期）在实例内部维护，状态粒度即实例粒度。
+
+**上下文引擎只做投影。** 它在每轮请求前被调用（`prepareEntries`），把事实流投影成模型输入，可以追加系统提示词（如 v3 的 WorldState 说明、记忆块）。它不修改事实流本身——压缩类操作（standard 的摘要）以**追加新条目**的方式表达，历史永远可回放。
+
+**工具调用引擎是协议适配器。** native 引擎用模型原生 function call；其余六个（v3/hermes/qwen3coder/morph-xml/yaml-xml）处理「模型把工具调用写进普通文本」的协议：注入协议提示词、从输出文本中解析调用、把工具结果格式化回文本。协议引擎的存在意义是**能力下放**：不支持 function call 的模型（或网关）也能完整使用工具。
+
+## v3 引擎族：迁移通道
+
+三族里都有 `v3` 变体不是巧合——它们是从 YesImBot v3 迁移的行为：
+
+- `context: v3`：WorldState 视窗（`<working_memory>` 分已处理/新事件）+ 核心记忆块（`memory/*.md` 注入 system）。
+- `wakeup: v3`：响应意愿模型（base/atMention/衰减半衰期/回复成本……意愿超阈值按概率开口）。
+- `toolcall: v3`：JSON OUTPUT 协议，每步强制输出 `thoughts`（observe/analyze_infer/plan 三段）+ `actions`。
+
+三者可以独立启用——v3 上下文配 native 工具调用完全合法。它们是「老体验」的完整还原，但不再绑定：想混搭新引擎，随意。
+
+## 自己写一个引擎
+
+最小代价的入口是唤醒引擎（一个纯函数）：
+
+```ts
+import { WakeupEngine, type WakeupEngineInstance } from "koishi-plugin-ishiki";
+import { Service, type Context } from "koishi";
+
+class MyWakeupInstance implements WakeupEngineInstance {
+  async decide(event) {                    // 同步也可
+    return event.type === "ishiki.message.created" && Math.random() < 0.1
+      ? "trigger" : "wait";
+  }
+}
+
+export class MyWakeupEngine extends WakeupEngine<"my-wakeup"> {
+  constructor(ctx: Context) { super(ctx, "my-wakeup"); }
+  public [Service.invoke](config, context) { return new MyWakeupInstance(); }
+}
+```
+
+作为 Koishi 插件发布后，用户在 profile 写 `wakeup: { engine: my-wakeup }` 即用。上下文与工具调用引擎同理（基类分别为 `ContextEngine`、`ToolcallEngine`），接口细节见[扩展 API 参考](/docs/reference/api)。
+
+<Callout title="引擎改变行为，扩展增加能力">
+如果你在写「给模型加几个工具」，那是扩展；如果你在写「换一种决定历史的方式」，才是引擎。
+</Callout>
+
+## 继续阅读
+
+<Cards>
+  <Card
+    title="调整唤醒行为"
+    description="standard、v3、jev 三种引擎的配置与调参"
+    href="/docs/guides/wakeup"
+  />
+  <Card
+    title="管理上下文窗口"
+    description="standard 压缩与 v3 WorldState 的取舍"
+    href="/docs/guides/context"
+  />
+  <Card
+    title="扩展 API 参考"
+    description="自己写引擎、扩展与资源方案"
+    href="/docs/reference/api"
+  />
+</Cards>
