@@ -51,7 +51,7 @@ export class McpConnection {
     const tools: ToolSet = {};
     const used = new Set<string>();
     for (const declared of listed.tools) {
-      const exposed = uniqueName(`${this.name}-${safeName(declared.name)}`, used);
+      const exposed = uniqueName(`${this.name}_${safeName(declared.name)}`, used);
       tools[exposed] = tool({
         description: declared.description,
         inputSchema: jsonSchema(declared.inputSchema as Record<string, unknown>),
@@ -85,7 +85,7 @@ export class McpConnection {
     }
     this.tools = Object.fromEntries(Object.entries(tools).sort(([left], [right]) => left.localeCompare(right)));
     this.logger.debug(`mcp server "${this.name}" exposes ${Object.keys(this.tools).join(", ") || "no tools"}`);
-    if (this.server.instructions) this.instructions = this.client.getInstructions();
+    if (this.server.instructions) this.instructions = `### ${this.name}\n` + this.client.getInstructions();
   }
 
   private async call(toolName: string, params: unknown): Promise<McpBlock[]> {
