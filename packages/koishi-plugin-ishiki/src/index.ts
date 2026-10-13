@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { Template } from "@huggingface/jinja";
+import { type CustomMessages } from "@yesimagent/core";
 import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gateway";
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
@@ -36,6 +37,13 @@ interface Route {
   readonly profile: Profile;
   readonly runtimes: Map<string, AgentRuntime>;
   readonly spawn: (key: string, domain: InstanceDomain) => AgentRuntime;
+}
+
+/** 按址入口的会话坐标：host 经它把事件与唤醒路由到对应 runtime。 */
+export interface SessionAddress {
+  platform: string;
+  selfId: string;
+  channelId: string;
 }
 
 class Ishiki extends Service<Ishiki.Config> {
@@ -225,21 +233,37 @@ class Ishiki extends Service<Ishiki.Config> {
     if (event.type !== "ishiki.message.created" && event.type !== "ishiki.message.deleted") return;
 
     const { platform, selfId, channelId } = event.data;
-    const sid = `${platform}:${selfId}`;
-    const route = this.routes.get(sid)?.find((entry) => matchesChannel(entry.profile.channels.get(sid)!, channelId));
-    if (route === undefined) return;
-
-    const { profile } = route;
-    const key = profile.mode === "cross" ? `${profile.id}/main` : `${profile.id}/${sid}/${channelId}`;
-    const domain: InstanceDomain = profile.mode === "cross" ? { mode: "cross", channels: profile.channels } : { mode: "channel", platform, selfId, channelId };
-
     try {
-      const runtime = route.runtimes.get(key) ?? route.spawn(key, domain);
-      await runtime.deliver(event);
+      await this.resolveRuntime({ platform, selfId, channelId }).deliver(event);
     } catch (error) {
       this.logger.warn(`routing failed: ${error instanceof Error ? error.message : String(error)}`);
       this.logger.debug(error);
     }
+  }
+
+  /**
+   * 按会话地址投递事件：扩展插件级调度用。路由解析与入站消息一致，必要时按需派生
+   * runtime（仍是惰性创建，只是触发方从消息扩展到这里的调用）；解析失败抛错。
+   */
+  async deliver(address: SessionAddress, event: CustomMessages): Promise<void> {
+    await this.resolveRuntime(address).deliver(event);
+  }
+
+  /** 按会话地址请求一轮响应：没有新消息也能唤醒（定时任务、主动消息）。解析失败抛错。 */
+  wake(address: SessionAddress, reason?: string): string | undefined {
+    return this.resolveRuntime(address).wake(reason);
+  }
+
+  private resolveRuntime(address: SessionAddress): AgentRuntime {
+    const { platform, selfId, channelId } = address;
+    const sid = `${platform}:${selfId}`;
+    const route = this.routes.get(sid)?.find((entry) => matchesChannel(entry.profile.channels.get(sid)!, channelId));
+    if (route === undefined) throw new Error(`no profile claims ${sid}/${channelId}`);
+
+    const { profile } = route;
+    const key = profile.mode === "cross" ? `${profile.id}/main` : `${profile.id}/${sid}/${channelId}`;
+    const domain: InstanceDomain = profile.mode === "cross" ? { mode: "cross", channels: profile.channels } : { mode: "channel", platform, selfId, channelId };
+    return route.runtimes.get(key) ?? route.spawn(key, domain);
   }
 }
 
@@ -257,9 +281,15 @@ Never use generic phrases like 'How can I assist you today?', they have a strong
 
 Control flow:
 Unlike a human, your brain is not continuously thinking, but is run in short bursts.
-Your brain is run in response to events in this conversation: someone spoke, someone retracted a message, a message arrived in another conversation you take part in.
-Between those events nothing runs: there is no background process and no timer waking you up.
+Your brain runs when something wakes it: new input arrived in a conversation you take part in (someone spoke or retracted a message), a signal matched (you were mentioned, quoted, or messaged privately), an external event or timer fired, or the wait condition you declared in a previous waking came due.
+A waking opened without new input carries a "Continue." message instead of user speech; its reason tells you why it fired, and the recent history shows what changed since.
+Between wakes nothing runs: there is no background process thinking for you.
 Calling a function runs your program again after the function returns, letting you chain calls within one waking before your thinking is suspended again.
+
+Pacing:
+A waking ends the moment you send a message or call wait — so declare your next waking in the same step as your last message, or as your final step when you are staying quiet. Your last wait call in a waking wins.
+wait({msgs: N, secs: T}) asks to be woken after N new inputs or after T seconds, whichever comes first. It is one-off: a declaration fires once and is then spent. If you do not call it, nothing wakes you by schedule — only a signal (being mentioned, quoted, or messaged) or an outside event will.
+Choosing: when what you just read may be one fragment of several — someone mid-thought, an @ with nothing after it — wait({msgs: 1, secs: T}) usually beats answering half a thought; keep T short in a busy channel, longer one-to-one. When the thread isn't yours, simply stay quiet and let being called bring you back. Being addressed without content does not oblige an immediate reply.
 
 Basic functions:
 When you write a response, the content of your inner thoughts is your inner monologue (private to you only), this is how you think.
@@ -359,6 +389,7 @@ export * from "@yesimagent/core";
 
 export * from "./extension.js";
 export * from "./runtime.js";
+export * from "./condition.js";
 
 export * from "./context/index.js";
 export * from "./toolcall/index.js";

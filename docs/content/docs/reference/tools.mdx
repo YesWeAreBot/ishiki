@@ -3,7 +3,7 @@ title: 模型工具与资源协议
 description: 内置工具的输入输出与资源 URL 的完整语法
 ---
 
-本文是模型侧可调用面的参考：五个内置工具、资源 URL 方案、文本预算。
+本文是模型侧可调用面的参考：六个内置工具、资源 URL 方案、文本预算。
 
 ## 内置工具
 
@@ -60,18 +60,37 @@ read({ url: "local://notes.txt?view=meta" })             # 只看元数据不取
 - 直接调用的展示上限见下文「文本预算」；截断时结果尾部的 Continue 锚点给出续读起点（按锚点里的 URL 再 read 即可续读）。
 - codemode 内 read 始终返回完整 JSON 安全值（二进制即 base64 节点），可把文件节点原样传给其他工具或放进 `attachment` 数组。
 
+### wait
+
+声明下一次自动醒来的条件。它与 `finish`、`send_message` 同属**收尾动作**：调用它即结束当前轮次（和 `send_message` 一起调用时同样结束，模型不必为声明条件多跑一步）。常驻工具，只留模型目录，不受 codemode 的 `direct` 名单影响，也不进沙箱。
+
+<TypeTable
+  type={{
+    msgs: {
+      type: 'number',
+      description: '再积累 N 条新入站消息后醒来',
+    },
+    secs: {
+      type: 'number',
+      description: 'T 秒后醒来，与有无输入无关（≥1）',
+    },
+  }}
+/>
+
+两个窗口谁先到谁生效，一轮里最后一次调用生效。它是**一次性声明，不是定时触发器**：触发一次即作废，没有周期，也没有 profile 默认值兜底——不调用就等于「不叫醒我」，之后只有机械信号与外部唤醒能打开下一轮。返回值回显真正生效的窗口；空调用返回 `none: true`。条件只活在内存里，不写入事实流、重启后不恢复。完整语义与选择建议见[调整唤醒行为](/docs/guides/wakeup)。
+
 ### codemode
 
 把一批工具收进 QuickJS 沙箱，模型改写一段 JS 程序在其中调用工具。开关与配额见[参考：插件与 profile 配置](/docs/reference/plugin-config)的 codemode 段。
 
 - 程序内 `await tools.name(input)` / `await tools["server_tool"](input)` 返回工具的原始 JSON 安全值；中间数据不出上下文。
-- `direct` 名单内的工具只留模型目录（程序够不着），未列出的收进沙箱（目录里消失）；`send_message` 两处都可达，`finish` 只留目录。
+- `direct` 名单内的工具只留模型目录（程序够不着），未列出的收进沙箱（目录里消失）；`send_message` 两处都可达，`finish`、`wait` 只留目录。
 - 传媒体出沙箱的唯一方式：返回值顶层带 `attachment` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。
 - 每次调用是一个独立程序；需要分步传递的数据放进返回值，下一步以观察形式看到。
 
 ### search（toolsearch 开启时）
 
-按名称与描述关键词发现延迟池里的工具：输入 `{ query }`，输出 `{ tools: [{ name, description? }] }`。命中的工具**下一步**起可调用；每步结束时目录有变化则持久化一条全量目录消息。常驻工具（`finish`、`send_message`、`read`、`codemode`、`search` 加 `resident` 名单）永远可见。
+按名称与描述关键词发现延迟池里的工具：输入 `{ query }`，输出 `{ tools: [{ name, description? }] }`。命中的工具**下一步**起可调用；每步结束时目录有变化则持久化一条全量目录消息。常驻工具（`finish`、`send_message`、`read`、`wait`、`codemode`、`search` 加 `resident` 名单）永远可见。
 
 ### finish
 

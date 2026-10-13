@@ -1,4 +1,4 @@
-import { ToolSet } from "@yesimagent/core";
+import { ToolSet, type CustomMessages } from "@yesimagent/core";
 import { Awaitable, Service, type Context, type Logger, type Schema } from "koishi";
 
 import type { InstanceDomain } from "./profile/index.js";
@@ -16,7 +16,18 @@ export interface ExtensionContext {
   readonly resources: ResourceCenter;
 }
 
+/**
+ * runtime 交给扩展的窄句柄：投递事实与请求一轮响应，与宿主共用同一套原语。
+ * 扩展自己监听平台事件或维护定时器，经它把事件送进事实流、或在没有新消息时唤醒。
+ */
+export interface RuntimeHandle {
+  deliver(event: CustomMessages): Promise<void>;
+  wake(reason?: string): string | undefined;
+}
+
 export interface ExtensionInstance {
+  /** runtime 构造后调用一次；返回值作为 disposer，runtime 停止时执行。 */
+  attach?(handle: RuntimeHandle): Awaitable<void | (() => void)>;
   extendInstructions?(): Awaitable<string>;
   extendTools?(): Awaitable<ToolSet>;
   stop?(): Awaitable<void>;

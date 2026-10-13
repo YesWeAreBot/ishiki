@@ -7,7 +7,9 @@ import {
   LanguageModelV4,
   ToolConflictError,
   type Agent,
+  type AgentMessage,
   type AgentStorage,
+  type CustomMessages,
   type ToolCallers,
   type ToolSet,
 } from "@yesimagent/core";
@@ -18,6 +20,8 @@ import { CODEMODE_TOOL, createCodemode } from "./builtin-tools/codemode.js";
 import { FINISH_TOOL } from "./builtin-tools/finish.js";
 import { SEND_MESSAGE_TOOL } from "./builtin-tools/send-message.js";
 import { createSearchTool, SEARCH_TOOL, ToolsearchState } from "./builtin-tools/toolsearch.js";
+import { createWaitTool, WAIT_TOOL } from "./builtin-tools/wait.js";
+import { WaitConditionMachine } from "./condition.js";
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
@@ -44,6 +48,30 @@ export interface AgentRuntimeConfig {
   attachment: AttachmentConfig;
 }
 
+/**
+ * 本步是否真的发出过消息：send_message 的结果既不是错误也没把 ok 标假。
+ * 发送失败不关轮，模型得有机会重试或换说法。
+ */
+function sendSucceeded(messages: readonly AgentMessage[]): boolean {
+  let sent = false;
+  for (const message of messages) {
+    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "tool-result" || part.toolName !== SEND_MESSAGE_TOOL) continue;
+      sent = true;
+      const output: unknown = part.output;
+      if (output === null || typeof output !== "object") return false;
+      if (!("type" in output)) return false;
+      if (output.type === "error-text" || output.type === "error-json") return false;
+      if ("value" in output) {
+        const value: unknown = output.value;
+        if (value === null || typeof value !== "object" || !("ok" in value) || value.ok !== true) return false;
+      }
+    }
+  }
+  return sent;
+}
+
 export class AgentRuntime {
   readonly id: string;
   readonly home: string;
@@ -64,6 +92,9 @@ export class AgentRuntime {
   private readonly configTools: ToolSet;
   private readonly configCodemode: CodemodeConfig;
   private readonly configToolsearch: ToolsearchConfig;
+  /** Agent 自声明的唤醒条件机：wait 工具写声明，轮末生效，触发调 continue。 */
+  private readonly condition: WaitConditionMachine;
+  private readonly disposeExtensions: Array<() => void> = [];
 
   constructor(config: AgentRuntimeConfig) {
     this.id = config.id;
@@ -78,6 +109,7 @@ export class AgentRuntime {
     this.configTools = config.tools;
     this.configCodemode = config.codemode;
     this.configToolsearch = config.toolsearch;
+    this.condition = new WaitConditionMachine(config.logger);
 
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
@@ -160,35 +192,40 @@ export class AgentRuntime {
               if (continueRequested) break;
             }
 
-            let sentOk = sending;
-            for (const message of info.result.messages) {
-              if (!sentOk) break;
-              if (message.role !== "tool" || !Array.isArray(message.content)) continue;
-              for (const part of message.content) {
-                if (part.type !== "tool-result" || part.toolName !== SEND_MESSAGE_TOOL) continue;
-                if (part.output.type === "error-text" || part.output.type === "error-json") {
-                  sentOk = false;
-                  break;
-                }
-                const value = part.output.type === "json" ? part.output.value : undefined;
-                if ((value as { ok?: boolean } | undefined)?.ok !== true) {
-                  sentOk = false;
-                  break;
-                }
-              }
-            }
-
-            const others = [...calls].some((name) => name !== FINISH_TOOL && name !== SEND_MESSAGE_TOOL);
-            if (calls.has(FINISH_TOOL) || (!others && calls.has(SEND_MESSAGE_TOOL) && !continueRequested && sentOk)) {
-              return { continue: false };
-            }
+            // 说话即收尾：send_message 成功且没有别的动作时关轮。wait 属于同一类收尾
+            // 动作（不算「别的动作」），所以和 send_message 一起调用时照样关轮——
+            // 模型不必为了声明下一个唤醒条件再多跑一步。
+            if (calls.has(FINISH_TOOL) || calls.has(WAIT_TOOL)) return { continue: false };
+            if (!continueRequested && sending && sendSucceeded(info.result.messages)) return { continue: false };
             return undefined;
+          },
+          onTurnFinish: (result) => {
+            this.condition.onTurnEnd(result.status);
           },
         },
         ...(config.debugStream ? [createDebugPlugin(config.id, config.logger)] : []),
       ],
       ...(config.codemode.enable ? { toolCallers: this.toolCallers } : {}),
     });
+    this.condition.bind(this.agent);
+
+    // 唤醒判定发生在事实提交之后：message.appended 只在落库完成后发出，
+    // join 冲刷进当前轮的消息也走同一条路。条件计数与信号判定都从这里出发；
+    // turn.start 清掉轮内到达计数——开轮之前的消息由这一轮本身消化，不重复结算。
+    this.agent.channel.subscribe("agent", (event) => {
+      if (event.type === "turn.start") {
+        this.condition.onTurnStart();
+        return;
+      }
+      if (event.type !== "message.appended") return;
+      const message = event.message;
+      if (message.role !== "custom") return;
+      if (message.type !== "ishiki.message.created" && message.type !== "ishiki.message.deleted") return;
+      this.condition.countInput();
+      void this.observeSignal(message);
+    });
+
+    for (const ext of this.extensions) this.attachExtension(ext);
   }
 
   /**
@@ -208,6 +245,8 @@ export class AgentRuntime {
       }
     }
     const final: ToolSet = { ...merged };
+    if (WAIT_TOOL in merged) throw new ToolConflictError(WAIT_TOOL);
+    final[WAIT_TOOL] = createWaitTool(this.condition);
     for (const name of Object.keys(this.toolCallers)) delete this.toolCallers[name];
     if (this.configCodemode.enable) {
       const sandbox = createCodemode(this.configCodemode, merged, this.configToolsearch.enable);
@@ -223,16 +262,70 @@ export class AgentRuntime {
     return wrapped;
   }
 
-  async deliver(event: IshikiEvent): Promise<void> {
+  /** attach 一次；返回值（同步或 Promise）作为 disposer 收集，失败只记录不上抛。 */
+  private attachExtension(ext: ExtensionInstance): void {
+    const fail = (error: unknown): void => {
+      this.logger.warn(`[${this.id}] extension attach failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.debug(error);
+    };
+    const collect = (disposer: void | (() => void)): void => {
+      if (typeof disposer === "function") this.disposeExtensions.push(disposer);
+    };
+    try {
+      const result = ext.attach?.(this);
+      if (result instanceof Promise) void result.then(collect, fail);
+      else collect(result);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  /**
+   * 纯投递：捕获附件、立即落库。这里不做任何唤醒判定，也不计数——计数与信号判定都挂在
+   * message.appended（提交完成）之后，保证触发的轮读到的事实与计数一致。
+   */
+  async deliver(event: CustomMessages): Promise<void> {
     if (event.type === "ishiki.message.created") {
       const { platform, selfId, channelId, messageId, content } = event.data;
       event.data.content = await this.attachment.capture(content, { platform, selfId, channelId, messageId });
     }
-    const trigger = (await this.wakeup.decide(event)) === "trigger";
-    this.agent.send(event, { trigger, ifBusy: "join" });
+    this.agent.send(event, { trigger: false, ifBusy: "join" });
+  }
+
+  /** 请求一轮响应：没有新消息也能唤醒（定时任务、外部事件、主动发言都走这里）。 */
+  wake(reason?: string): string | undefined {
+    return this.agent.continue(reason);
+  }
+
+  /**
+   * 信号观察：每条已落库的入站事件恰好判定一次，命中即唤醒。判定在 message.appended
+   * 之后进行，看到的事实与后续轮次一致；异常只记录不上抛，与原 settle 批量判定一致。
+   */
+  private async observeSignal(event: IshikiEvent): Promise<void> {
+    try {
+      if ((await this.wakeup.decide(event)) === "trigger") this.agent.continue("signal");
+    } catch (error) {
+      this.logger.warn(`wakeup decide failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.debug(error);
+    }
   }
 
   async stop(): Promise<void> {
+    this.condition.dispose();
+    for (const ext of this.extensions) {
+      try {
+        await ext.stop?.();
+      } catch (error) {
+        this.logger.warn(`[${this.id}] extension stop failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    for (const dispose of this.disposeExtensions.splice(0)) {
+      try {
+        dispose();
+      } catch (error) {
+        this.logger.warn(`[${this.id}] extension dispose failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     await this.agent.stop();
   }
 }

@@ -414,7 +414,9 @@ async function scenario(options: {
     } as never),
   });
   runtimes.push(runtime);
+  let expectedTurns = 0;
   const run = async (content = "hello", messageId = "m1", expectedFailure = false) => {
+    const expected = (expectedTurns += 1);
     await runtime.deliver(
       createCustomMessage("ishiki.message.created", {
         platform: "test",
@@ -427,8 +429,16 @@ async function scenario(options: {
         user: { id: "u" },
       }),
     );
-    const agent = await attached.promise;
-    await agent.wait();
+    await attached.promise;
+    // 唤醒在事实提交后异步发生：等到第 expected 个终态轮事件出现再断言。
+    for (;;) {
+      const entries = await runtime.storage.read();
+      const terminal = entries.filter(
+        (entry) => entry.type === "event" && (entry.data.type === "turn.done" || entry.data.type === "turn.failed" || entry.data.type === "turn.aborted"),
+      );
+      if (terminal.length >= expected) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     const entries = await runtime.storage.read();
     const failed = entries.filter((entry) => entry.type === "event" && (entry.data.type === "turn.failed" || entry.data.type === "turn.aborted"));
     expect(failed).toHaveLength(expectedFailure ? 1 : 0);

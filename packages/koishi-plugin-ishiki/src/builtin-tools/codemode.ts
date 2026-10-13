@@ -5,6 +5,7 @@ import type { CodemodeConfig } from "../profile/index.js";
 import { FINISH_TOOL } from "./finish.js";
 import { SEND_MESSAGE_TOOL } from "./send-message.js";
 import { buildCodeModeToolDescription } from "./vendor/tool-prompt.js";
+import { WAIT_TOOL } from "./wait.js";
 
 const CODEMODE_PACKAGE = "@ai-sdk/code-mode";
 
@@ -38,7 +39,7 @@ export const CODEMODE_TOOL = "codemode";
 
 const BOTH_REACHABLE: readonly string[] = [SEND_MESSAGE_TOOL];
 
-const DIRECT_ONLY: readonly string[] = [FINISH_TOOL];
+const DIRECT_ONLY: readonly string[] = [FINISH_TOOL, WAIT_TOOL];
 
 export interface CodemodeSurface {
   tool: Tool;
@@ -93,14 +94,22 @@ export function createCodemode(config: CodemodeConfig, tools: ToolSet, conversat
   // Persistent catalog delivery is owned by the toolsearch runtime instead.
   const exposedCaller =
     caller.type === "local"
-      ? {
-          ...caller,
-          bind: (host: ToolSet) => ({
-            ...caller.bind(bindWithDiagnostics(host)),
-            description: buildCodeModeToolDescription(host, conversation ? "conversation" : "description"),
-          }),
-          ...(conversation ? { prepareModelMessage: () => null } : {}),
-        }
+      ? (() => {
+          type SandboxHost = Parameters<typeof caller.bind>[0];
+          return {
+            ...caller,
+            bind: (host: SandboxHost) => {
+              // caller.bind 的 ToolSet（经 @ai-sdk/code-mode 解析）与 core 再导出的同名类型分属
+              // 两个 @ai-sdk/provider-utils 包实例，运行时是同一批对象；host 进入 core 工具面前归一。
+              const coreHost = host as unknown as ToolSet;
+              return {
+                ...caller.bind(bindWithDiagnostics(coreHost) as unknown as SandboxHost),
+                description: buildCodeModeToolDescription(coreHost, conversation ? "conversation" : "description"),
+              };
+            },
+            ...(conversation ? { prepareModelMessage: () => null } : {}),
+          };
+        })()
       : caller;
 
   const exposed: Record<string, unknown> = {};

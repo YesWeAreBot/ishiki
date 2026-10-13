@@ -6,6 +6,7 @@ import { FINISH_TOOL } from "./finish.js";
 import { READ_TOOL } from "./read.js";
 import { SEND_MESSAGE_TOOL } from "./send-message.js";
 import { buildCodeModeToolCatalogMessage, renderToolCatalog } from "./vendor/tool-prompt.js";
+import { WAIT_TOOL } from "./wait.js";
 
 export const SEARCH_TOOL = "search";
 
@@ -13,7 +14,7 @@ export const SEARCH_TOOL = "search";
 const MATCH_HINT_LIMIT = 60;
 
 /** Tools that must stay visible on every step regardless of discovery state. */
-const ALWAYS_ON: readonly string[] = [FINISH_TOOL, SEND_MESSAGE_TOOL, READ_TOOL, CODEMODE_TOOL, SEARCH_TOOL];
+const ALWAYS_ON: readonly string[] = [FINISH_TOOL, SEND_MESSAGE_TOOL, READ_TOOL, CODEMODE_TOOL, SEARCH_TOOL, WAIT_TOOL];
 
 export namespace SearchTool {
   export interface Input {
