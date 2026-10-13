@@ -6,6 +6,8 @@
         - esbuild
       clean:
         - tsc --clean
+    exclude:
+      - docs
 - name: yakumo-esbuild
 - name: yakumo-tsc
 - name: yakumo-vitest
