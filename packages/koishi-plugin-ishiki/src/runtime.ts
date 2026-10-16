@@ -9,7 +9,6 @@ import {
   type Agent,
   type AgentMessage,
   type AgentStorage,
-  type CustomMessages,
   type ToolCallers,
   type ToolSet,
 } from "@yesimagent/core";
@@ -20,8 +19,7 @@ import { CODEMODE_TOOL, createCodemode } from "./builtin-tools/codemode.js";
 import { FINISH_TOOL } from "./builtin-tools/finish.js";
 import { SEND_MESSAGE_TOOL } from "./builtin-tools/send-message.js";
 import { createSearchTool, SEARCH_TOOL, ToolsearchState } from "./builtin-tools/toolsearch.js";
-import { createWaitTool, WAIT_TOOL } from "./builtin-tools/wait.js";
-import { WaitConditionMachine } from "./condition.js";
+import { createWaitTool, WAIT_TOOL, WaitConditionMachine } from "./builtin-tools/wait.js";
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
@@ -43,15 +41,10 @@ export interface AgentRuntimeConfig {
   toolsearch: ToolsearchConfig;
   debugStream: boolean;
   logger: Logger;
-  /** Runtime-scoped resource center; extensions register schemes on it. */
   resources: ResourceCenter;
   attachment: AttachmentConfig;
 }
 
-/**
- * 本步是否真的发出过消息：send_message 的结果既不是错误也没把 ok 标假。
- * 发送失败不关轮，模型得有机会重试或换说法。
- */
 function sendSucceeded(messages: readonly AgentMessage[]): boolean {
   let sent = false;
   for (const message of messages) {
@@ -89,14 +82,13 @@ export class AgentRuntime {
   private disposeContext?: () => void;
   private disposeWakeup?: () => void;
   private readonly toolCallers: ToolCallers = {};
-  private readonly configTools: ToolSet;
-  private readonly configCodemode: CodemodeConfig;
-  private readonly configToolsearch: ToolsearchConfig;
-  /** Agent 自声明的唤醒条件机：wait 工具写声明，轮末生效，触发调 continue。 */
+  private readonly initTools: ToolSet;
   private readonly condition: WaitConditionMachine;
   private readonly disposeExtensions: Array<() => void> = [];
+  private readonly config: AgentRuntimeConfig;
 
   constructor(config: AgentRuntimeConfig) {
+    this.config = config;
     this.id = config.id;
     this.home = config.home;
     this.logger = config.logger;
@@ -106,9 +98,7 @@ export class AgentRuntime {
     this.resources = config.resources;
     this.attachment = new Attachment(config.attachment, config.resources, this);
     this.toolsearch = new ToolsearchState(config.toolsearch);
-    this.configTools = config.tools;
-    this.configCodemode = config.codemode;
-    this.configToolsearch = config.toolsearch;
+    this.initTools = config.tools;
     this.condition = new WaitConditionMachine(config.logger);
 
     mkdirSync(this.home, { recursive: true });
@@ -209,22 +199,6 @@ export class AgentRuntime {
     });
     this.condition.bind(this.agent);
 
-    // 唤醒判定发生在事实提交之后：message.appended 只在落库完成后发出，
-    // join 冲刷进当前轮的消息也走同一条路。条件计数与信号判定都从这里出发；
-    // turn.start 清掉轮内到达计数——开轮之前的消息由这一轮本身消化，不重复结算。
-    this.agent.channel.subscribe("agent", (event) => {
-      if (event.type === "turn.start") {
-        this.condition.onTurnStart();
-        return;
-      }
-      if (event.type !== "message.appended") return;
-      const message = event.message;
-      if (message.role !== "custom") return;
-      if (message.type !== "ishiki.message.created" && message.type !== "ishiki.message.deleted") return;
-      this.condition.countInput();
-      void this.observeSignal(message);
-    });
-
     for (const ext of this.extensions) this.attachExtension(ext);
   }
 
@@ -235,7 +209,7 @@ export class AgentRuntime {
    * re-entry rebuilds the routing tables instead of accumulating wrappers.
    */
   private async assembleTools(): Promise<ToolSet> {
-    const merged: ToolSet = { ...this.configTools };
+    const merged: ToolSet = { ...this.initTools };
     for (const ext of this.extensions) {
       const contributed = await ext.extendTools?.();
       if (contributed === undefined) continue;
@@ -248,15 +222,15 @@ export class AgentRuntime {
     if (WAIT_TOOL in merged) throw new ToolConflictError(WAIT_TOOL);
     final[WAIT_TOOL] = createWaitTool(this.condition);
     for (const name of Object.keys(this.toolCallers)) delete this.toolCallers[name];
-    if (this.configCodemode.enable) {
-      const sandbox = createCodemode(this.configCodemode, merged, this.configToolsearch.enable);
+    if (this.config.codemode.enable) {
+      const sandbox = createCodemode(this.config.codemode, merged, this.config.toolsearch.enable);
       Object.assign(this.toolCallers, sandbox.callers);
       final[CODEMODE_TOOL] = sandbox.tool;
     }
-    if (this.configToolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
+    if (this.config.toolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
     const wrapped = this.attachment.wrap(final);
-    if (this.configToolsearch.enable) {
-      this.toolsearch.codemodeEnabled = this.configCodemode.enable;
+    if (this.config.toolsearch.enable) {
+      this.toolsearch.codemodeEnabled = this.config.codemode.enable;
       this.toolsearch.refresh(final, new Set(this.toolsearch.residentNames()), new Set(Object.keys(this.toolCallers)));
     }
     return wrapped;
@@ -280,34 +254,18 @@ export class AgentRuntime {
     }
   }
 
-  /**
-   * 纯投递：捕获附件、立即落库。这里不做任何唤醒判定，也不计数——计数与信号判定都挂在
-   * message.appended（提交完成）之后，保证触发的轮读到的事实与计数一致。
-   */
-  async deliver(event: CustomMessages): Promise<void> {
+  async deliver(event: IshikiEvent): Promise<string | undefined> {
     if (event.type === "ishiki.message.created") {
       const { platform, selfId, channelId, messageId, content } = event.data;
       event.data.content = await this.attachment.capture(content, { platform, selfId, channelId, messageId });
     }
-    this.agent.send(event, { trigger: false, ifBusy: "join" });
+
+    const trigger = (await this.wakeup.decide(event)) === "trigger";
+    return this.agent.send(event, { trigger, ifBusy: "join" });
   }
 
-  /** 请求一轮响应：没有新消息也能唤醒（定时任务、外部事件、主动发言都走这里）。 */
   wake(reason?: string): string | undefined {
     return this.agent.continue(reason);
-  }
-
-  /**
-   * 信号观察：每条已落库的入站事件恰好判定一次，命中即唤醒。判定在 message.appended
-   * 之后进行，看到的事实与后续轮次一致；异常只记录不上抛，与原 settle 批量判定一致。
-   */
-  private async observeSignal(event: IshikiEvent): Promise<void> {
-    try {
-      if ((await this.wakeup.decide(event)) === "trigger") this.agent.continue("signal");
-    } catch (error) {
-      this.logger.warn(`wakeup decide failed: ${error instanceof Error ? error.message : String(error)}`);
-      this.logger.debug(error);
-    }
   }
 
   async stop(): Promise<void> {

@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { Template } from "@huggingface/jinja";
-import { type CustomMessages } from "@yesimagent/core";
 import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gateway";
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
@@ -30,6 +29,7 @@ import {
   YamlXmlToolcallEngine,
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
+import { IshikiEvent } from "./types.js";
 import { JevWakeupEngine, StandardWakeupEngine, V3WakeupEngine, WakeupEngine } from "./wakeup/index.js";
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
@@ -234,31 +234,24 @@ class Ishiki extends Service<Ishiki.Config> {
 
     const { platform, selfId, channelId } = event.data;
     try {
-      await this.resolveRuntime({ platform, selfId, channelId }).deliver(event);
+      const runtime = this.resolveRuntime({ platform, selfId, channelId });
+      if (runtime) {
+        await runtime.deliver(event);
+      }
     } catch (error) {
       this.logger.warn(`routing failed: ${error instanceof Error ? error.message : String(error)}`);
       this.logger.debug(error);
     }
   }
 
-  /**
-   * 按会话地址投递事件：扩展插件级调度用。路由解析与入站消息一致，必要时按需派生
-   * runtime（仍是惰性创建，只是触发方从消息扩展到这里的调用）；解析失败抛错。
-   */
-  async deliver(address: SessionAddress, event: CustomMessages): Promise<void> {
-    await this.resolveRuntime(address).deliver(event);
-  }
-
-  /** 按会话地址请求一轮响应：没有新消息也能唤醒（定时任务、主动消息）。解析失败抛错。 */
-  wake(address: SessionAddress, reason?: string): string | undefined {
-    return this.resolveRuntime(address).wake(reason);
-  }
-
-  private resolveRuntime(address: SessionAddress): AgentRuntime {
+  private resolveRuntime(address: SessionAddress): AgentRuntime | undefined {
     const { platform, selfId, channelId } = address;
     const sid = `${platform}:${selfId}`;
     const route = this.routes.get(sid)?.find((entry) => matchesChannel(entry.profile.channels.get(sid)!, channelId));
-    if (route === undefined) throw new Error(`no profile claims ${sid}/${channelId}`);
+    if (route === undefined) {
+      this.logger.warn(`no profile claims ${sid}/${channelId}`);
+      return;
+    }
 
     const { profile } = route;
     const key = profile.mode === "cross" ? `${profile.id}/main` : `${profile.id}/${sid}/${channelId}`;
@@ -389,7 +382,6 @@ export * from "@yesimagent/core";
 
 export * from "./extension.js";
 export * from "./runtime.js";
-export * from "./condition.js";
 
 export * from "./context/index.js";
 export * from "./toolcall/index.js";

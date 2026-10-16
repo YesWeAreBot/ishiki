@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createWaitTool } from "../src/builtin-tools/wait.js";
-import { WaitConditionMachine } from "../src/condition.js";
+import { createWaitTool, WaitConditionMachine } from "../src/builtin-tools/wait.js";
 
 const logger = { warn() {}, error() {}, info() {}, debug() {}, level: 1 } as never;
 
