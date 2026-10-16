@@ -1,12 +1,12 @@
 # ishiki
 
-Event-driven bot core + packages (see `package.json` workspaces). The `docs/` workspace has its own agent context; this file governs the repo root.
+Event-driven bot core + packages (see `package.json` workspaces).
 
 ## Agent skills
 
 ### Issue tracker
 
-Issues live as local markdown files under `.scratch/<feature-slug>/`. See `.agents/issue-tracker.md`.
+Issues live as local markdown files under `.agents/scratch/<feature-slug>/`. See `.agents/issue-tracker.md`.
 
 ### Triage labels
 
