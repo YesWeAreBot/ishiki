@@ -1,0 +1,24 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+No version has been released yet; everything below documents the history built up since the package was first added.
+
+### Added
+
+- Workspace tool pack for ishiki: a sandbox backed by host directories, file tools, and a skills directory.
+- Resource center bridged into the sandbox through a virtual filesystem and resource schemes.
+- Truncated tool output spills into artifacts (shared with the mcp-client pack).
+- Native shell backend for the sandbox.
+
+### Changed
+
+- Track the host extension mechanism: the `ExtensionInstance` surface, then the `AgentPlugin` subset with `provide` moved under `agent.use`, and finally extension packs as Koishi services assembled inside the profile fiber.
+- Extension schema and attachment config surfaces refactored toward the host's unified attachment pipeline.
+- Truncation handling moved into the ishiki unified attachment pipeline; the sandbox keeps no private spill path.
+- Resource filesystem and schemes refactored onto the resource center's single store with core-owned schemes and query views.
