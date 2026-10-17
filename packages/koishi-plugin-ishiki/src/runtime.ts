@@ -113,7 +113,7 @@ export class AgentRuntime {
           name: "ishiki.core",
           init: async (agent) => {
             this.disposeContext = this.context.attach?.(agent);
-            this.disposeWakeup = this.wakeup.attach?.(agent);
+            this.disposeWakeup = this.wakeup.attach(agent);
             this.toolsearch.bind(agent);
             // Assemble the toolset now so the baseline catalog persists before
             // any user message: the core writes turn input only after init
@@ -254,18 +254,17 @@ export class AgentRuntime {
     }
   }
 
-  async deliver(event: IshikiEvent): Promise<string | undefined> {
+  async deliver(event: IshikiEvent): Promise<void> {
     if (event.type === "ishiki.message.created") {
       const { platform, selfId, channelId, messageId, content } = event.data;
       event.data.content = await this.attachment.capture(content, { platform, selfId, channelId, messageId });
     }
 
-    const trigger = (await this.wakeup.decide(event)) === "trigger";
-    return this.agent.send(event, { trigger, ifBusy: "join" });
+    this.agent.send(event, { trigger: false, ifBusy: "join" });
   }
 
-  wake(reason?: string): string | undefined {
-    return this.agent.continue(reason);
+  wake(prompt?: string): string | undefined {
+    return this.agent.continue(prompt);
   }
 
   async stop(): Promise<void> {

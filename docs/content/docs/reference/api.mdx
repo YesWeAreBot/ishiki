@@ -30,7 +30,7 @@ export default class MyExt extends Extension<MyConfig> {
     return {
       extendInstructions?: () => string | Promise<string>,      // 追加系统提示词
       extendTools?: () => ToolSet | Promise<ToolSet>,            // 追加工具
-      attach?: (handle: RuntimeHandle) => (() => void) | void | Promise<void>,  // runtime 构造时调用一次，返回值作为释放函数
+      attach?: (handle: AgentRuntime) => (() => void) | void | Promise<void>,  // runtime 装配完成后调用一次，返回值作为释放函数
       stop?: () => void | Promise<void>,                         // runtime 停止时清理
     };
   }
@@ -51,27 +51,32 @@ namespace MyExt {
 - `context.resources.attach(handler)` 注册自定义资源方案；`stop()` 里应 `dispose()` 注销。
 - 同一 profile 的所有实例共享你 `[Service.invoke]` 的每次调用产物之间的隔离取决于你自己——每个实例独立调用一次。
 
-### 运行时句柄（RuntimeHandle）
+### 运行时句柄（AgentRuntime）
 
-`attach(handle)` 在 runtime 构造时调用一次，`handle` 就是宿主自用的那组原语：
+`attach(handle)` 在 runtime 装配完成后调用一次，`handle` 是该实例的 `AgentRuntime`——宿主自用的那组原语：
 
 <TypeTable
   type={{
     deliver: {
-      type: '(event: CustomMessages) => Promise<void>',
-      description: '投递一个事件（`IshikiEvent`）：捕获附件、立即写入事实流、给消息窗口计数；不做决定，不攒消息',
+      type: '(event: IshikiEvent) => Promise<void>',
+      description: '投递一个事件：捕获附件后 agent.send(event, { trigger: false, ifBusy: "join" })，成功投递即返回。纯摄取——不做决定，不攒消息，也不自己开轮；是否已落盘以 message.appended 通知为准',
     },
     wake: {
-      type: '(reason?: string) => string | undefined',
-      description: '主动打开一轮，等价于 agent.continue(reason)',
+      type: '(prompt?: string) => string | undefined',
+      description: '主动打开一轮，等价于 agent.continue(prompt)；绕开唤醒引擎',
+    },
+    agent: {
+      type: 'Agent',
+      description: '实例的 core Agent：订阅其 channel、检查 isIdle()、调用 continue() 都由它出面',
     },
   }}
 />
 
 要点：
 
-- `attach` 可以返回一个释放函数；runtime 停止时，释放函数与 `stop()` 都会被调用——`stop()` 此前从不被调用，这是修复后的行为。
-- 扩展的定时器与主动消息走 `wake`（或 `deliver` + `wake`），不需要知道 runtime 内部怎么唤醒。
+- `attach` 可以返回一个释放函数；runtime 停止时，释放函数与 `stop()` 都会被调用。
+- 扩展的定时器与主动消息走 `wake`；要把外部输入交给事实流则用 `deliver`。
+- 日程、防抖这类自动响应策略请注册一个唤醒引擎：它订阅提交通知，按自己的规则决定何时开轮。显式 `wake` 始终可用，不受引擎影响。
 
 ### ExtensionContext 字段
 
@@ -149,7 +154,7 @@ export class MyContextEngine extends ContextEngine<"my-engine"> {
     },
     WakeupEngineInstance: {
       type: 'interface',
-      description: 'decide(event) → "trigger" | "wait"：纯判定、无副作用。每个已落盘的 ishiki.message.created / ishiki.message.deleted 事件恰好调用一次，且一定在事件写入事实流之后；判 trigger 时由 runtime 执行 agent.continue("signal")。',
+      description: 'attach(agent: Agent): () => void —— 必选且唯一的成员。订阅 core 的 message.appended 提交通知，挑出关心的消息（同一批通知里还混着工具目录、附件与模型输出），认定该醒时 agent.continue() 打开一轮；返回值负责注销订阅与清理待办。开轮前、以及延迟或异步判定返回后都要检查 agent.isIdle()。',
     },
     ToolcallEngineInstance: {
       type: 'interface',
@@ -160,22 +165,19 @@ export class MyContextEngine extends ContextEngine<"my-engine"> {
 
 把配置写进引擎 map（`declare module` 合并 `ContextEngines` 等）即可获得 profile 配置段的类型支持；用户在 profile 里写 `engine: my-engine` 即可启用。主插件构造时只注册内置引擎；自定义引擎作为普通 Koishi 插件安装，profile 激活时按服务名发现，缺了就停在等待态。
 
-## 宿主入口：向会话投递事件与唤醒
+## 运行时：投递事件与唤醒
 
-`ctx.ishiki` 服务对宿主（以及任何注入 `ishiki` 的插件）开放两个入口，`address` 是会话坐标 `{ platform, selfId, channelId }`：
+实例的 `AgentRuntime` 就是扩展 `attach` 收到的那个句柄，它把两个内部原语直接暴露出来：
 
 ```ts
-ctx.ishiki.deliver(address, event);   // 投递一个事件（整形好的 IshikiEvent）
-ctx.ishiki.wake(address, reason?);    // 主动唤醒这个会话
+handle.deliver(event);      // 投递一个事件（整形好的 IshikiEvent）
+handle.wake(prompt?);       // 主动打开一轮
 ```
 
-- 两者都按与入站消息相同的规则解析 profile 路由；需要的 runtime 不存在时按需创建（惰性创建不变，启动时不创建任何实例）。
-- 解析失败会抛错（address 不完整、没有 profile 认领等），调用方自行处理。
-- 于是插件的定时器与主动消息也能抵达一个还没有 runtime 的会话。
+- `deliver(event)` 是纯摄取：捕获附件，然后 `agent.send(event, { trigger: false, ifBusy: "join" })`，成功投递后即返回——返回不代表已经落盘。空闲时持久化在后台进行；有轮在跑时消息接入那一轮，在这一步的输出批次之后一起提交。提交完成的信号是 `message.appended` 通知。它不做任何决定，也不自己开轮——要不要开轮由唤醒引擎或显式 `wake` 决定。
+- `wake(prompt?)` 等价于 `agent.continue(prompt)`，是绕开唤醒引擎的显式唤醒，供扩展的定时器与主动消息使用。
 
-runtime 上对应的原语是 `runtime.deliver(event)` 与 `runtime.wake(reason?)`：前者是纯摄取——立即把事件写进事实流并给消息窗口计数，不做任何决定、不囤积消息；后者等价于 `agent.continue(reason)`。
-
-`agent.continue(reason?)` 来自 `@yesimagent/core`：空闲时它用一条合成的用户消息开一轮（无 reason 时正文为 `Continue.`，有 reason 时为 `Continue. Reason: <reason>`），返回新轮次 id；忙碌或已有待发唤醒时并入那一个待发唤醒（reason 以 `; ` 连接进同一条消息）并返回 `undefined`，待队列排空即触发——即使上一个轮次以终态收尾也会补上这一轮。reason 只通过那条合成消息对模型可见，不出现在 `turn.start` 事件里。
+`agent.continue(prompt?)` 来自 `@yesimagent/core`：空闲时它排入一轮并返回 turn id；带 `prompt` 时该轮以这段文本作为开场的 user 消息（原文写入，不做包装），不带时这一轮直接基于已有历史开始，不写任何占位消息。忙碌或已有待发唤醒时，请求并入唯一那个待发唤醒并返回 `undefined`，待队列排空即触发——即使上一轮以终态收尾也会补上；此时多次 `continue` 的 `prompt` 以 `; ` 连接进同一条消息。
 
 ## 资源方案：让 read/send_message 认识你的 URL
 
@@ -212,7 +214,9 @@ export class MyHandler implements SchemeHandler {
 
 ## 事件与消息类型
 
-`IshikiEvent`（`src/types.ts`）是实例收到的输入：`ishiki.message.created` / `ishiki.message.deleted` / `ishiki.attachment` / `ishiki.tools.catalog`，字段见源码。扩展一般不直接消费事件——唤醒引擎与上下文引擎才是事件的第一读者；入站事件先写进事实流，之后才交给唤醒引擎判定（每个事件恰好一次）。
+`IshikiEvent`（`src/types.ts`）是实例收到的输入：`ishiki.message.created` / `ishiki.message.deleted` / `ishiki.attachment` / `ishiki.tools.catalog`，字段见源码。它是 core `AgentCustomMessage` 声明的联合：要加自己的事件类型，用 `declare module "@yesimagent/core"` 把类型并进 `AgentCustomMessage`，再用 `createCustomMessage` 构造，`deliver` 与 `message.appended` 的窄化就都认识它。核心不识别具体平台事件——平台事件由会话处理器整形成 `ishiki.message.created` 才进入事实流。
+
+扩展一般不直接消费事件——唤醒引擎与上下文引擎才是它们的第一读者。入站事件先写进事实流，`message.appended` 通知随后到达每条订阅；同一批通知里还混着工具目录、附件与模型输出，所以谁关心什么由订阅方自己过滤。
 
 ## 版本与兼容提示
 

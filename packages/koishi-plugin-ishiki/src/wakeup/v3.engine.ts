@@ -3,8 +3,8 @@ import { Service, type Context } from "koishi";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import { type IshikiEvent, type IshikiMessageCreated } from "../types.js";
-import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
+import type { IshikiMessageCreated } from "../types.js";
+import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
 const DEFAULT_V3_WAKEUP: V3WakeupConfig = {
   base: 12,
@@ -104,10 +104,18 @@ export class V3WakeupInstance implements WakeupEngineInstance {
     const seen = new Set<string>();
     const unsubscribe = agent.channel.subscribe("agent", (event) => {
       if (event.type === "message.appended") {
-        const channelId = readChannelId(event.message);
-        if (channelId !== undefined) seen.add(channelId);
+        const message = event.message;
+        const channelId = readChannelId(message);
+        if (channelId === undefined) return;
+        seen.add(channelId);
+
+        if (message.role === "custom" && message.type === "ishiki.message.created") {
+          const score = this.accumulate(message.data, Date.now());
+          if (agent.isIdle() && Math.random() < this.probability(score)) agent.continue();
+        }
         return;
       }
+
       if (event.type === "turn.done") {
         for (const channelId of seen) this.observe(channelId);
       }
@@ -117,14 +125,6 @@ export class V3WakeupInstance implements WakeupEngineInstance {
       unsubscribe();
       for (const channelId of seen) this.channels.delete(channelId);
     };
-  }
-
-  decide(event: IshikiEvent): WakeupDecision {
-    if (event.type !== "ishiki.message.created") return "wait";
-
-    const now = Date.now();
-    const score = this.accumulate(event.data, now);
-    return Math.random() < this.probability(score) ? "trigger" : "wait";
   }
 
   observe(channelId: string): void {

@@ -128,7 +128,8 @@ export class WaitConditionMachine {
 
   private wake(reason: string): void {
     try {
-      this.agent?.continue(reason);
+      this.logger.debug(`wake: ${reason}`);
+      this.agent?.continue();
     } catch (error) {
       // agent 正在停止：这次唤醒随停止一起作废。
       this.logger.debug(`wake dropped: ${error instanceof Error ? error.message : String(error)}`);

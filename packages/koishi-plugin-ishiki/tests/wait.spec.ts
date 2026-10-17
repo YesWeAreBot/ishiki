@@ -1,3 +1,4 @@
+import type { Agent } from "@yesimagent/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createWaitTool, WaitConditionMachine } from "../src/builtin-tools/wait.js";
@@ -5,13 +6,8 @@ import { createWaitTool, WaitConditionMachine } from "../src/builtin-tools/wait.
 const logger = { warn() {}, error() {}, info() {}, debug() {}, level: 1 } as never;
 
 function harness() {
-  const wakes: string[] = [];
-  const agent = {
-    continue: (reason?: string) => {
-      wakes.push(reason ?? "");
-      return "wake-turn";
-    },
-  } as never;
+  const wakes = vi.fn<Agent["continue"]>(() => "wake-turn");
+  const agent = { continue: wakes } as never;
   const machine = new WaitConditionMachine(logger);
   machine.bind(agent);
   return { machine, wakes };
@@ -54,7 +50,7 @@ describe("WaitConditionMachine", () => {
     machine.onTurnEnd("done");
     machine.countInput();
     await vi.advanceTimersByTimeAsync(3_600_000);
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
   });
 
   it("stays idle on failed and aborted turns even with a declaration", async () => {
@@ -64,13 +60,13 @@ describe("WaitConditionMachine", () => {
     machine.declare({ msgs: 1 });
     machine.onTurnEnd("failed");
     machine.countInput();
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
 
     machine.declare({ msgs: 1 });
     machine.onTurnEnd("aborted");
     machine.countInput();
     await vi.advanceTimersByTimeAsync(3_600_000);
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
   });
 
   it("the msgs window wakes first-come and clears on trigger", async () => {
@@ -80,12 +76,12 @@ describe("WaitConditionMachine", () => {
     machine.declare({ msgs: 2 });
     machine.onTurnEnd("done");
     machine.countInput();
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
     machine.countInput();
-    expect(wakes).toEqual(["2 new inputs"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
     // 触发即清空：一次性声明，后续输入不再触发。
     machine.countInput();
-    expect(wakes).toEqual(["2 new inputs"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
   });
 
   it("the secs window wakes once and does not repeat", async () => {
@@ -95,12 +91,12 @@ describe("WaitConditionMachine", () => {
     machine.declare({ secs: 30 });
     machine.onTurnEnd("done");
     await vi.advanceTimersByTimeAsync(29_999);
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(wakes).toEqual(["timer 30s expired"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
     // 不是节拍器：不再来第二响。
     await vi.advanceTimersByTimeAsync(1_000_000);
-    expect(wakes).toEqual(["timer 30s expired"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the last declaration of a turn", async () => {
@@ -112,9 +108,9 @@ describe("WaitConditionMachine", () => {
     machine.onTurnEnd("done");
     // 最后一次生效：消息窗口不再起作用，只有定时器。
     machine.countInput();
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(wakes).toEqual(["timer 30s expired"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
   });
 
   it("treats a bare call as no declaration", async () => {
@@ -126,7 +122,7 @@ describe("WaitConditionMachine", () => {
     machine.onTurnEnd("done");
     machine.countInput();
     await vi.advanceTimersByTimeAsync(3_600_000);
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
   });
 
   it("settles inputs that arrived during a turn when the declared msgs window is already satisfied", async () => {
@@ -140,7 +136,7 @@ describe("WaitConditionMachine", () => {
     // 轮末声明 msgs:1：已到达数已满足，生效即结算触发，不等下一条。
     machine.declare({ msgs: 1 });
     machine.onTurnEnd("done");
-    expect(wakes).toEqual(["2 new inputs"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
   });
 
   it("does not count inputs that arrived during a turn toward the new condition", async () => {
@@ -153,9 +149,9 @@ describe("WaitConditionMachine", () => {
     machine.declare({ msgs: 2 });
     machine.onTurnEnd("done");
     machine.countInput();
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
     machine.countInput();
-    expect(wakes).toEqual(["2 new inputs"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
   });
 
   it("clears the condition at turn start so a signal turn cannot double-count the same inputs", async () => {
@@ -169,9 +165,9 @@ describe("WaitConditionMachine", () => {
     machine.countInput();
     machine.declare({ msgs: 2 });
     machine.onTurnEnd("done");
-    expect(wakes).toEqual([]);
+    expect(wakes).not.toHaveBeenCalled();
     machine.countInput();
     machine.countInput();
-    expect(wakes).toEqual(["2 new inputs"]);
+    expect(wakes).toHaveBeenCalledTimes(1);
   });
 });

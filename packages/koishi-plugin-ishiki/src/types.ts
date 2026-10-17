@@ -9,7 +9,7 @@ declare module "@yesimagent/core" {
   }
 }
 
-export type IshikiEvent = CustomMessages<"ishiki.message.created" | "ishiki.message.deleted" | "ishiki.tools.catalog">;
+export type IshikiEvent = CustomMessages;
 
 export interface AttachmentItem {
   url: string;

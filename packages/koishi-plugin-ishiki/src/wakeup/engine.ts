@@ -3,15 +3,15 @@ import { h, Service, type Context } from "koishi";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import type { IshikiEvent } from "../types.js";
 
 export interface WakeupEngines {}
 
-export type WakeupDecision = "trigger" | "wait";
-
 export interface WakeupEngineInstance {
-  attach?(agent: Agent): () => void;
-  decide(event: IshikiEvent): WakeupDecision | Promise<WakeupDecision>;
+  /**
+   * Observe committed inputs and schedule wakes. Check agent.isIdle() before scheduling
+   * and again after a delay or async decision. Dispose subscriptions and pending work on stop.
+   */
+  attach(agent: Agent): () => void;
 }
 
 export function atSelf(content: string, selfId: string): boolean {

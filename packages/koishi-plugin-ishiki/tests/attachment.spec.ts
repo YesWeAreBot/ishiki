@@ -20,6 +20,7 @@ import { FailoverModel } from "../src/failover.js";
 import { CodemodeConfig, ToolsearchConfig, TypingConfig } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resources/center.js";
 import { AgentRuntime } from "../src/runtime.js";
+import { StandardWakeupInstance } from "../src/wakeup/index.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY7sAAAAASUVORK5CYII=";
 const PNG_BUFFER = Buffer.from(PNG, "base64");
@@ -402,7 +403,8 @@ async function scenario(options: {
       },
       renderMessages: options.v3 ? v3.renderMessages : (messages) => collapse(messages),
     },
-    wakeup: { decide: () => "trigger" },
+    // 真实 standard 引擎：run() 投递的 created 事实都是私聊，逐条开轮。
+    wakeup: new StandardWakeupInstance(),
     codemode: CodemodeConfig({ enable: options.codemode ?? true, direct: options.direct ?? [] } as never),
     toolsearch: ToolsearchConfig({ enable: options.search ?? false, resident: options.search ? Object.keys(options.tools ?? {}) : [] } as never),
     debugStream: false,

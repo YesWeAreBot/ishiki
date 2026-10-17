@@ -41,7 +41,8 @@ context:
     refillRatio: 0.8 # 压缩后压到上限的多少，留出余量
 
 wakeup:
-  # 唤醒引擎：standard 按下面几条判定一条消息要不要理
+  # 唤醒引擎：standard 在消息提交后收到通知，按下面几条判定这条消息要不要理，
+  # 要理就自己开轮（模型声明的 wait 条件与显式 wake 不经过引擎）
   engine: standard
   standard:
     direct: true # 私聊必醒

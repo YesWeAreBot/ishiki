@@ -1,9 +1,10 @@
+import type { Agent } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import type { IshikiEvent } from "../types.js";
-import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
+import type { IshikiMessageCreated } from "../types.js";
+import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
 const DEFAULT_WAKEUP: StandardWakeupConfig = { direct: true, atSelf: true, quoteSelf: true, keywords: [] };
 
@@ -21,14 +22,20 @@ export class StandardWakeupInstance implements WakeupEngineInstance {
     this.config = { ...DEFAULT_WAKEUP, ...config };
   }
 
-  decide(event: IshikiEvent): WakeupDecision {
-    if (event.type !== "ishiki.message.created") return "wait";
+  attach(agent: Agent): () => void {
+    return agent.channel.subscribe("agent", (event) => {
+      if (event.type !== "message.appended") return;
+      const message = event.message;
+      if (message.role !== "custom" || message.type !== "ishiki.message.created") return;
+      if (agent.isIdle() && this.matches(message.data)) agent.continue();
+    });
+  }
 
-    const message = event.data;
-    if (this.config.direct && message.isDirect) return "trigger";
-    if (this.config.quoteSelf && message.quote?.user?.id === message.selfId) return "trigger";
-    if (this.config.keywords.some((keyword) => keyword.length > 0 && message.content.includes(keyword))) return "trigger";
-    return this.config.atSelf && atSelf(message.content, message.selfId) ? "trigger" : "wait";
+  matches(message: IshikiMessageCreated): boolean {
+    if (this.config.direct && message.isDirect) return true;
+    if (this.config.quoteSelf && message.quote?.user?.id === message.selfId) return true;
+    if (this.config.keywords.some((keyword) => keyword.length > 0 && message.content.includes(keyword))) return true;
+    return this.config.atSelf && atSelf(message.content, message.selfId);
   }
 }
 

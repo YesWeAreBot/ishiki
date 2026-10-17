@@ -29,7 +29,7 @@ profile 激活时，主插件按名字取服务（`ContextEngine.GetService(fibe
 
 ## 三族引擎各自的设计约束
 
-**唤醒引擎是纯函数。** 输入一条事件，输出 `trigger` 或 `wait`，不允许副作用。这保证唤醒判定可以随意更换而不影响事实流。有状态的需求（如 v3 的意愿值、jev 的冷却期）在实例内部维护，状态粒度即实例粒度。
+**唤醒引擎负责输入驱动的自动唤醒。** 它在 `attach(agent)` 里订阅 core 的 `message.appended` 通知，从已提交的消息中挑出自己关心的那些，自行判断、自行定时，认定该醒时直接调用 `agent.continue()`。它只管这一类自动响应：模型声明的 `wait` 条件与显式 `wake` 是另外两条独立来路，不经过它。事实流不归它管——runtime 早已把消息写完，引擎只是读者，所以换引擎不改变「收到过什么」，只改变「要不要理」。有状态的需求（v3 的意愿值、jev 的冷却期）在实例内部维护，状态粒度即实例粒度；忙碌时怎么处理（等待、重试、放弃）也由引擎自己定。
 
 **上下文引擎只做投影。** 它在每轮请求前被调用（`prepareEntries`），把事实流投影成模型输入，可以追加系统提示词（如 v3 的 WorldState 说明、记忆块）。它不修改事实流本身——压缩类操作（standard 的摘要）以**追加新条目**的方式表达，历史永远可回放。
 
@@ -47,16 +47,20 @@ profile 激活时，主插件按名字取服务（`ContextEngine.GetService(fibe
 
 ## 自己写一个引擎
 
-最小代价的入口是唤醒引擎（一个纯函数）：
+最小代价的入口是唤醒引擎（一个只订阅、只开轮的实例）：
 
 ```ts
-import { WakeupEngine, type WakeupEngineInstance } from "koishi-plugin-ishiki";
+import { WakeupEngine, type Agent, type WakeupEngineInstance } from "koishi-plugin-ishiki";
 import { Service, type Context } from "koishi";
 
 class MyWakeupInstance implements WakeupEngineInstance {
-  async decide(event) {                    // 同步也可
-    return event.type === "ishiki.message.created" && Math.random() < 0.1
-      ? "trigger" : "wait";
+  attach(agent: Agent): () => void {
+    return agent.channel.subscribe("agent", (event) => {
+      if (event.type !== "message.appended") return;
+      const message = event.message;
+      if (message.role !== "custom" || message.type !== "ishiki.message.created") return;
+      if (agent.isIdle() && Math.random() < 0.1) agent.continue();
+    });
   }
 }
 
@@ -65,6 +69,8 @@ export class MyWakeupEngine extends WakeupEngine<"my-wakeup"> {
   public [Service.invoke](config, context) { return new MyWakeupInstance(); }
 }
 ```
+
+`attach` 要做三件事：订阅 `agent` 频道的 `message.appended`、从中挑出关心的消息、判定成立就 `agent.continue()`。两个约束值得记住：订阅回调被 core 等待，耗时的判定（如 jev 的模型调用）要另起任务并自行捕获错误；开轮前要确认 `agent.isIdle()`，异步判定在结果回来后再确认一次——上面例子里判定与检查都是同步的，所以天然安全。
 
 作为 Koishi 插件发布后，用户在 profile 写 `wakeup: { engine: my-wakeup }` 即用。上下文与工具调用引擎同理（基类分别为 `ContextEngine`、`ToolcallEngine`），接口细节见[扩展 API 参考](/docs/reference/api)。
 

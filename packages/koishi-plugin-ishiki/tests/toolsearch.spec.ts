@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SEARCH_TOOL, ToolsearchState, createSearchTool } from "../src/builtin-tools/toolsearch.js";
 import { ResourceCenter } from "../src/resources/center.js";
 import { AgentRuntime, type AgentRuntimeConfig } from "../src/runtime.js";
+import { StandardWakeupInstance } from "../src/wakeup/index.js";
 
 const makeTool = (name: string, description: string, inputProps: Record<string, unknown> = {}): Tool =>
   tool({
@@ -244,13 +245,14 @@ describe("AgentRuntime baseline catalog", () => {
     return new AgentRuntime({
       id: "test",
       home,
-      // No turn runs in these tests: init and non-trigger sends never touch the model.
+      // No turn runs in these tests: init and non-trigger sends never touch the model,
+      // and the standard engine only wakes on committed created facts.
       model: {} as LanguageModelV4,
       instructions: "system prompt",
       tools: {},
       extensions: [],
       context: {} as AgentRuntimeConfig["context"],
-      wakeup: {} as AgentRuntimeConfig["wakeup"],
+      wakeup: new StandardWakeupInstance(),
       codemode: { enable: false, direct: [], timeoutMs: 1000 },
       toolsearch: { enable: true, resident: [], maxResults: 5 },
       debugStream: false,

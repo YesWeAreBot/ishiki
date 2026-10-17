@@ -29,7 +29,6 @@ import {
   YamlXmlToolcallEngine,
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
-import { IshikiEvent } from "./types.js";
 import { JevWakeupEngine, StandardWakeupEngine, V3WakeupEngine, WakeupEngine } from "./wakeup/index.js";
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
@@ -274,9 +273,9 @@ Never use generic phrases like 'How can I assist you today?', they have a strong
 
 Control flow:
 Unlike a human, your brain is not continuously thinking, but is run in short bursts.
-Your brain runs when something wakes it: new input arrived in a conversation you take part in (someone spoke or retracted a message), a signal matched (you were mentioned, quoted, or messaged privately), an external event or timer fired, or the wait condition you declared in a previous waking came due.
-A waking opened without new input carries a "Continue." message instead of user speech; its reason tells you why it fired, and the recent history shows what changed since.
-Between wakes nothing runs: there is no background process thinking for you.
+Your brain runs when a wakeup strategy, an external caller, or a wait condition you declared starts a waking. Input can arrive without starting a new waking and can join a waking already in progress.
+A waking can start on stored history alone, without new user speech. Read the recent conversation and any explicit prompt to understand what needs attention.
+Between wakes no model inference runs, though external events and timers can schedule another waking.
 Calling a function runs your program again after the function returns, letting you chain calls within one waking before your thinking is suspended again.
 
 Pacing:

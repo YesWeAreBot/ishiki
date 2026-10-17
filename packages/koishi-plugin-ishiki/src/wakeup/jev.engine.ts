@@ -1,10 +1,10 @@
-import type { Agent, AgentEntry, AgentMessage } from "@yesimagent/core";
+import type { Agent, AgentEntry, AgentMessage, CustomMessages } from "@yesimagent/core";
 import { Service, type Context, type Logger } from "koishi";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import { type IshikiEvent, type IshikiMessageCreated } from "../types.js";
-import { atSelf, WakeupEngine, type WakeupDecision, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
+import type { IshikiMessageCreated } from "../types.js";
+import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 import { StandardWakeupInstance, type StandardWakeupConfig } from "./standard.engine.js";
 
 const DEFAULT_JEV_WAKEUP: Omit<JevWakeupConfig, "apiKey"> = {
@@ -160,7 +160,6 @@ export class JevWakeupInstance implements WakeupEngineInstance {
   private readonly logger: Logger;
   private readonly rules: StandardWakeupInstance;
   private readonly channels = new Map<string, ChannelState>();
-  private readonly seeding = new Set<Promise<void>>();
 
   constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionContext) {
     this.config = normalize(config);
@@ -169,54 +168,99 @@ export class JevWakeupInstance implements WakeupEngineInstance {
   }
 
   attach(agent: Agent): () => void {
-    const mine = new Set<string>();
+    let disposed = false;
     let latest: string | undefined;
+    const mine = new Set<string>();
+
+    // History seeding runs beside the subscription: no callback may await it.
+    const seed = this.seed(agent);
+
+    // One task per input, carrying its own errors; the subscription itself never awaits judgement.
+    const processInput = async (channelId: string, message: CustomMessages<"ishiki.message.created">): Promise<void> => {
+      try {
+        await seed;
+        const startedAt = performance.now();
+        const elapsed = (): number => Math.round(performance.now() - startedAt);
+
+        if (disposed) return;
+        const channel = this.ensureState(channelId);
+
+        // Busy, the input already joined the running turn: only the window moves.
+        if (!agent.isIdle()) {
+          this.absorb(channelId, message);
+          this.debug(channelId, `wait busy elapsed=${elapsed()}ms`);
+          return;
+        }
+
+        if (this.rules.matches(message.data)) {
+          this.absorb(channelId, message);
+          agent.continue();
+          this.debug(channelId, `trigger rule elapsed=${elapsed()}ms`);
+          return;
+        }
+
+        const now = Date.now();
+        if (!this.cooled(channel, now)) {
+          this.absorb(channelId, message);
+          const since = channel.lastSpokeAt === undefined ? 0 : Math.round((now - channel.lastSpokeAt) / 1000);
+          this.debug(channelId, `wait cooldown since=${since}s elapsed=${elapsed()}ms`);
+          return;
+        }
+
+        // `judge` serializes the request — the window without this message — ahead of its first await,
+        // so absorbing right after lets later inputs advance without doubling the current message.
+        const judgement = this.judge(message.data, channel);
+        this.absorb(channelId, message);
+
+        const chance = await judgement;
+        if (disposed) return;
+        if (chance === undefined) {
+          this.debug(channelId, `wait model unavailable elapsed=${elapsed()}ms`);
+          return;
+        }
+
+        const reason = `model chance=${chance.toFixed(2)} threshold=${this.config.threshold} window=${channel.lines.length}`;
+        if (chance < this.config.threshold) {
+          this.debug(channelId, `wait ${reason} elapsed=${elapsed()}ms`);
+          return;
+        }
+        // A late win is pointless once the bot is answering: this input already reached that turn.
+        if (!agent.isIdle()) {
+          this.debug(channelId, `trigger suppressed busy ${reason} elapsed=${elapsed()}ms`);
+          return;
+        }
+        agent.continue();
+        this.debug(channelId, `trigger ${reason} elapsed=${elapsed()}ms`);
+      } catch (error) {
+        this.logger.warn(`wakeup jev [${channelId}] judgement failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
 
     const unsubscribe = agent.channel.subscribe("agent", (event) => {
       if (event.type !== "message.appended") return;
-      latest = readChannelId(event.message) ?? latest;
-      if (latest === undefined) return;
-      mine.add(latest);
-      this.absorb(latest, event.message);
+
+      const message = event.message;
+      const named = readChannelId(message);
+      if (named !== undefined) latest = named;
+      const channelId = named ?? latest;
+      if (channelId === undefined) return;
+      mine.add(channelId);
+
+      if (message.role === "custom" && message.type === "ishiki.message.created") {
+        void processInput(channelId, message);
+        return;
+      }
+      this.absorb(channelId, message);
     });
 
-    const seed = this.seed(agent);
-    this.seeding.add(seed);
     this.debug(agent.id, "attached");
 
     return () => {
+      disposed = true;
       unsubscribe();
-      this.seeding.delete(seed);
       for (const channelId of mine) this.channels.delete(channelId);
       this.debug(agent.id, "detached");
     };
-  }
-
-  async decide(event: IshikiEvent): Promise<WakeupDecision> {
-    if (event.type !== "ishiki.message.created") return "wait";
-
-    const message = event.data;
-    const channelId = message.channelId;
-    const startedAt = performance.now();
-    const elapsed = () => Math.round(performance.now() - startedAt);
-
-    await Promise.all(this.seeding);
-    const channel = this.ensureState(channelId);
-
-    if (this.rules.decide(event) === "trigger") return this.report(channelId, "trigger", "rule", elapsed());
-
-    const now = Date.now();
-    if (!this.cooled(channel, now)) {
-      const since = channel.lastSpokeAt === undefined ? 0 : Math.round((now - channel.lastSpokeAt) / 1000);
-      return this.report(channelId, "wait", `cooldown since=${since}s`, elapsed());
-    }
-
-    const chance = await this.judge(message, channel);
-    if (chance === undefined) return this.report(channelId, "wait", "model unavailable", elapsed());
-
-    const threshold = this.config.threshold;
-    const reason = `model chance=${chance.toFixed(2)} threshold=${threshold} window=${channel.lines.length}`;
-    return this.report(channelId, chance >= threshold ? "trigger" : "wait", reason, elapsed());
   }
 
   history(channelId: string): ReadonlyArray<{ author: string; text: string }> {
@@ -234,11 +278,6 @@ export class JevWakeupInstance implements WakeupEngineInstance {
       if (oldest !== undefined) this.channels.delete(oldest);
     }
     return created;
-  }
-
-  private report(channelId: string, decision: WakeupDecision, reason: string, elapsedMs: number): WakeupDecision {
-    this.debug(channelId, `${decision} ${reason} elapsed=${elapsedMs}ms`);
-    return decision;
   }
 
   private debug(where: string, line: string): void {
