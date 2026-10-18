@@ -102,6 +102,23 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
 
 同目录 `persona.md`：人设，注入系统提示词；`memory/`（v3 上下文且 `memoryBlocks: true` 时）：记忆块；`mcp.json`（mcp-client 扩展）：见[参考：mcp.json](/docs/reference/mcp-json)。
 
+### narrative 引擎配置
+
+narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并启用后在 profile 中同时设置 `context.engine: narrative` 与 `toolcall.engine: narrative`。完整用法见[管理上下文窗口](/docs/guides/context)。
+
+| 字段 | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `context.narrative.maxTokens` | `number` | `32000` | 剧本正文的估算 token 预算；非正数关闭自动压缩 |
+| `context.narrative.refillRatio` | `number` | `0.8` | 压缩后目标比例，范围 `(0, 1]` |
+| `context.narrative.recentEntries` | `number` | `12` | 近期原始证据条数；未读事件、当前轮次证据及关联附件额外保留 |
+| `toolcall.narrative.decoderModel` | `string` | 复用 `model` | Action Decoder 模型引用，可用模型组 |
+| `toolcall.narrative.replyModel` | `string` | 复用 `model` | Replyer 模型引用，可用模型组 |
+| `toolcall.narrative.narratorInstructions` | `string` | 无 | 追加作者续写指令 |
+| `toolcall.narrative.decoderInstructions` | `string` | 无 | 追加行动解码指令 |
+| `toolcall.narrative.replyerInstructions` | `string` | 无 | 追加可见表达指令 |
+
+主 `model` 负责 Narrator 和历史压缩。每个内部阶段沿用取消信号、采样设置和输出 token 上限；停止序列、返回格式、请求头与 provider 私有选项不跨角色转发，角色使用自己的 JSON 或工具合同及模型网关配置。返回用量为各阶段用量之和，reasoning 只包含显式剧本，不包含底层模型的隐藏推理。
+
 ### failover
 
 <TypeTable

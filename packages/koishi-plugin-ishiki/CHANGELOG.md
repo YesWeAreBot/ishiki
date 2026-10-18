@@ -43,10 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codemode and toolsearch prompt sections explain catalog updates and when to re-inspect attachments
 
 ### Removed
+- The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types.
 - The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration.
 - `think` tool, succeeded by `inner_thoughts`.
 - Cross-scene delivery tool, replaced by the aggregated cross-channel windows.
 - The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration
+- The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types
 
 ### Fixed
 - Platform attachments preserve document order when asynchronous registrations complete out of order.

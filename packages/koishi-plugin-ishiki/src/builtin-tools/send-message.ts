@@ -86,12 +86,17 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
 
   return tool({
     description: cross
-      ? "Send visible messages to a channel. Copy target from its [channel target=...] header."
-      : "Send visible messages to the current channel.",
+      ? "Send one or more chat bubbles to a channel. Copy target from its [channel target=...] header. Each item is one bubble; send the exact line you would type, not a rewritten or expanded summary."
+      : "Send one or more chat bubbles. Each item is one bubble; send the exact line you would type, not a rewritten or expanded summary.",
     inputSchema: jsonSchema<SendMessageTool.Input>({
       type: "object",
       properties: {
-        messages: { type: "array", items: { type: "string" }, minItems: 1, description: "messages to send" },
+        messages: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          description: "one chat bubble each; send the line you would actually type, not a summary",
+        },
         mode: { type: "string", enum: ["element", "raw"], description: "message mode" },
         continue: { type: "boolean", description: "whether to continue sending messages after a failure" },
         ...(cross

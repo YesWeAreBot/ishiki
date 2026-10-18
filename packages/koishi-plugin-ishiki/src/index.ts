@@ -221,7 +221,9 @@ class Ishiki extends Service<Ishiki.Config> {
       }
     };
     Object.defineProperty(apply, "name", { value: `ishiki/profile:${profile.id}`, configurable: true });
-    this.ctx.inject(services, apply);
+    // profile fiber 里跑的就是内核装配代码：引擎 provider 与扩展都拿这条 fiber 取服务，
+    // 所以内核服务 ishiki 本身也要在依赖表里，否则 ctx.ishiki 会被记为未声明依赖。
+    this.ctx.inject([...services, "ishiki"], apply);
   }
 
   private async onSession(session: Session): Promise<void> {
@@ -382,6 +384,7 @@ declare module "koishi" {
 export * from "@yesimagent/core";
 
 export * from "./extension.js";
+export * from "./failover.js";
 export * from "./runtime.js";
 
 export * from "./context/index.js";

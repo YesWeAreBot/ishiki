@@ -8,8 +8,8 @@ export interface ContextEngines {}
 
 export interface ContextEngineInstance {
   attach?: (agent: Agent) => () => void;
-  prepareEntries?: (entries: readonly AgentEntry[], request: ContextRequest) => Awaitable<readonly AgentEntry[]>;
-  renderMessages?: (messages: AgentMessage[], request: ContextRequest) => Awaitable<AgentMessage[]>;
+  prepareEntries?: (entries: readonly AgentEntry[], request?: ContextRequest) => Awaitable<readonly AgentEntry[]>;
+  renderMessages?: (messages: AgentMessage[], request?: ContextRequest) => Awaitable<AgentMessage[]>;
   instructions?: () => Awaitable<string | undefined>;
 }
 

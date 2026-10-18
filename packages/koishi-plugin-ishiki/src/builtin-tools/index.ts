@@ -1,4 +1,4 @@
-export { createFinish } from "./finish.js";
+export { FINISH_TOOL, createFinish } from "./finish.js";
 export { createReadTool, ReadTool } from "./read.js";
-export { createSendMessage } from "./send-message.js";
+export { SEND_MESSAGE_TOOL, createSendMessage } from "./send-message.js";
 export { createWaitTool, WAIT_TOOL, WaitConditionMachine, WaitTool, type WaitOutcome } from "./wait.js";

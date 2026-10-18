@@ -1,9 +1,9 @@
 ---
 title: 管理上下文窗口
-description: 在 standard 压缩与 v3 WorldState 之间选择并调参
+description: 选择线性历史、WorldState 或增量剧本，并配置上下文预算
 ---
 
-上下文引擎（context engine）决定「每轮请求给模型看什么」。Ishiki 提供两种：`standard`（线性历史 + 自动压缩）和 `v3`（WorldState 视窗 + 核心记忆块）。配置位置：profile 的 `context` 段，缺省 `standard`。
+上下文引擎（context engine）决定「每轮请求给模型看什么」。Ishiki 内置 `standard`（线性历史 + 自动压缩）和 `v3`（WorldState 视窗 + 核心记忆块）；`narrative`（增量剧本 + 分阶段模型编排）由独立插件 `koishi-plugin-ishiki-narrative` 提供。配置位置：profile 的 `context` 段，缺省 `standard`。
 
 ## standard：线性历史与自动压缩
 
@@ -70,17 +70,61 @@ description: 与常见_contacts 的关系与态度，涉及具体人时参考
 想要稳定的人格连续性（记忆块）、想让模型显式区分「已处理」与「本轮刺激」（配合 `toolcall: v3` 的思考协议）；代价是上下文结构固定，灵活性低于 standard。
 </Callout>
 
-## 两种引擎怎么选
+## narrative：增量剧本与分阶段模型
 
-| 关注点 | standard | v3 |
-| --- | --- | --- |
-| 历史 | 完整线性流，超限压缩成摘要 | 条数上限，早期轮次折叠 |
-| 长期记忆 | 只有摘要（模型自己总结） | 记忆块（你手写、稳定可控） |
-| token 开销 | 随对话增长到阈值后波动 | 由 `maxMessages` 硬性框住 |
-| 搭配建议 | 任意 toolcall 引擎 | 最适合搭配 `toolcall: v3` |
+希望同一个角色持续记住先前剧情，并分别使用擅长决策、工具调用和写作的模型时，先构建并链接 `packages/narrative`（包名 `koishi-plugin-ishiki-narrative`），在 `koishi.yml` 启用 `ishiki-narrative: {}`，然后在 profile 中同时启用两个 `narrative` 引擎：
 
-两者都不改变附件、工具结果的投影方式，那部分是全局统一的（见[参考：模型工具](/docs/reference/tools)的 read 条目）。
+```yaml
+model: local:narrator
+context:
+  engine: narrative
+  narrative:
+    maxTokens: 32000
+    refillRatio: 0.8
+    recentEntries: 12
+
+toolcall:
+  engine: narrative
+  narrative:
+    decoderModel: local:agent
+    replyModel: local:writer
+```
+
+模型引用来自 `models.yaml`，也可以使用组名。`model` 负责 Narrator；省略 `decoderModel` 或 `replyModel` 时，对应阶段复用同一个底模，但仍是独立调用。Narrator 和 Replyer 需要稳定遵守 JSON 输出合同，Action Decoder 需要原生工具调用能力。
+
+- **Narrator** 把新用户消息和工具观察写入第三人称剧情，继续当前情境并选择行动、回复或停下。旧输入按源条目认领，不会每次重译完整历史。
+- **Action Decoder** 根据剧情意图、原始证据和本步可用工具生成调用。工具仍由宿主执行，真实结果在下一步进入 Narrator。
+- **Replyer** 生成最终聊天气泡，包装器原样封装为 `send_message`。发送成功后的收轮规则不变；实际发送回执在下一次正常叙事时纳入，不额外唤醒一次。
+
+剧情增量作为带标记的 reasoning 返回，并投影为同一 `events.jsonl` 中的 `ishiki.narrative` 条目。重启时可从已保存的 assistant 输出补齐缺失投影，不重新执行工具。每个 runtime 持有自己的剧情，共享模型不共享会话状态。
+
+来源消息保留真实的私聊／群聊标记，实际情境优先于人设中的通用场景。Narrator 保留已发生的事和当时的感受，同时允许新事件改变当前理解、情绪或计划；人物先前对他人动机的猜测可以修正，不作为永久的人设要求。
+
+### 预算与精确证据
+
+`maxTokens` 用每字符约 0.5 token 估算**剧本正文**，不是整个上游请求的硬上限；`refillRatio` 指定压缩后的目标比例。历史剧本达到预算时，同一个 Narrator 先压缩旧正文，再处理本轮事件。原始台账不删除，当前输入不参与这次旧历史压缩。
+
+`recentEntries` 控制额外保留的近期原始记录数。未处理事件、当前轮次需要的原始证据及关联附件不会因这个数量而丢弃，所以长工具循环或大型输入仍可能超过剧本预算。路径、调用标识和工具结果以原始记录为准，不能把人物意图当成执行成功。
+
+### 调整角色提示词
+
+在 `toolcall.narrative` 中可选配置 `narratorInstructions`、`decoderInstructions`、`replyerInstructions`，分别追加作者、执行解码和表达要求；人设仍来自 `persona.md`。这些配置扩展角色指令，不替代输入输出合同或宿主权限。
+
+<Callout type="warn" title="两个引擎必须配套">
+`toolcall.engine: narrative` 必须搭配 `context.engine: narrative`，否则运行时找不到输入标记而报错；反过来，叙事上下文配普通工具引擎不会报错，但模型看不到剧本合同，叙事效果不成立。唤醒引擎保持独立；narrative 不提供 HTTP 服务、自动生活调度或请求回退。
+</Callout>
+
+## 三种引擎怎么选
+
+| 关注点 | standard | v3 | narrative |
+| --- | --- | --- | --- |
+| 历史 | 完整线性流，超限压缩成摘要 | 条数上限，早期轮次折叠 | 追加剧本，超限压缩旧正文 |
+| 长期记忆 | 模型生成的摘要 | 手写记忆块 | 剧本与压缩后的叙事背景 |
+| 调用开销 | 通常单次推理，压缩另计 | 通常单次推理 | 每步叙事后解码或写回复，压缩另计 |
+| 搭配 | 非 narrative 工具引擎 | 非 narrative 工具引擎，通常搭配 v3 | 必须搭配 narrative 工具引擎 |
+
+三者都沿用统一的附件和工具结果投影（见[参考：模型工具](/docs/reference/tools)的 read 条目）。
 
 ## 验证
 
-开启[调试](/docs/guides/debugging)的 `debugStream` 观察实际请求：standard 在压缩发生的那一轮系统提示词头部出现摘要段；v3 的每轮请求都带 `<world_state>` 块，记忆块出现在其中（`memoryBlocks: true` 时）。
+开启[调试](/docs/guides/debugging)的 `debugStream` 观察模型流：standard 使用历史摘要段，v3 使用 `<world_state>` 与可选记忆块；narrative 返回带 `ishiki.narrative` 标记的剧本 reasoning，行动仍是标准工具调用。使用 narrative 时，还可在实例的 `events.jsonl` 中核对剧情增量的 `originMessageId` 与 `inputEntryIds`，确认新增事件只认领一次。
