@@ -52,12 +52,20 @@ export interface IshikiMessageDeleted extends IshikiEventBase {
 
 /**
  * Tool catalog update, persisted into the conversation by the toolsearch
- * runtime. Full replay: each entry announces the complete visible-tool set
- * and supersedes every earlier catalog.
+ * runtime. A full snapshot replaces every earlier catalog; an incremental
+ * update adds, changes, or removes only the tools it lists.
  */
 export interface IshikiToolsCatalog {
   /** Catalog text rendered at write time (vendored code-mode renderer). */
   text: string;
   /** Visible tool names at write time; informational, for inspection and debugging. */
   tools: readonly string[];
+  /** Update shape; absent on catalogs written before this field existed. */
+  mode?: "full" | "incremental";
+  /** Monotonic version within one runtime. */
+  version?: number;
+  /** Complete visible tool-name set at write time. */
+  known?: readonly string[];
+  /** Tools removed by this update. */
+  removed?: readonly string[];
 }

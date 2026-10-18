@@ -133,8 +133,14 @@ export class AgentRuntime {
             this.disposeWakeup?.();
             this.disposeContext?.();
           },
-          transformEntries: (entries, options) => {
-            return this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries;
+          transformEntries: async (entries, options) => {
+            const filtered = this.toolsearch.filterEntries(entries);
+            const prepared = await (this.context.prepareEntries?.(filtered, { turnId: options.turnId, signal: options.signal }) ?? filtered);
+            this.toolsearch.observeEntries(prepared);
+            const repair = this.toolsearch.repairCatalog();
+            if (repair === undefined) return prepared;
+            await this.agent.storage.append(repair);
+            return [...prepared, repair];
           },
           transformMessages: async (messages, options) => {
             const associated = attachmentMessages(messages);
@@ -171,7 +177,7 @@ export class AgentRuntime {
           onStepFinish: (info) => {
             // Emit at most one catalog per step, after the step's search results
             // are persisted and before the next model call; parallel searches
-            // within the step coalesce into a single full-replay catalog.
+            // within the step coalesce into a single catalog update.
             this.toolsearch.flushCatalog();
             const calls = new Set<string>();
             let sending = false;

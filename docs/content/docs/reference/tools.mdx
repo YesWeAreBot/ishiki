@@ -98,7 +98,7 @@ read({ url: "local://notes.txt?view=meta" })
 
 ### search（toolsearch 开启时）
 
-按名称与描述关键词发现延迟池里的工具：输入 `{ query }`，输出 `{ tools: [{ name, description? }] }`。命中的工具**下一步**起可调用；每步结束时目录有变化则持久化一条全量目录消息。常驻工具（`finish`、`send_message`、`read`、`wait`、`codemode`、`search` 加 `resident` 名单）永远可见。
+按名称与描述关键词发现延迟池里的工具：输入 `{ query }`，输出 `{ tools: [{ name, description? }] }`。命中的工具**下一步**起可调用；每步结束时目录有变化则持久化一条目录更新。默认 `catalogMode: incremental` 只包含新增、变更或删除的工具，`catalogMode: replace` 则每次发完整快照。常驻工具（`finish`、`send_message`、`read`、`wait`、`codemode`、`search` 加 `resident` 名单）永远可见。
 
 ### finish
 

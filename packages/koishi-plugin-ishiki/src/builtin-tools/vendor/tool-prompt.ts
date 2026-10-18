@@ -8,6 +8,8 @@
  * - "Tool call examples" block removed: it restates the type block's
  *   signatures; the attachment workflow reminder stays
  */
+import { createHash } from "node:crypto";
+
 import { asSchema, Tool } from "@yesimagent/core";
 
 type JsonSchema = Record<string, unknown>;
@@ -26,6 +28,26 @@ interface SchemaContext {
 
 const MAX_SCHEMA_DEPTH = 8;
 const MAX_COMPACT_OBJECT_TYPE_LENGTH = 120;
+const MIN_ALIAS_TYPE_LENGTH = 80;
+
+export interface ToolCatalogMessageOptions {
+  mode?: "full" | "incremental";
+  version?: number;
+  known?: readonly string[];
+  removed?: readonly string[];
+  knownIndex?: boolean;
+  knownAliases?: ReadonlySet<string>;
+}
+
+export interface ToolCatalogMessage {
+  text: string;
+  aliases: ReadonlyMap<string, string>;
+}
+
+interface ToolCatalogRender {
+  typeBlock: string;
+  aliases: Map<string, string>;
+}
 
 export function buildCodeModeToolDescription(tools: CodeModeToolSet, toolDiscovery: "description" | "conversation" = "description"): string {
   const sections = [
@@ -36,7 +58,7 @@ export function buildCodeModeToolDescription(tools: CodeModeToolSet, toolDiscove
     "Host tools return raw JSON-safe values inside this program. Return complete structured results to retain media and read provenance; the runtime supplies text previews and separate attachments on the next step. See the system instructions for the attachment workflow.",
     toolDiscovery === "description"
       ? "Use exact names/types below. `JSON.parse`/`JSON.stringify` are available."
-      : "Use exact names/types from the latest capability update. `JSON.parse`/`JSON.stringify` are available.",
+      : "Use exact names/types from the capability updates. `JSON.parse`/`JSON.stringify` are available.",
     "Fetch: `fetch` is not available.",
   ];
 
@@ -44,7 +66,7 @@ export function buildCodeModeToolDescription(tools: CodeModeToolSet, toolDiscove
     sections.push(
       "",
       "Tools:",
-      'The current host-tool API is provided in "Code mode capability update" user messages. Follow the latest catalog and ignore earlier catalogs.',
+      'The current host-tool API is provided in "Code mode capability update" user messages. Apply updates in order: a full snapshot supersedes earlier updates; an incremental update adds, changes, or removes tools; a later declaration for the same tool wins. A `Known tools` line, when present, is the complete current set.',
     );
     return sections.join("\n");
   }
@@ -55,33 +77,113 @@ export function buildCodeModeToolDescription(tools: CodeModeToolSet, toolDiscove
   return sections.join("\n");
 }
 
-export function buildCodeModeToolCatalogMessage(tools: CodeModeToolSet): string {
-  const typeBlock = renderToolCatalog(tools);
-  const sections = [
-    "Code mode capability update.",
-    "",
-    "This catalog replaces all previous code mode capability catalogs. Only the tools listed below are currently available through `tools`.",
-    "These return types describe raw values inside codemode. Return complete structured results to retain media and read provenance; follow the system instructions for final previews and attachments.",
-    "",
-    "Tools:",
-    typeBlock,
-  ];
+export function buildCodeModeToolCatalogMessage(tools: CodeModeToolSet, options: ToolCatalogMessageOptions = {}): ToolCatalogMessage {
+  return buildCatalogMessage("codemode", tools, options);
+}
 
-  return sections.join("\n");
+export function buildDirectToolCatalogMessage(tools: CodeModeToolSet, options: ToolCatalogMessageOptions = {}): ToolCatalogMessage {
+  return buildCatalogMessage("direct", tools, options);
+}
+
+function buildCatalogMessage(kind: "codemode" | "direct", tools: CodeModeToolSet, options: ToolCatalogMessageOptions): ToolCatalogMessage {
+  const mode = options.mode ?? "full";
+  const suffix = options.version === undefined ? "" : ` (${mode === "full" ? "full snapshot" : "incremental"} v${options.version})`;
+  const title = kind === "codemode" ? "Code mode capability update." : "Tool catalog update.";
+  const lines = [`${title}${suffix}`, ""];
+
+  if (mode === "full") {
+    lines.push(
+      kind === "codemode"
+        ? "This snapshot replaces all previous code mode capability catalogs. Only the tools listed below are currently available through `tools`."
+        : "This snapshot replaces all previous tool catalogs. Only the tools listed below are currently available for direct tool calls.",
+    );
+    if (kind === "codemode") {
+      lines.push(
+        "These return types describe raw values inside codemode. Return complete structured results to retain media and read provenance; follow the system instructions for final previews and attachments.",
+      );
+    }
+  } else {
+    lines.push(
+      kind === "codemode"
+        ? "This update adds or changes only the tools listed below. The full current set is the union of all capability updates; the Known tools line below is authoritative. A later declaration for the same tool overrides an earlier one."
+        : "This update adds or changes only the tools listed below. The full current set is the union of all tool catalog updates; the Known tools line below is authoritative. A later declaration for the same tool overrides an earlier one.",
+    );
+  }
+
+  const removed = options.removed ?? [];
+  if (removed.length > 0) lines.push("", `Removed: ${removed.join(", ")}`);
+
+  const entries = Object.entries(tools);
+  if (entries.length > 0) {
+    lines.push("", mode === "full" ? "Tools:" : "New/changed tools:");
+    const rendered = renderToolCatalogDetailed(tools, options.knownAliases);
+    lines.push(rendered.typeBlock);
+    if (mode === "incremental" && options.knownIndex !== false && options.known !== undefined) {
+      lines.push("", `Known tools: ${options.known.join(", ")}`);
+    }
+    return { text: lines.join("\n"), aliases: rendered.aliases };
+  }
+
+  if (mode === "full") {
+    lines.push("", kind === "codemode" ? "No host tools. Do not call `tools.*`." : "No tools.");
+  } else if (options.knownIndex !== false && options.known !== undefined) {
+    lines.push("", `Known tools: ${options.known.join(", ")}`);
+  }
+  return { text: lines.join("\n"), aliases: new Map<string, string>() };
 }
 
 export function renderToolCatalog(tools: CodeModeToolSet): string {
-  const toolEntries = Object.entries(tools);
-  return toolEntries.length === 0
-    ? "No host tools. Do not call `tools.*`."
-    : ["```ts", "declare const tools: {", ...toolEntries.flatMap(renderToolType), "};", "```"].join("\n");
+  return renderToolCatalogDetailed(tools).typeBlock;
 }
 
-function renderToolType([toolName, tool]: [string, CodeModeToolSet[string]]): string[] {
+export function renderToolCatalogDetailed(tools: CodeModeToolSet, knownAliases: ReadonlySet<string> = new Set()): ToolCatalogRender {
+  const entries = Object.entries(tools).sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) {
+    return { typeBlock: "No host tools. Do not call `tools.*`.", aliases: new Map() };
+  }
+
+  const typeByName = new Map<string, string>();
+  const counts = new Map<string, number>();
+  for (const [name, tool] of entries) {
+    const outputSchema = resolveOutputSchema(tool);
+    const type = outputSchema === undefined ? "unknown" : schemaToType(outputSchema, outputSchema);
+    typeByName.set(name, type);
+    if (type.length >= MIN_ALIAS_TYPE_LENGTH) counts.set(type, (counts.get(type) ?? 0) + 1);
+  }
+
+  const byType = new Map<string, string>();
+  const aliases = new Map<string, string>();
+  for (const type of typeByName.values()) {
+    if ((counts.get(type) ?? 0) < 2 || byType.has(type)) continue;
+    const alias = `ToolResult_${createHash("sha1").update(type).digest("hex").slice(0, 8)}`;
+    byType.set(type, alias);
+    aliases.set(alias, type);
+  }
+
+  const aliasLines: string[] = [];
+  const newAliases = new Map<string, string>();
+  for (const [alias, type] of aliases) {
+    if (knownAliases.has(alias)) continue;
+    aliasLines.push(`type ${alias} = ${type};`);
+    newAliases.set(alias, type);
+  }
+
+  const declarations = entries.flatMap(([name, tool]) => {
+    const type = typeByName.get(name)!;
+    return renderToolDeclaration([name, tool], byType.get(type));
+  });
+
+  const body: string[] = [];
+  if (aliasLines.length > 0) body.push(...aliasLines, "");
+  body.push("declare const tools: {", ...declarations, "};");
+  return { typeBlock: ["```ts", ...body, "```"].join("\n"), aliases: newAliases };
+}
+
+export function renderToolDeclaration([toolName, tool]: [string, CodeModeToolSet[string]], outputType?: string): string[] {
   const schema = resolveInputSchema(tool);
   const inputType = schema === undefined ? "unknown" : schemaToType(schema, schema);
   const outputSchema = resolveOutputSchema(tool);
-  const outputType = outputSchema === undefined ? "unknown" : schemaToType(outputSchema, outputSchema);
+  const resolvedOutputType = outputType ?? (outputSchema === undefined ? "unknown" : schemaToType(outputSchema, outputSchema));
   const description = firstString(tool.description, tool.title);
   const lines: string[] = [];
 
@@ -89,7 +191,7 @@ function renderToolType([toolName, tool]: [string, CodeModeToolSet[string]]): st
     lines.push(`  /** ${toComment(description)} */`);
   }
 
-  lines.push(`  ${formatObjectKey(toolName)}: (input: ${indentType(inputType, 2)}) => Promise<${indentType(outputType, 2)}>;`);
+  lines.push(`  ${formatObjectKey(toolName)}: (input: ${indentType(inputType, 2)}) => Promise<${indentType(resolvedOutputType, 2)}>;`);
   return lines;
 }
 

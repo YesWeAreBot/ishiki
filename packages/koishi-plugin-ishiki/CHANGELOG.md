@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Incremental tool catalogs with `catalogMode`, `fullSnapshotEvery`, and `knownIndex`; incremental updates send only new, changed, or removed tools, with catalog-version recovery after context compaction.
+- Shared output-type aliases in catalogs, so repeated MCP return shapes are declared once.
 - `wait` tool for agent-declared wake conditions.
 - Unified attachment pipeline in the runtime: tool outputs and inbound media flow through one attachment path.
 - Built-in tool search with deferred tool loading.
@@ -37,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order
 - Resource handlers receive complete URLs. File-backed schemes share `FileScheme`; `read` returns structured text or base64 media, and codemode declares final media through `attachments`
 - Ordinary oversized results become artifact snapshots; file pages continue at their source with lossless offsets, including Unicode and long single lines. Existing SDK execution limits remain unchanged
+- Search matches return a name and a short hint; the next catalog update carries their full signatures
+- Codemode and toolsearch prompt sections explain catalog updates and when to re-inspect attachments
 
 ### Removed
 - The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration.

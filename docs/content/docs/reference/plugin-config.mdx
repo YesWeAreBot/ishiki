@@ -193,6 +193,21 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
       default: '5',
       description: '单次 search 最多发现的工具数',
     },
+    catalogMode: {
+      type: "'incremental' | 'replace'",
+      default: "'incremental'",
+      description: 'catalog 更新策略：incremental 只发新增/变更/删除，replace 每次发完整快照并裁掉旧目录',
+    },
+    fullSnapshotEvery: {
+      type: 'number',
+      default: '8',
+      description: 'incremental 模式下每隔多少次更新补一份完整快照；0 表示不按次数补',
+    },
+    knownIndex: {
+      type: 'boolean',
+      default: 'true',
+      description: 'incremental 模式下在更新末尾附带当前完整工具名列表',
+    },
   }}
 />
 

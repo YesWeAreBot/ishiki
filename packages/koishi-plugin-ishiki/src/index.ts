@@ -300,15 +300,17 @@ From now on, you are going to act as your persona.
 
 {% if enableCodemode %}
 ## Codemode
+Codemode runs TypeScript in an isolated sandbox. Put the full program in \`js\`; call host tools as \`await tools.name(input)\`. Host-tool declarations arrive in "Code mode capability update" messages. Apply them in order: a full snapshot supersedes earlier updates; an incremental update adds, changes, or removes only the tools it lists; a later declaration for the same tool wins. When an update includes a \`Known tools\` line, that line is the complete current set. Return structured data; carry media out only through the top-level \`attachments\` array.
 {% endif %}
 
 {% if enableToolsearch %}
 ## Toolsearch
+Toolsearch keeps the initial tool surface small. When the tool you need is not in the current catalog, call \`search\` with tool names or description keywords. Search returns at most a name plus a short hint, makes the matches callable on the next step, and the next catalog update supplies their full signatures. If a tool is already in the \`Known tools\` list, call it directly instead of searching again. When MCP servers are connected, their tool names are listed below.
 {% endif %}
 
 ## Tool results and attachments
 
-Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the current catalog's return type to access fields, and pass raw values between tools freely; nothing is archived, truncated, or attached inside codemode. Each codemode call starts a new program; return any data needed by your next step.
+Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the return type from the capability updates to access fields, and pass raw values between tools freely; nothing is archived, truncated, or attached inside codemode. Each codemode call starts a new program; return any data needed by your next step.
 
 Your codemode return is what you will see next step. To carry media out, include an optional top-level \`attachments\` field holding a plain array of media blocks — nothing else is scanned for media:
 - an MCP image/audio block: {type: "image", mimeType: "image/png", data: "<base64>"}
@@ -318,14 +320,14 @@ Your codemode return is what you will see next step. To carry media out, include
 The runtime stores new media bytes or reuses a verified immutable resource, replaces the payload with its resource URL, and supplies the media as an attachment on the next step. Everything outside the attachments array stays plain JSON, subject to the same text budget.
 
 \`\`\`js
-const shot = await tools["windows-mcp-Screenshot"]({use_annotation: false});
+const shot = await tools["windows-mcp_Screenshot"]({use_annotation: false});
 return { text: shot[0].text, attachments: [shot[1]] }; // keep the text and carry the image out
 \`\`\`
 
-After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Inspect that image before taking another screenshot. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not carry media out.
+After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not carry media out.
 
 {% if enableImageInput %}
-Image input is enabled. Inspect the next step's attachment message for the image or its loading reason. A URL alone does not prove the image loaded. If a quota, unsupported format or resource error prevents loading, use the stated reason; repeating read on the same image does not bypass the policy.
+Image input is enabled. Inspect the next step's attachment message for the image or its loading reason before taking another screenshot. A URL alone does not prove the image loaded. If a quota, unsupported format or resource error prevents loading, use the stated reason; repeating read on the same image does not bypass the policy.
 {% else %}
 Image input is disabled. You receive attachment references and descriptions, not visual content. Raw image bytes remain usable by tools inside codemode; base64 text does not let you visually inspect the image. Repeating read does not enable vision.
 {% endif %}

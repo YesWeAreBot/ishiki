@@ -7,6 +7,7 @@ import type { Logger } from "koishi";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SEARCH_TOOL, ToolsearchState, createSearchTool } from "../src/builtin-tools/toolsearch.js";
+import { buildCodeModeToolCatalogMessage } from "../src/builtin-tools/vendor/tool-prompt.js";
 import { ResourceCenter } from "../src/resources/center.js";
 import { AgentRuntime, type AgentRuntimeConfig } from "../src/runtime.js";
 import { StandardWakeupInstance } from "../src/wakeup/index.js";
@@ -50,8 +51,15 @@ function makeAgent() {
   return { agent, catalogs, appended };
 }
 
-function makeState(config: { maxResults?: number } = {}) {
-  const state = new ToolsearchState({ enable: true, resident: [], maxResults: config.maxResults ?? 5 });
+function makeState(config: { maxResults?: number; catalogMode?: "incremental" | "replace"; fullSnapshotEvery?: number; knownIndex?: boolean } = {}) {
+  const state = new ToolsearchState({
+    enable: true,
+    resident: [],
+    maxResults: config.maxResults ?? 5,
+    catalogMode: config.catalogMode,
+    fullSnapshotEvery: config.fullSnapshotEvery,
+    knownIndex: config.knownIndex,
+  });
   const { agent, catalogs, appended } = makeAgent();
   state.bind(agent);
   state.codemodeEnabled = false;
@@ -144,6 +152,14 @@ describe("ToolsearchState", () => {
     expect(catalogs).toHaveLength(1);
   });
 
+  it("emits nothing when toolsearch is disabled", () => {
+    const state = new ToolsearchState({ enable: false, resident: [], maxResults: 5 });
+    const { agent, catalogs } = makeAgent();
+    state.bind(agent);
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(0);
+  });
+
   it("flushes a baseline catalog before any search ran", () => {
     const { state, catalogs } = makeState();
     // First flush always emits: the model gets a baseline roster (and, in
@@ -227,6 +243,219 @@ describe("ToolsearchState", () => {
       tools: unknown[];
     };
     expect(out.tools).toEqual([]);
+  });
+
+  it("emits incremental updates after the baseline", () => {
+    const { state, catalogs } = makeState();
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(1);
+    expect(catalogs[0]!.text).toContain("(full snapshot v1)");
+
+    state.search("weather");
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(2);
+    const update = catalogs[1]!;
+    expect(update.text).toContain("(incremental v2)");
+    expect(update.text).toContain("weather_forecast: (input:");
+    expect(update.text).toContain("Known tools:");
+    expect(update.text).not.toContain("gmail_list_messages: (input:");
+  });
+
+  it("does not repeat known declarations in later updates", () => {
+    const { state, catalogs } = makeState();
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+    state.search("gmail");
+    state.flushCatalog();
+
+    expect(catalogs).toHaveLength(3);
+    const update = catalogs[2]!;
+    expect(update.text).toContain("gmail_list_messages: (input:");
+    expect(update.text).not.toContain("weather_forecast: (input:");
+    expect(update.text).toContain("Known tools:");
+    expect(update.text).toContain("weather_forecast");
+  });
+
+  it("omits the known list when knownIndex is false", () => {
+    const { state, catalogs } = makeState({ knownIndex: false });
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+
+    expect(catalogs[1]!.text).toContain("(incremental v2)");
+    expect(catalogs[1]!.text).not.toContain("Known tools:");
+  });
+
+  it("emits incremental code-mode catalogs with host-only known tools", () => {
+    const { state, catalogs } = makeState();
+    state.codemodeEnabled = true;
+    state.refresh(
+      { ...makeTools(), [SEARCH_TOOL]: makeTool(SEARCH_TOOL, "Search deferred tools by keyword.") },
+      new Set(state.residentNames()),
+      new Set(["weather_forecast", "gmail_list_messages", "gmail_get_message", "calendar_create_event"]),
+    );
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+
+    const update = catalogs.at(-1)!;
+    expect(update.text).toContain("(incremental v2)");
+    expect(update.text).toContain("weather_forecast: (input:");
+    expect(update.text).toContain("Known tools:");
+    expect(update.text).not.toContain("send_message");
+  });
+
+  it("emits a removal when a visible tool disappears", () => {
+    const { state, catalogs } = makeState();
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+
+    const tools = makeTools();
+    delete tools.weather_forecast;
+    state.refresh({ ...tools, [SEARCH_TOOL]: makeTool(SEARCH_TOOL, "Search deferred tools by keyword.") }, new Set(state.residentNames()), new Set());
+    state.flushCatalog();
+
+    const update = catalogs.at(-1)!;
+    expect(update.text).toContain("(incremental");
+    expect(update.text).toContain("Removed: weather_forecast");
+    expect(update.text).not.toContain("weather_forecast: (input:");
+    expect(update.tools).not.toContain("weather_forecast");
+  });
+
+  it("emits a changed declaration when the tool schema changes", () => {
+    const { state, catalogs } = makeState();
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+
+    const tools = makeTools();
+    tools.weather_forecast = makeTool("weather_forecast", "Get the updated weather forecast.", { city: { type: "string" } });
+    state.refresh({ ...tools, [SEARCH_TOOL]: makeTool(SEARCH_TOOL, "Search deferred tools by keyword.") }, new Set(state.residentNames()), new Set());
+    state.flushCatalog();
+
+    const update = catalogs.at(-1)!;
+    expect(update.text).toContain("(incremental");
+    expect(update.text).toContain("weather_forecast: (input:");
+    expect(update.text).toContain("Get the updated weather forecast.");
+  });
+
+  it("re-sends full snapshots in replace mode", () => {
+    const { state, catalogs } = makeState({ catalogMode: "replace" });
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+    expect(catalogs.at(-1)!.text).toContain("(full snapshot v2)");
+    expect(catalogs.at(-1)!.text).toContain("finish: (input:");
+
+    state.search("gmail");
+    state.flushCatalog();
+    const update = catalogs.at(-1)!;
+    expect(update.text).toContain("(full snapshot v3)");
+    expect(update.text).toContain("weather_forecast: (input:");
+    expect(update.text).toContain("gmail_list_messages: (input:");
+  });
+
+  it("re-sends a full snapshot after the configured incremental update count", () => {
+    const { state, catalogs } = makeState({ fullSnapshotEvery: 2 });
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+    state.search("gmail");
+    state.flushCatalog();
+    state.search("calendar");
+    state.flushCatalog();
+
+    expect(catalogs.at(-1)!.text).toContain("(full snapshot v4)");
+  });
+
+  it("forces a full snapshot when prepared history lost a catalog version", () => {
+    const { state, catalogs } = makeState();
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+    expect(catalogs.at(-1)!.text).toContain("(incremental v2)");
+
+    state.observeEntries([] as never);
+    state.flushCatalog();
+    expect(catalogs.at(-1)!.text).toContain("(full snapshot v3)");
+  });
+
+  it("repairs catalog loss with an immediate full snapshot entry", () => {
+    const { state, catalogs } = makeState();
+    state.flushCatalog();
+    state.search("weather");
+    state.flushCatalog();
+    state.observeEntries([] as never);
+
+    const repair = state.repairCatalog();
+    expect(repair).toBeDefined();
+    state.flushCatalog();
+    expect(catalogs).toHaveLength(2);
+  });
+
+  it("keeps only the latest catalog entry in replace mode", () => {
+    const { state } = makeState({ catalogMode: "replace" });
+    const latestCatalog = { type: "message", data: { role: "custom", type: "ishiki.tools.catalog", data: { version: 2 } } };
+    const entries = [
+      { type: "message", data: { role: "custom", type: "ishiki.tools.catalog", data: { version: 1 } } },
+      { type: "message", data: { role: "user", content: "hi" } },
+      latestCatalog,
+    ] as never;
+    const filtered = state.filterEntries(entries);
+    expect(filtered).toHaveLength(2);
+    expect(filtered).toContain(latestCatalog);
+  });
+});
+
+describe("tool catalog renderer", () => {
+  it("shares repeated output types through a stable alias", () => {
+    const outputSchema = jsonSchema({
+      type: "array",
+      items: {
+        anyOf: [
+          { type: "object", properties: { type: { const: "text" }, text: { type: "string" } }, required: ["type", "text"] },
+          {
+            type: "object",
+            properties: { type: { enum: ["image", "audio"] }, data: { type: "string" }, mimeType: { type: "string" } },
+            required: ["type", "data"],
+          },
+          {
+            type: "object",
+            properties: {
+              type: { const: "resource" },
+              resource: {
+                type: "object",
+                properties: { uri: { type: "string" }, mimeType: { type: "string" }, text: { type: "string" }, blob: { type: "string" } },
+                required: ["uri"],
+              },
+            },
+            required: ["type", "resource"],
+          },
+          {
+            type: "object",
+            properties: { type: { const: "resource_link" }, uri: { type: "string" }, name: { type: "string" }, mimeType: { type: "string" } },
+            required: ["type", "uri"],
+          },
+          { type: "object", properties: { type: { type: "string" } }, required: ["type"] },
+        ],
+      },
+    });
+    const makeBlockTool = (name: string) =>
+      tool({
+        description: name,
+        inputSchema: jsonSchema({ type: "object", properties: {} }),
+        outputSchema,
+        execute: async () => [],
+      });
+
+    const { text, aliases } = buildCodeModeToolCatalogMessage({ first: makeBlockTool("first"), second: makeBlockTool("second") });
+    expect(aliases.size).toBe(1);
+    const alias = [...aliases.keys()][0]!;
+    expect(text).toContain(`type ${alias} =`);
+    expect(text.match(new RegExp(`Promise<${alias}>`, "g"))).toHaveLength(2);
+    expect(text.match(/type ToolResult_/g)).toHaveLength(1);
   });
 });
 

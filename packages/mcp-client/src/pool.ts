@@ -65,7 +65,7 @@ export class ProfilePool {
   }
 
   public instructions(): string | undefined {
-    const texts = this.connections.map((connection) => connection.instructions).filter((text): text is string => text !== undefined && text.length > 0);
+    const texts = this.connections.map((connection) => connection.summary).filter((text): text is string => text !== undefined && text.length > 0);
     return texts.length === 0 ? undefined : "## available mcp servers\n" + texts.join("\n\n");
   }
 

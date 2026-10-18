@@ -9,7 +9,7 @@ import { jsonSchema, tool, ResourceError, type JSONSchema7, type ToolResultOutpu
 import type { McpServer } from "./config.js";
 
 export class McpConnection {
-  public instructions?: string;
+  public summary?: string;
 
   public tools: ToolSet = {};
 
@@ -68,7 +68,13 @@ export class McpConnection {
     }
     this.tools = Object.fromEntries(Object.entries(tools).sort(([left], [right]) => left.localeCompare(right)));
     this.logger.debug(`mcp server "${this.name}" exposes ${Object.keys(this.tools).join(", ") || "no tools"}`);
-    if (this.server.instructions) this.instructions = `### ${this.name}\n` + this.client.getInstructions();
+
+    const provided = this.server.instructions ? this.client.getInstructions()?.trim() : undefined;
+    const lines = [`### ${this.name}`];
+    if (provided !== undefined && provided.length > 0) lines.push(provided);
+    const names = Object.keys(this.tools);
+    if (this.server.toolIndex !== false && names.length > 0) lines.push(`Tools: ${names.join(", ")}`);
+    this.summary = lines.length > 1 ? lines.join("\n") : undefined;
   }
 
   private async call(toolName: string, params: unknown): Promise<McpBlock[]> {

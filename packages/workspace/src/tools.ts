@@ -22,30 +22,30 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
     bash: tool({
       description: native
         ? [
-            "在宿主机 shell（" + sandbox.shellPath + "）里执行一条命令。",
-            "这是真实 shell 与真实文件系统：宿主机上的文件与命令都可见，改动直接落盘。",
-            "当前工作目录之外的路径要写全；cd、别名、函数、导出变量都不跨调用保留。",
-            "返回 stdout、stderr 与退出码。退出码非 0 表示命令本身失败，内容仍然有效，先读 stderr 再决定重试。",
+            "Run one command in the host shell (" + sandbox.shellPath + ").",
+            "This is a real shell and a real filesystem: host files and commands are visible, and changes are written to disk.",
+            "Write paths outside the current working directory in full. cd, aliases, functions, and exported variables do not persist between calls.",
+            "Returns stdout, stderr, and an exit code. A non-zero exit code means the command itself failed; its output is still valid, so read stderr before deciding to retry.",
           ].join("\n")
         : [
-            "在沙箱内执行一条 bash 命令。",
-            "沙箱是 JavaScript 解释执行的虚拟环境，不是宿主机 shell：只有挂载点内的文件可见，命令集也不是宿主机那一套。",
-            "当前工作目录之外的路径要写全；cd、别名、函数、导出变量都不跨调用保留。",
-            "返回 stdout、stderr 与退出码。退出码非 0 表示命令本身失败，内容仍然有效，先读 stderr 再决定重试。",
+            "Run a bash command inside the sandbox.",
+            "The sandbox is a JavaScript-interpreted virtual environment, not a host shell: only files under the mounts are visible, and the command set is not the host's.",
+            "Write paths outside the current working directory in full. cd, aliases, functions, and exported variables do not persist between calls.",
+            "Returns stdout, stderr, and an exit code. A non-zero exit code means the command itself failed; its output is still valid, so read stderr before deciding to retry.",
           ].join("\n"),
       inputSchema: jsonSchema<{ command: string }>({
         type: "object",
         properties: {
-          command: { type: "string", description: "要执行的命令；可在同一条里用 && 串联多步" },
+          command: { type: "string", description: "Command to run; chain multiple steps with && on one line." },
         },
         required: ["command"],
       }),
       outputSchema: jsonSchema<ExecResult>({
         type: "object",
         properties: {
-          stdout: { type: "string", description: "标准输出" },
-          stderr: { type: "string", description: "标准错误" },
-          exitCode: { type: "number", description: "命令的退出码，0 表示成功" },
+          stdout: { type: "string", description: "Standard output" },
+          stderr: { type: "string", description: "Standard error" },
+          exitCode: { type: "number", description: "Exit code; 0 means success" },
         },
         required: ["stdout", "stderr", "exitCode"],
       }),
@@ -61,21 +61,21 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
     }),
     read_file: tool({
       description: [
-        native ? "读取宿主机上一个文件的全部内容。" : "读取沙箱内一个文件的全部内容。",
-        "path 可以是绝对路径，也可以是相对当前工作目录的路径。",
-        "不知道文件在哪时先用 bash 的 ls、find、grep 定位。",
+        native ? "Read the entire contents of a file on the host." : "Read the entire contents of a file in the sandbox.",
+        "path may be absolute or relative to the current working directory.",
+        "If you do not know where the file is, locate it first with bash ls, find, or grep.",
       ].join("\n"),
       inputSchema: jsonSchema<PathInput>({
         type: "object",
         properties: {
-          path: { type: "string", description: "文件路径" },
+          path: { type: "string", description: "File path" },
         },
         required: ["path"],
       }),
       outputSchema: jsonSchema<{ content: string }>({
         type: "object",
         properties: {
-          content: { type: "string", description: "文件的全部内容" },
+          content: { type: "string", description: "Full file contents" },
         },
         required: ["content"],
       }),
@@ -84,23 +84,25 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
     }),
     write_file: tool({
       description: [
-        native ? "把内容整体写入宿主机上一个文件，已存在则覆盖，父目录会自动创建。" : "把内容整体写入沙箱内一个文件，已存在则覆盖，父目录会自动创建。",
-        "只改文件里的一小段时用 edit_file，不要整文件重写。",
-        "返回写入后的字节数。",
+        native
+          ? "Write content to a file on the host, replacing it if it exists; parent directories are created automatically."
+          : "Write content to a file in the sandbox, replacing it if it exists; parent directories are created automatically.",
+        "Use edit_file for a small change instead of rewriting the whole file.",
+        "Returns the number of bytes written.",
       ].join("\n"),
       inputSchema: jsonSchema<WriteInput>({
         type: "object",
         properties: {
-          path: { type: "string", description: "文件路径" },
-          content: { type: "string", description: "文件的完整内容" },
+          path: { type: "string", description: "File path" },
+          content: { type: "string", description: "Full file contents" },
         },
         required: ["path", "content"],
       }),
       outputSchema: jsonSchema<{ ok: boolean; bytes: number }>({
         type: "object",
         properties: {
-          ok: { type: "boolean", description: "是否写入成功" },
-          bytes: { type: "number", description: "写入的字节数" },
+          ok: { type: "boolean", description: "Whether the write succeeded" },
+          bytes: { type: "number", description: "Number of bytes written" },
         },
         required: ["ok", "bytes"],
       }),
@@ -111,38 +113,40 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
     }),
     edit_file: tool({
       description: [
-        "在文件里做精确替换，用来改文件的一小段。",
-        "old_string 必须与文件内容逐字符一致，缩进与空白都算；new_string 为空表示删除这段内容。",
-        "默认只替换唯一的一处：出现多次时报错，需要全部替换才把 replace_all 设为 true。",
-        "找不到 old_string、或它出现多次而 replace_all 为 false 时，文件保持原样并报错，重写一段更长的 old_string 再试。",
+        "Make a precise replacement inside a file. Use this for a small edit.",
+        "old_string must match the file exactly, including indentation and whitespace; an empty new_string deletes the matched text.",
+        "By default only a unique match is replaced: multiple matches raise an error. Set replace_all to true to replace every occurrence.",
+        "If old_string is missing or matches more than once while replace_all is false, the file is left unchanged and an error is raised. Retry with a longer old_string.",
       ].join("\n"),
       inputSchema: jsonSchema<EditInput>({
         type: "object",
         properties: {
-          path: { type: "string", description: "文件路径" },
-          old_string: { type: "string", description: "要被替换掉的原文本，必须逐字符一致" },
-          new_string: { type: "string", description: "替换成的文本，空字符串表示删除" },
-          replace_all: { type: "boolean", description: "是否替换全部出现的位置，缺省只替换唯一的一处" },
+          path: { type: "string", description: "File path" },
+          old_string: { type: "string", description: "Exact text to replace, character for character" },
+          new_string: { type: "string", description: "Replacement text; an empty string deletes the match" },
+          replace_all: { type: "boolean", description: "Replace every occurrence instead of requiring a unique match" },
         },
         required: ["path", "old_string", "new_string"],
       }),
       outputSchema: jsonSchema<{ ok: boolean; replacements: number }>({
         type: "object",
         properties: {
-          ok: { type: "boolean", description: "是否替换成功" },
-          replacements: { type: "number", description: "实际替换的处数" },
+          ok: { type: "boolean", description: "Whether the replacement succeeded" },
+          replacements: { type: "number", description: "Number of replacements made" },
         },
         required: ["ok", "replacements"],
       }),
       execute: async (input) => {
         const content = await sandbox.read(input.path);
-        if (input.old_string === input.new_string) throw new Error("old_string 与 new_string 相同，文件未改动");
-        if (input.old_string.length === 0) throw new Error("old_string 不能为空");
+        if (input.old_string === input.new_string) throw new Error("old_string and new_string are identical; the file was not changed");
+        if (input.old_string.length === 0) throw new Error("old_string must not be empty");
         const occurrences = content.split(input.old_string).length - 1;
-        if (occurrences === 0) throw new Error("old_string 未在文件中出现；它必须与文件内容逐字符一致，包含缩进与空白");
+        if (occurrences === 0) throw new Error("old_string was not found in the file; it must match the file exactly, including indentation and whitespace");
         const replaceAll = input.replace_all === true;
         if (!replaceAll && occurrences > 1) {
-          throw new Error(`old_string 在文件中出现 ${occurrences} 次；把 replace_all 设为 true 全部替换，或写一段能唯一定位的 old_string`);
+          throw new Error(
+            `old_string appears ${occurrences} times in the file; set replace_all to true to replace every occurrence, or use a longer old_string that identifies one location`,
+          );
         }
         await sandbox.write(
           input.path,

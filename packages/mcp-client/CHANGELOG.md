@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `toolIndex` per server: connected servers list their exposed tool names in the system prompt, even when the server provides no instructions.
 - MCP server tools integrated into ishiki, with configuration validated by `mcp.schema.json` and an example at `resources/mcp.example.json`.
 - MCP tools and instructions labeled by their server of origin.
 - Truncated tool output spills into artifacts (shared with koishi-plugin-ishiki-workspace).
@@ -21,3 +22,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resource access relies on the resource center's single store with core-owned schemes and query views.
 - Resource handlers receive the complete URL and forward nested resource URIs, queries, and fragments unchanged; remote media is marked live for model-exit snapshotting
 - Tool output schemas describe the native MCP content blocks returned inside codemode; model conversion and resource processing remain outside internal tool calls
+- Server summaries combine declared instructions with the exposed tool-name index

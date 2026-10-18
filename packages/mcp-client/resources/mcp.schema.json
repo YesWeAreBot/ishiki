@@ -51,6 +51,11 @@
           "type": "boolean",
           "default": true,
           "description": "该服务器用 getInstructions() 声明的说明要不要进系统提示词。false 只关说明，工具照给。"
+        },
+        "toolIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否在系统提示词里列出该服务器的工具名。false 只关工具名列表，不影响工具可见性。"
         }
       }
     },
@@ -65,6 +70,7 @@
             "enabled": {},
             "timeout": {},
             "instructions": {},
+            "toolIndex": {},
             "type": { "type": "string", "enum": ["stdio"], "default": "stdio" },
             "command": { "type": "string", "minLength": 1, "description": "要拉起的可执行文件名。" },
             "args": { "type": "array", "items": { "type": "string" }, "description": "传给该进程的命令行参数。" },
@@ -90,6 +96,7 @@
             "enabled": {},
             "timeout": {},
             "instructions": {},
+            "toolIndex": {},
             "type": { "type": "string", "enum": ["http"] },
             "url": { "type": "string", "minLength": 1, "description": "MCP 端点地址。" },
             "headers": {
@@ -113,6 +120,7 @@
             "enabled": {},
             "timeout": {},
             "instructions": {},
+            "toolIndex": {},
             "type": { "type": "string", "enum": ["sse"] },
             "url": { "type": "string", "minLength": 1, "description": "MCP 端点地址。" },
             "headers": {

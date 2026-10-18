@@ -84,12 +84,21 @@ export interface ToolsearchConfig {
   resident: string[];
   /** 单次 search 最多加载的工具数 */
   maxResults: number;
+  /** catalog 更新策略：incremental 只发新增/变更/删除，replace 每次发完整快照 */
+  catalogMode?: "incremental" | "replace";
+  /** incremental 模式下每隔多少次更新补一份完整快照；0 表示不按次数补 */
+  fullSnapshotEvery?: number;
+  /** incremental 模式下是否在更新末尾附带当前完整工具名列表 */
+  knownIndex?: boolean;
 }
 
 export const ToolsearchConfig: Schema<ToolsearchConfig> = Schema.object({
   enable: Schema.boolean().default(false),
   resident: Schema.array(Schema.string()).default([]),
   maxResults: Schema.number().default(5),
+  catalogMode: Schema.union(["incremental", "replace"]).default("incremental"),
+  fullSnapshotEvery: Schema.number().min(0).default(8),
+  knownIndex: Schema.boolean().default(true),
 });
 
 export interface FailoverConfig {

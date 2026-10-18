@@ -62,10 +62,10 @@ export function skillCatalog(skills: readonly Skill[], native: boolean): string 
   if (skills.length === 0) return "";
   const scriptPath = (skill: Skill) => (native ? skill.directory : `${SKILLS_MOUNT}/${skill.name}`);
   return [
-    "## 技能",
+    "## Skills",
     native
-      ? "技能是可复用的做法与脚本，需要时先读它的 SKILL.md 再动手；脚本直接用技能自己的宿主目录路径执行。"
-      : `技能是可复用的做法与脚本，需要时先读它的 SKILL.md 再动手；脚本用沙箱内的 ${SKILLS_MOUNT}/<名字>/... 路径执行。`,
-    ...skills.map((skill) => `- ${skill.name}：${skill.description}（${scriptPath(skill)}）`),
+      ? "Skills are reusable procedures and scripts. Read a skill's SKILL.md before using it; run its scripts with the skill's own host directory path."
+      : `Skills are reusable procedures and scripts. Read a skill's SKILL.md before using it; run its scripts with the sandbox path ${SKILLS_MOUNT}/<name>/...`,
+    ...skills.map((skill) => `- ${skill.name}: ${skill.description} (${scriptPath(skill)})`),
   ].join("\n");
 }

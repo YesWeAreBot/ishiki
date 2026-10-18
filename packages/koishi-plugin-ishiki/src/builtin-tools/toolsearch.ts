@@ -1,11 +1,13 @@
-import { jsonSchema, tool, createCustomMessage, createEntry, type Agent, type Tool, type ToolSet } from "@yesimagent/core";
+import { createHash } from "node:crypto";
+
+import { jsonSchema, tool, createCustomMessage, createEntry, type Agent, type AgentEntry, type Tool, type ToolSet } from "@yesimagent/core";
 
 import type { ToolsearchConfig } from "../profile/index.js";
 import { CODEMODE_TOOL } from "./codemode.js";
 import { FINISH_TOOL } from "./finish.js";
 import { READ_TOOL } from "./read.js";
 import { SEND_MESSAGE_TOOL } from "./send-message.js";
-import { buildCodeModeToolCatalogMessage, renderToolCatalog } from "./vendor/tool-prompt.js";
+import { buildCodeModeToolCatalogMessage, buildDirectToolCatalogMessage, renderToolDeclaration } from "./vendor/tool-prompt.js";
 import { WAIT_TOOL } from "./wait.js";
 
 export const SEARCH_TOOL = "search";
@@ -29,6 +31,14 @@ export namespace SearchTool {
   }
 }
 
+interface CatalogUpdate {
+  text: string;
+  mode: "full" | "incremental";
+  version: number;
+  known: readonly string[];
+  removed: readonly string[];
+}
+
 /**
  * Runtime-scoped progressive disclosure state.
  *
@@ -47,15 +57,31 @@ export class ToolsearchState {
   /** Names routed to code_mode (host tools of the sandbox); empty when codemode is off. */
   private codemodeHosts = new Set<string>();
   private agent: Agent | undefined;
-  /** Sorted visible names at the last catalog emission; undefined until the first one. */
+  /** Sorted visible names plus declaration hashes at the last catalog emission. */
   private lastEmittedKey: string | undefined;
   /** Whether the baseline catalog has been persisted for this runtime. */
   private baselineEmitted = false;
+  /** Per-tool declaration hashes at the last emission. */
+  private emitted = new Map<string, string>();
+  /** Catalog versions that are still required for the current visible set. */
+  private emittedVersions = new Set<number>();
+  /** Output-type aliases defined in earlier catalog messages. */
+  private emittedAliases = new Map<string, string>();
+  private catalogVersion = 0;
+  private updatesSinceFull = 0;
+  private forceFullSnapshot = false;
+  private readonly catalogMode: "incremental" | "replace";
+  private readonly fullSnapshotEvery: number;
+  private readonly knownIndex: boolean;
 
   /** Set by the runtime: controls the catalog's rendering shape. */
   codemodeEnabled = false;
 
-  constructor(private readonly config: ToolsearchConfig) {}
+  constructor(private readonly config: ToolsearchConfig) {
+    this.catalogMode = config.catalogMode ?? "incremental";
+    this.fullSnapshotEvery = config.fullSnapshotEvery ?? 8;
+    this.knownIndex = config.knownIndex ?? true;
+  }
 
   bind(agent: Agent): void {
     this.agent = agent;
@@ -137,53 +163,184 @@ export class ToolsearchState {
   async ensureBaselineCatalog(): Promise<void> {
     if (this.baselineEmitted || this.agent === undefined) return;
     this.baselineEmitted = true;
-    const text = this.renderCatalogText();
-    const message = createCustomMessage("ishiki.tools.catalog", { text, tools: [...this.visibleTools()] });
+    const update = this.buildUpdate(true);
+    if (update === undefined) return;
+    const message = createCustomMessage("ishiki.tools.catalog", {
+      text: update.text,
+      tools: [...this.visibleTools()],
+      mode: update.mode,
+      version: update.version,
+      known: update.known,
+      removed: update.removed,
+    });
     await this.agent.storage.append(createEntry("message", message));
-    this.lastEmittedKey = [...this.visibleTools()].sort().join("\n");
+    this.lastEmittedKey = this.catalogKey();
   }
 
   /**
-   * Persist a full-replay catalog message when the visible set changed since
-   * the last emission. Called at the step boundary (after the step's messages
-   * are persisted), so parallel searches within one step coalesce into a
-   * single catalog, and a search without new hits emits nothing.
+   * Emit a catalog update when the visible set or a declaration changed.
+   * Called at the step boundary after the step's messages are persisted, so
+   * parallel searches within one step coalesce into one update.
    */
   flushCatalog(): void {
     const agent = this.agent;
-    if (agent === undefined) return;
-    const key = [...this.visibleTools()].sort().join("\n");
-    if (key === this.lastEmittedKey) return;
+    if (agent === undefined || !this.config.enable) return;
+    const key = this.catalogKey();
+    if (key === this.lastEmittedKey && !this.forceFullSnapshot) return;
+    const update = this.buildUpdate(false);
+    if (update === undefined) return;
     this.lastEmittedKey = key;
-    const text = this.renderCatalogText();
-    agent.send(createCustomMessage("ishiki.tools.catalog", { text, tools: [...this.visibleTools()] }), { trigger: false, ifBusy: "join" });
+    agent.send(
+      createCustomMessage("ishiki.tools.catalog", {
+        text: update.text,
+        tools: [...this.visibleTools()],
+        mode: update.mode,
+        version: update.version,
+        known: update.known,
+        removed: update.removed,
+      }),
+      { trigger: false, ifBusy: "join" },
+    );
   }
 
-  private renderCatalogText(): string {
-    if (this.codemodeEnabled) {
-      // Mirror the SDK's conversation-mode catalog: the sandbox's host-tool set,
-      // rendered with the vendored code-mode renderer (type block + call examples).
-      const hostTools: Record<string, Tool> = {};
-      for (const name of this.visibleTools()) {
-        if (!this.codemodeHosts.has(name)) continue;
-        hostTools[name] = this.allTools.get(name)!;
-      }
-      return buildCodeModeToolCatalogMessage(hostTools);
+  /** Keep only the latest catalog message in replace mode; incremental mode keeps the full log. */
+  filterEntries(entries: readonly AgentEntry[]): readonly AgentEntry[] {
+    if (this.catalogMode !== "replace") return entries;
+    let latest = -1;
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index]!;
+      if (entry.type !== "message") continue;
+      const message = entry.data;
+      if (message.role === "custom" && message.type === "ishiki.tools.catalog") latest = index;
     }
-    // Direct-calling mode: type block only — the model emits tool-call JSON,
-    // not JS, so `tools.x()` examples would mislead.
-    const visible: Record<string, Tool> = {};
-    for (const name of this.visibleTools()) visible[name] = this.allTools.get(name)!;
-    const typeBlock = renderToolCatalog(visible);
-    return [
-      "Tool catalog update.",
-      "",
-      "This catalog replaces all previous tool catalogs. Only the tools listed below are currently available for direct tool calls.",
-      "",
-      "Tools:",
-      typeBlock,
-    ].join("\n");
+    if (latest < 0) return entries;
+    return entries.filter((entry, index) => {
+      if (index === latest || entry.type !== "message") return true;
+      const message = entry.data;
+      return message.role !== "custom" || message.type !== "ishiki.tools.catalog";
+    });
   }
+
+  /**
+   * Detect context compaction or window truncation that removed a catalog
+   * message still needed by the current visible set. The next flush then
+   * emits a full snapshot to restore the declarations.
+   */
+  observeEntries(entries: readonly AgentEntry[]): void {
+    if (this.catalogVersion === 0) return;
+    const versions = new Set<number>();
+    for (const entry of entries) {
+      if (entry.type !== "message") continue;
+      const message = entry.data;
+      if (message.role !== "custom" || message.type !== "ishiki.tools.catalog") continue;
+      const version = message.data.version;
+      if (typeof version === "number") versions.add(version);
+    }
+
+    if (this.catalogMode === "replace") {
+      if (!versions.has(this.catalogVersion)) this.forceFullSnapshot = true;
+      return;
+    }
+
+    for (const version of this.emittedVersions) {
+      if (!versions.has(version)) {
+        this.forceFullSnapshot = true;
+        return;
+      }
+    }
+  }
+
+  /** Build and consume a full-snapshot repair entry after catalog loss. */
+  repairCatalog(): AgentEntry | undefined {
+    if (!this.forceFullSnapshot) return undefined;
+    const update = this.buildUpdate(true);
+    if (update === undefined) return undefined;
+    this.lastEmittedKey = this.catalogKey();
+    return createEntry(
+      "message",
+      createCustomMessage("ishiki.tools.catalog", {
+        text: update.text,
+        tools: [...this.visibleTools()],
+        mode: update.mode,
+        version: update.version,
+        known: update.known,
+        removed: update.removed,
+      }),
+    );
+  }
+
+  private renderableTools(): Record<string, Tool> {
+    const tools: Record<string, Tool> = {};
+    for (const name of this.visibleTools()) {
+      if (this.codemodeEnabled && !this.codemodeHosts.has(name)) continue;
+      const tool = this.allTools.get(name);
+      if (tool !== undefined) tools[name] = tool;
+    }
+    return tools;
+  }
+
+  private catalogKey(): string {
+    const tools = this.renderableTools();
+    return Object.entries(tools)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, tool]) => `${name}:${declarationHash(name, tool)}`)
+      .join("\n");
+  }
+
+  private buildUpdate(forceFull: boolean): CatalogUpdate | undefined {
+    const tools = this.renderableTools();
+    const names = Object.keys(tools).sort((left, right) => left.localeCompare(right));
+    const hashes = new Map(names.map((name) => [name, declarationHash(name, tools[name]!)]));
+    const full =
+      forceFull ||
+      this.forceFullSnapshot ||
+      this.catalogMode === "replace" ||
+      this.catalogVersion === 0 ||
+      (this.fullSnapshotEvery > 0 && this.updatesSinceFull >= this.fullSnapshotEvery);
+
+    if (full) {
+      this.catalogVersion += 1;
+      const result = this.codemodeEnabled
+        ? buildCodeModeToolCatalogMessage(tools, { mode: "full", version: this.catalogVersion, known: names, knownIndex: this.knownIndex })
+        : buildDirectToolCatalogMessage(tools, { mode: "full", version: this.catalogVersion, known: names, knownIndex: this.knownIndex });
+      this.emitted = hashes;
+      this.emittedVersions = new Set([this.catalogVersion]);
+      this.emittedAliases = new Map(result.aliases);
+      this.updatesSinceFull = 0;
+      this.forceFullSnapshot = false;
+      return { text: result.text, mode: "full", version: this.catalogVersion, known: names, removed: [] };
+    }
+
+    const removed = [...this.emitted.keys()].filter((name) => !hashes.has(name)).sort((left, right) => left.localeCompare(right));
+    const changed = names.filter((name) => this.emitted.get(name) !== hashes.get(name));
+    if (changed.length === 0 && removed.length === 0) return undefined;
+
+    this.catalogVersion += 1;
+    const subset: Record<string, Tool> = {};
+    for (const name of changed) subset[name] = tools[name]!;
+    const options = {
+      mode: "incremental" as const,
+      version: this.catalogVersion,
+      known: names,
+      removed,
+      knownIndex: this.knownIndex,
+      knownAliases: new Set(this.emittedAliases.keys()),
+    };
+    const result = this.codemodeEnabled ? buildCodeModeToolCatalogMessage(subset, options) : buildDirectToolCatalogMessage(subset, options);
+
+    for (const name of removed) this.emitted.delete(name);
+    for (const name of changed) this.emitted.set(name, hashes.get(name)!);
+    this.emittedVersions.add(this.catalogVersion);
+    for (const [alias, type] of result.aliases) this.emittedAliases.set(alias, type);
+    this.updatesSinceFull += 1;
+    return { text: result.text, mode: "incremental", version: this.catalogVersion, known: names, removed };
+  }
+}
+
+function declarationHash(name: string, tool: Tool): string {
+  return createHash("sha1")
+    .update(renderToolDeclaration([name, tool]).join("\n"))
+    .digest("hex");
 }
 
 /** Tokenizer mirroring the AI SDK's toolSearch matching: camelCase split, lowercase, unicode words. */
@@ -207,7 +364,7 @@ function toMatchHint(description: string | undefined): string | undefined {
 export function createSearchTool(state: ToolsearchState): Tool<SearchTool.Input, SearchTool.Output> {
   return tool({
     description:
-      "Search deferred tools by name or description keyword. Matched tools become callable on the next step. Use this first when the tools you need are not in the latest tool catalog.",
+      "Search deferred tools by name or description keyword. Matched tools become callable on the next step. Use this first when the tools you need are not in the current tool catalog (the union of capability updates).",
     inputSchema: jsonSchema<SearchTool.Input>({
       type: "object",
       properties: {

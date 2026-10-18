@@ -4,6 +4,7 @@ const ServerBase = Schema.object({
   enabled: Schema.boolean().default(true),
   timeout: Schema.number(),
   instructions: Schema.boolean().default(true),
+  toolIndex: Schema.boolean().default(true),
 });
 
 export interface McpStdioServer {
@@ -15,6 +16,7 @@ export interface McpStdioServer {
   enabled: boolean;
   timeout?: number;
   instructions: boolean;
+  toolIndex?: boolean;
 }
 
 export interface McpHttpServer {
@@ -24,6 +26,7 @@ export interface McpHttpServer {
   enabled: boolean;
   timeout?: number;
   instructions: boolean;
+  toolIndex?: boolean;
 }
 
 export interface McpSseServer {
@@ -33,6 +36,7 @@ export interface McpSseServer {
   enabled: boolean;
   timeout?: number;
   instructions: boolean;
+  toolIndex?: boolean;
 }
 
 export type McpServer = McpStdioServer | McpHttpServer | McpSseServer;

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native shell backend for the sandbox.
 
 ### Changed
+- Workspace prompt, skills wrapper, and tool descriptions are English, improving tool-search tokenization and matching.
 - `workspace:///<absolute path>` reads the shell's actual filesystem, including virtual, persistent, and mounted files; native paths use the native shell's host view.
 - Skill and workspace schemes share `FileScheme` for binary reads, metadata, ranges, and lossless continuation instead of separate text-only readers.
 - Skill reads check resolved symlink targets against their skill root.
@@ -24,3 +25,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `workspace:///<absolute path>` reads the shell's actual filesystem, including virtual, persistent, and mounted files; native paths use the native shell's host view
 - Skill and workspace schemes share `FileScheme` for binary reads, metadata, ranges, and lossless continuation instead of separate text-only readers
 - Skill reads check resolved symlink targets against their skill root
+- Sandbox prompts describe workspace read URLs and the WebAssembly python runtime when available

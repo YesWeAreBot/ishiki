@@ -15,7 +15,8 @@
         "Authorization": "Bearer <token>"
       },
       "timeout": 30000,
-      "instructions": true
+      "instructions": true,
+      "toolIndex": true
     },
 
     "legacy": {

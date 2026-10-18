@@ -64,4 +64,37 @@ describe("MCP tools", () => {
       await connection.close();
     }
   });
+
+  it("falls back to the tool index when a server has no instructions", async () => {
+    const connection = await McpConnection.connect("t", { type: "http", url: fixture.url, headers: {}, enabled: true, instructions: true }, silent);
+    try {
+      expect(connection.summary).toBe("### t\nTools: t_look");
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps the tool index independent from server instructions", async () => {
+    const withIndex = await McpConnection.connect(
+      "t",
+      { type: "http", url: fixture.url, headers: {}, enabled: true, instructions: false, toolIndex: true },
+      silent,
+    );
+    try {
+      expect(withIndex.summary).toBe("### t\nTools: t_look");
+    } finally {
+      await withIndex.close();
+    }
+
+    const withoutIndex = await McpConnection.connect(
+      "t",
+      { type: "http", url: fixture.url, headers: {}, enabled: true, instructions: true, toolIndex: false },
+      silent,
+    );
+    try {
+      expect(withoutIndex.summary).toBeUndefined();
+    } finally {
+      await withoutIndex.close();
+    }
+  });
 });
