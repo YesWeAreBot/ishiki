@@ -1,7 +1,7 @@
 import { Schema } from "koishi";
 
-import { AttachmentConfig } from "../attachment/config.js";
 import { ContextEngines } from "../context/index.js";
+import { AttachmentConfig } from "../resources/config.js";
 import { ToolcallEngines } from "../toolcall/index.js";
 import { WakeupEngines } from "../wakeup/index.js";
 

@@ -70,6 +70,10 @@ extends:
 
 规则：target 必须是绝对路径、不能互相嵌套、不能落在 `/home` 之下；可写挂载的 source 目录不存在时会自动创建，只读挂载则直接报错。
 
+`read` 通过 `workspace:///绝对虚拟路径` 访问同一个沙箱文件系统。例如 `workspace:///home/workspace/report.txt` 读取持久文件，`workspace:///tmp/result.txt` 读取沙箱临时文件，`workspace:///data/input.csv` 读取上面的挂载文件。目录、二进制媒体和行选择共用 FileScheme。
+
+资源中心中的 `asset` 与 `artifact` 也可通过 `/home/.ishiki` 在沙箱里读取；URL 与挂载路径取得相同字节。native 后端没有虚拟根，workspace URL 指向实际宿主路径，沿用 native 的权限范围。
+
 ## 加法：JavaScript 与 Python
 
 sandbox 默认只有 bash。开启后 bot 能在沙箱里跑 JS/TS（QuickJS）或 Python（wasm 编译的 CPython），只能访问沙箱内的文件：

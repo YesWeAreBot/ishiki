@@ -46,19 +46,27 @@ description: 内置工具的输入输出与资源 URL 的完整语法
 
 ### read
 
-读取资源。输入 `{ url }`：
+读取资源，输入 `{ url }`。文件型 URL 支持行范围和元数据视图：
 
 ```text
-read({ url: "artifact://codemode/abc123.bin:1-200" })   # 行选择器取 1–200 行
-read({ url: "asset://<32位十六进制>" })                  # 平台媒体
-read({ url: "local://notes.txt?view=meta" })             # 只看元数据不取字节
+read({ url: "artifact://codemode/abc123.bin:1-200" })
+read({ url: "asset://<32位十六进制>" })
+read({ url: "workspace:///home/workspace/report.txt" })
+read({ url: "local://notes.txt?view=meta" })
 ```
 
-- 行选择器 `:start-end` 或 `:start+count` 贴在 URL 后。
-- 文本资源返回该范围的全文；二进制返回 `{ type: "file", url, mediaType, data(base64), byteLength, filename? }`。
-- `?view=meta` 只返回元数据。
-- 直接调用的展示上限见下文「文本预算」；截断时结果尾部的 Continue 锚点给出续读起点（按锚点里的 URL 再 read 即可续读）。
-- codemode 内 read 始终返回完整 JSON 安全值（二进制即 base64 节点），可把文件节点原样传给其他工具或放进 `attachment` 数组。
+原始返回值是可序列化的判别联合：
+
+| type | 内容 |
+| --- | --- |
+| `text` | `{ type, url, text, size, mediaType?, filename?, source? }`；`text` 包含请求范围内的完整内容 |
+| `file` | `{ type, url, mediaType, data, byteLength, filename?, immutable }`；`data` 是 base64 媒体数据 |
+
+- FileScheme 的行选择器为 `:N`、`:start-end` 或 `:start+count`，位于 query 之前。`?view=meta` 读取元数据，惰性 asset 不因此下载。
+- FileScheme 文本的 `source` 包含 `{ url, offset, line, column }`，记录来源与位置；正文不混入展示尾注。
+- codemode 内取得完整结果，不受模型展示预算截断；仍受 SDK 的传输、结果大小和执行限制约束。
+- 传给其他工具时按其输入契约取 `result.text` 或 `result.data`；只有明确支持该 scheme 的工具才能直接接收资源 URL。最终的 `attachments` 可携带媒体节点。
+- 模型可见的文件页使用原来源续读；普通 handler 返回的超长内容先固化为 artifact。按结果里的完整 Continue URL 再 read，即可继续读取，包括超长单行的剩余部分。其他 scheme 自行解释完整 URL，不继承文件语法。
 
 ### wait
 
@@ -85,7 +93,7 @@ read({ url: "local://notes.txt?view=meta" })             # 只看元数据不取
 
 - 程序内 `await tools.name(input)` / `await tools["server_tool"](input)` 返回工具的原始 JSON 安全值；中间数据不出上下文。
 - `direct` 名单内的工具只留模型目录（程序够不着），未列出的收进沙箱（目录里消失）；`send_message` 两处都可达，`finish`、`wait` 只留目录。
-- 传媒体出沙箱的唯一方式：返回值顶层带 `attachment` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。
+- 传媒体出沙箱的唯一方式：返回值顶层带 `attachments` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。
 - 每次调用是一个独立程序；需要分步传递的数据放进返回值，下一步以观察形式看到。
 
 ### search（toolsearch 开启时）
@@ -103,35 +111,27 @@ read({ url: "local://notes.txt?view=meta" })             # 只看元数据不取
 | `asset` | `asset://<32位十六进制>` | 平台媒体，惰性拉取：首次访问才下载并落盘 |
 | `artifact` | `artifact://<tool>/<name>` | 工具输出归档；沙箱内对应 `/home/.ishiki/artifacts/<tool>/<name>` |
 | `local` | `local://<相对路径>` | 实例目录（runtime home）内的文件；不可越出实例目录 |
-| `skill` | `skill://<技能名>/<路径>` | workspace 扩展注册；路径缺省为 `SKILL.md`；限 1 MiB 文本 |
-| `workspace` | `workspace://<路径>` | workspace 扩展注册；实例工作目录；目录路径返回条目列表 |
-| `mcp` | `mcp://<服务器>/<资源URI>` | mcp-client 扩展注册；URI 部分原样透传，不解析选择器 |
+| `skill` | `skill://<技能名>/<路径>` | workspace 扩展注册；路径缺省为 `SKILL.md`；共用 FileScheme |
+| `workspace` | `workspace:///绝对路径` | workspace 扩展注册；sandbox 下读取实际虚拟文件系统，含持久文件、临时文件与挂载点 |
+| `mcp` | `mcp://<服务器>/<资源URI>` | mcp-client 扩展注册；内部 URI 连同 query、冒号与 fragment 原样透传 |
 
-保留方案 `asset` / `artifact` / `local` 由资源中心内置，扩展不能占用这三个名字。选择器与 `?view=meta` 适用于前三者；`skill`/`workspace` 支持行选择器；`mcp` 是不透明协议，一律不支持。
+`asset` / `artifact` / `local` 是内置保留方案。FileScheme 自行解析行选择器、`?view=meta` 与续读 offset；资源中心只按 scheme 路由完整 URL。文件名中的字面冒号使用 `%3A`。native 后端的 workspace URL 使用实际宿主路径；Windows 可写为 `workspace:///d/work/report.txt`，盘符段的字面冒号也需编码为 `%3A`。
+
+普通 URL 可以表示当前资源；`artifact` 表示已固化内容快照。原来源续读不承诺跨次读取一致性。
 
 ## 文本预算
 
-所有「模型可见的文本结果」共用一份预算（`read` 与统一输出包装器同源）：
+模型可见的文本共用 **2000 行 / 30,000 个 UTF-16 code unit** 的预算，正文与所有续读说明一起计入。截断不拆开 Unicode 代理对，不丢弃单行余文。
 
-<TypeTable
-  type={{
-    maxLines: {
-      type: '2000 行',
-      description: '最大行数',
-    },
-    maxLineLength: {
-      type: '2000 字符',
-      description: '单行最大字符',
-    },
-    maxTotalChars: {
-      type: '30,000',
-      description: '总字符（UTF-16）',
-    },
-  }}
-/>
+Continue URL 中的 `offset` 是请求范围内已消费的 UTF-16 code unit 数；URL 保留原来的行范围和 view。应使用完整锚点，而不是自行递增行号。读到范围末尾后不再生成 Continue。
 
-超长时保留完整行并附 Continue 锚点；被截掉的单行余文只能在 codemode 或沙箱内继续读。不带行选择器的整读另有 8 MiB 的硬读取上限。
+read 返回请求范围内的完整内容，传输与执行仍受现有 SDK 限制约束。
 
 ## 工具结果的统一出口
 
-每个工具结果在给模型前经过统一处理：文本按预算截断；媒体字节归档为 `artifact` 并替换为占位标记 `[attachment: <url>; <mediaType>; …]`；codemode 返回值顶层 `attachment` 数组里的块作为附件消息在下一步投给模型。工具自己声明的展示转换（如 `bash` 的 stdout/stderr 拼排）优先于默认渲染。
+工具原生 `toModelOutput` 先转换结果，再由统一资源出口处理：
+
+- 普通超长内容：完整表示归档为 `artifact`，模型看到前缀与续读 URL。归档包含媒体替换后的完整展示内容，不另外保存 execute 原始对象。
+- FileScheme 文本：使用已有来源分页，不把读取页面重新归档。
+- 媒体：固化新数据或复用已固化引用，替换为 `[attachment: <url>; <mediaType>; …]`，另写附件消息，下一 step 按能力与配额投影。实时文件引用作为历史附件时保存快照。
+- codemode 内部工具：不执行这条模型出口链路；只有最终返回值进入处理，显式媒体字段为 `attachments`。

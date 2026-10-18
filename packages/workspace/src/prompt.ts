@@ -17,6 +17,7 @@ function nativeInstructions(sandbox: WorkspaceShell): string {
     "调用之间不保留 shell 状态：cd、别名、函数与导出变量都不跨调用，切换目录写在同一行（cd <目录> && <命令>）",
     // 平台媒体与长输出不落宿主文件系统，bash 读不到，只能走运行时的资源 URL。
     "平台收到的媒体与工具长输出经运行时 read 工具的 asset:// 与 artifact:// URL 访问，bash 读不到它们",
+    "读已知文件也可以走 read 的 workspace:// URL：workspace:///<宿主绝对路径>（Windows 盘符写成 /d/... 风格，如 workspace:///d/work/a.txt），读到的是宿主上的同一份文件",
     "读已知文件用 read_file，整体写入用 write_file，局部修改用 edit_file，列目录、搜索与管道用 bash",
   ].join("\n");
 }
@@ -44,6 +45,7 @@ function sandboxInstructions(sandbox: WorkspaceShell): string {
     // 附加运行时默认关，没配就没有这条命令，说清楚免得模型白试一轮。
     ...(sandbox.javascript ? ["js-exec 可用：在 QuickJS 里执行 JavaScript / TypeScript，可 require / import 一部分 node 模块，只访问得到沙箱内的文件"] : []),
     ...(sandbox.python ? ["python3 与 python 可用：CPython 编译成 WebAssembly，标准库齐全，首次调用要等它装载；读写的就是这个沙箱里的文件"] : []),
+    "读已知文件也可以走 read 的 workspace:///<沙箱路径>（如 workspace:///home/workspace/a.txt）：虚拟文件、持久目录与挂载点读到的都是沙箱里的同一份文件",
     "读已知文件用 read_file，整体写入用 write_file，局部修改用 edit_file，列目录、搜索与管道用 bash",
   ].join("\n");
 }

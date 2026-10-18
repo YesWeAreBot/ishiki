@@ -66,7 +66,7 @@ async function resolveElement(element: h, resources: ResourceCenter, dropped: st
 async function readForSend(src: string, resources: ResourceCenter, dropped: string[]): Promise<{ bytes: Uint8Array; mediaType: string } | undefined> {
   try {
     const payload = await resources.resolve(src);
-    if (payload.bytes === undefined) {
+    if (payload.type !== "file") {
       dropped.push(`${src}: 不是可发送的媒体`);
       return undefined;
     }

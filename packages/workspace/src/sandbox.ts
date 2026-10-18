@@ -47,6 +47,7 @@ export async function createSandbox(layout: WorkspaceLayout, options: ShellOptio
 
   return {
     ...layout,
+    fs,
     async exec(command, signal) {
       const timeout = AbortSignal.timeout(layout.timeoutMs);
       try {

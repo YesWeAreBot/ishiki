@@ -6,7 +6,6 @@ import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gat
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
 
-import { supportsImageInput } from "./attachment/capabilities.js";
 import { loadCodemode } from "./builtin-tools/codemode.js";
 import { createFinish } from "./builtin-tools/finish.js";
 import { createReadTool } from "./builtin-tools/read.js";
@@ -16,6 +15,7 @@ import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
+import { supportsImageInput } from "./resources/capabilities.js";
 import { ResourceCenter } from "./resources/center.js";
 import { AgentRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
@@ -310,16 +310,16 @@ From now on, you are going to act as your persona.
 
 Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the current catalog's return type to access fields, and pass raw values between tools freely; nothing is archived, truncated, or attached inside codemode. Each codemode call starts a new program; return any data needed by your next step.
 
-Your codemode return is what you will see next step. To carry media out, include an optional top-level \`attachment\` field holding a plain array of media blocks — nothing else is scanned for media:
+Your codemode return is what you will see next step. To carry media out, include an optional top-level \`attachments\` field holding a plain array of media blocks — nothing else is scanned for media:
 - an MCP image/audio block: {type: "image", mimeType: "image/png", data: "<base64>"}
-- a read file result, as returned: {type: "file", url, mediaType, data, byteLength, filename?}
+- a read file result, as returned: {type: "file", url, mediaType, data, byteLength, immutable, filename?}
 - an embedded MCP resource: {type: "resource", resource: {uri, mimeType, blob}}
 
-The runtime stores each block's bytes, replaces the payload with an artifact:// URL, and supplies the media as an attachment on the next step. Everything outside the attachment array stays plain JSON, subject to the same text budget.
+The runtime stores new media bytes or reuses a verified immutable resource, replaces the payload with its resource URL, and supplies the media as an attachment on the next step. Everything outside the attachments array stays plain JSON, subject to the same text budget.
 
 \`\`\`js
 const shot = await tools["windows-mcp-Screenshot"]({use_annotation: false});
-return { text: shot[0].text, attachment: [shot[1]] }; // keep the text and carry the image out
+return { text: shot[0].text, attachments: [shot[1]] }; // keep the text and carry the image out
 \`\`\`
 
 After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Inspect that image before taking another screenshot. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not carry media out.
@@ -336,14 +336,14 @@ Image input is disabled. You receive attachment references and descriptions, not
 - artifact://<tool>/<name>: full tool output or media; sandbox files are /home/.ishiki/artifacts/<tool>/<name>.
 - local://<path>: files under the runtime home. Extension schemes may also be available.
 
-read({url}) returns the full content of the requested line range as plain text, or {type:'file', url, mediaType, data(base64), byteLength, filename?} for binary files. :1-200 or :50+30 selects lines; whole reads are size-capped. ?view=meta probes metadata without fetching.
+read({url}) returns {type:'text', text, url, size, source?} with the full requested text, or {type:'file', url, mediaType, data(base64), byteLength, immutable, filename?} for media. In codemode, pass result.text or result.data to another tool according to its input schema. A resource URL is an address, not media bytes: read it first unless the receiving tool explicitly supports that resource scheme. File schemes support :1-200 / :50+30 and ?view=meta; other schemes interpret their own URL syntax. workspace:///home/workspace/file names a sandbox path, including virtual and mounted files.
 
 \`\`\`js
 const image = await tools.read({url: "asset://<id>"});
-return { attachment: [image] }; // carry the media to the next step
+return { attachments: [image] }; // carry the media to the next step
 \`\`\`
 
-Direct results show at most 2000 lines / 30000 characters with a Continue anchor; follow the exact read({url: "..."}) anchor shown in the preview to resume from that line. A single line longer than the budget is cut and its remainder is only reachable inside codemode or the sandbox.
+Model-visible results share a 2000-line / 30000-character budget, including continuation instructions. Follow the exact Continue URL; it preserves the requested range and can resume inside a long line. Ordinary oversized results are saved once as artifact snapshots; existing file pages continue at their source without another archive. Live source URLs may change between reads; artifact URLs identify saved content.
 
 To send an existing image to the user, call send_message with mode:"element" and messages:['<img src="artifact://<tool>/<name>"/>']; asset:// URLs also work. Use the actual resource URL from the result. A screenshot or attachment return only makes it available to you; send_message is what sends it to the user.
 

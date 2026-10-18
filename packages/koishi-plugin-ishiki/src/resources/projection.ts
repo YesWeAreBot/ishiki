@@ -1,9 +1,12 @@
 import { createUserMessage, type AgentMessage, type UserContent } from "@yesimagent/core";
 
-import type { ResourceCenter } from "../resources/center.js";
-import { imageSize } from "../resources/media.js";
 import type { AttachmentItem, IshikiAttachment } from "../types.js";
+import type { ResourceCenter } from "./center.js";
 import type { AttachmentConfig } from "./config.js";
+import { imageSize } from "./media.js";
+
+/** Image encodings a provider accepts as inline bytes. */
+const INLINE_IMAGE_TYPES: Record<string, true> = { "image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true };
 
 function platformKey(data: { platform: string; selfId: string; channelId: string; messageId: string }): string {
   return JSON.stringify([data.platform, data.selfId, data.channelId, data.messageId]);
@@ -98,8 +101,8 @@ export async function projectAttachments(messages: readonly AgentMessage[], cent
       const payload = await center.resolve(item.url);
       decision.size = payload.size;
       const mediaType = payload.mediaType ?? item.mediaType;
-      const dimensions = payload.bytes ? imageSize(payload.bytes) : {};
-      if (!payload.bytes || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(mediaType)) {
+      const dimensions = payload.type === "file" ? imageSize(payload.bytes) : {};
+      if (payload.type !== "file" || INLINE_IMAGE_TYPES[mediaType] !== true) {
         decision.reason = "describe: unsupported image encoding";
       } else if (payload.size > maxImageBytes) {
         decision.reason = "describe: single image byte limit";

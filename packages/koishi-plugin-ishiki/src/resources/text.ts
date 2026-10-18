@@ -1,146 +1,124 @@
-import { createReadStream } from "node:fs";
-
 import { ResourceError } from "./errors.js";
 
-/**
- * One text budget shared by every model-visible surface: the read tool's own
- * conversion and the unified tool-output wrapper. Because read converts
- * through the same budget, a converted read result always fits and the
- * wrapper never truncates (and archives) it a second time.
- */
-export const TEXT_BUDGET = { maxLines: 2000, maxLineChars: 2000, maxChars: 30_000 } as const;
+export const TEXT_BUDGET = { maxLines: 2000, maxChars: 30_000 } as const;
 
-/**
- * The read tool reserves this much of the shared budget for its truncation
- * footer (3 lines, ~250 chars), so a converted read page always fits and the
- * wrapper never truncates (and archives) it a second time.
- */
-const READ_FOOTER = { lines: 4, chars: 512 };
-
-/** Whole reads without a line selector stop beyond this many characters; narrower selectors may read further. */
-export const MAX_TEXT_CHARS = 8 * 1024 * 1024;
-
-export interface Truncation {
-  visible: string;
-  /** 1-based line number of the first shown line in the source's line numbering. */
-  startLine: number;
-  /** 1-based line number of the last shown line. */
-  endLine: number;
-  /** Where a continuation should start; absent when nothing was cut. */
-  nextLine?: number;
-  /** The last shown line was cut mid-line at the character budget. */
-  partialLine?: boolean;
+/** Position within the original selected representation, not within a displayed page. */
+export interface FileTextSource {
+  url: string;
+  offset: number;
+  line: number;
+  column: number;
 }
 
-/**
- * Cut `text` down to the budget. Returns undefined when everything fits.
- *
- * Lines are kept whole so the `:N+M` line-selector grammar can resume exactly
- * at `nextLine`. A single line longer than the whole budget is the one
- * exception: it is cut mid-line, and the remainder of that line is not
- * reachable through read's line selectors — read the resource inside codemode
- * or through the sandbox for full access. This is an accepted limitation.
- */
-export function truncate(text: string, options: { startLine?: number; maxChars?: number; maxLines?: number } = {}): Truncation | undefined {
-  const startLine = options.startLine ?? 1;
-  const maxChars = options.maxChars ?? TEXT_BUDGET.maxChars;
-  const maxLines = options.maxLines ?? TEXT_BUDGET.maxLines;
-  const lines = text.split("\n");
-  const taken: string[] = [];
-  let total = 0; // length of taken.join("\n")
-  let partialLine = false;
-  while (taken.length < lines.length && taken.length < maxLines) {
-    // A line past the per-line cap is cut here. Its tail is not addressable by
-    // the `:N+M` selectors — an accepted limitation, since reaching it would
-    // need an intra-line offset and that is pagination again. Read the
-    // resource inside codemode or the sandbox for the whole line.
-    const source = lines[taken.length]!;
-    const line = source.length > TEXT_BUDGET.maxLineChars ? source.slice(0, TEXT_BUDGET.maxLineChars) : source;
-    const lineCut = line.length < source.length;
-    const separator = taken.length > 0 ? 1 : 0;
-    if (total + separator + line.length > maxChars) {
-      const room = maxChars - total - separator;
-      if (room > 0) {
-        taken.push(line.slice(0, room));
-        partialLine = true;
-      }
-      break;
-    }
-    taken.push(line);
-    total += separator + line.length;
-    if (lineCut) {
-      partialLine = true;
+export function textFits(text: string): boolean {
+  if (text.length > TEXT_BUDGET.maxChars) return false;
+  let lines = 1;
+  for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) {
+    if (++lines > TEXT_BUDGET.maxLines) return false;
+  }
+  return true;
+}
+
+function prefixEnd(text: string, chars: number, lines: number): number {
+  if (chars <= 0 || lines <= 0) return 0;
+  let end = Math.min(text.length, chars);
+  let count = 1;
+  for (let at = text.indexOf("\n"); at !== -1 && at < end; at = text.indexOf("\n", at + 1)) {
+    if (++count > lines) {
+      end = at;
       break;
     }
   }
-  const shown = taken.length;
-  if (shown === 0) {
-    return { visible: "", startLine, endLine: startLine - 1, nextLine: startLine, partialLine: true };
-  }
-  const endLine = startLine + shown - 1;
-  if (shown >= lines.length && !partialLine) return undefined;
-  return {
-    visible: taken.join("\n"),
-    startLine,
-    endLine,
-    nextLine: endLine + 1,
-    ...(partialLine ? { partialLine: true } : {}),
-  };
+  if (
+    end > 0 &&
+    end < text.length &&
+    text.charCodeAt(end - 1) >= 0xd800 &&
+    text.charCodeAt(end - 1) <= 0xdbff &&
+    text.charCodeAt(end) >= 0xdc00 &&
+    text.charCodeAt(end) <= 0xdfff
+  )
+    end -= 1;
+  return end;
 }
 
-/** The footer the read conversion appends to a truncated page. */
-export function describeTruncation(cut: Truncation, url: string): string {
-  const partial = cut.partialLine === true ? " (last line cut at the character budget; its remainder is only reachable inside codemode or the sandbox)" : "";
-  return [
-    cut.visible,
-    `[truncated: showing lines ${cut.startLine}-${cut.endLine}${partial}]`,
-    `Full result: ${url}`,
-    `Continue: read({url: "${url}:${cut.nextLine}+${TEXT_BUDGET.maxLines}"})`,
-  ].join("\n");
-}
-
-/** Budget for the read tool's own conversion: the shared cap minus its footer. */
-export function readBudget(): { maxChars: number; maxLines: number } {
-  return { maxChars: TEXT_BUDGET.maxChars - READ_FOOTER.chars, maxLines: TEXT_BUDGET.maxLines - READ_FOOTER.lines };
-}
-
-/**
- * Collect the lines of `range` from a text source, streaming when the source
- * is an async iterable. Selected output beyond {@link MAX_TEXT_CHARS} fails:
- * narrow the range instead of materializing unbounded text.
- */
-export async function selectLines(source: string | AsyncIterable<string>, range: { start?: number; end?: number } = {}): Promise<string> {
-  const start = Math.max(1, range.start ?? 1);
-  const end = range.end ?? Number.MAX_SAFE_INTEGER;
-  const out: string[] = [];
-  let line = 1;
-  let chars = 0;
-  const collect = (segment: string): void => {
-    if (line < start || line > end) return;
-    out.push(segment);
-    chars += segment.length;
-    if (chars > MAX_TEXT_CHARS) {
-      throw new ResourceError("resource_too_large", `selected text exceeds ${MAX_TEXT_CHARS} characters; narrow the line range with :N+M selectors`);
-    }
-  };
-  let carry = "";
-  for await (const chunk of typeof source === "string" ? [source] : source) {
-    carry += chunk;
-    let at = 0;
-    for (;;) {
-      const newline = carry.indexOf("\n", at);
-      if (newline < 0) break;
-      collect(carry.slice(at, newline + 1));
+/** The body and the complete continuation footer share one budget. */
+export function renderTextPage(text: string, source: FileTextSource): string {
+  if (textFits(text)) return text;
+  let end = prefixEnd(text, TEXT_BUDGET.maxChars, TEXT_BUDGET.maxLines);
+  for (;;) {
+    let line = source.line;
+    let column = source.column;
+    let last = 0;
+    for (let at = text.indexOf("\n"); at !== -1 && at < end; at = text.indexOf("\n", at + 1)) {
       line += 1;
-      at = newline + 1;
-      if (line > end) return out.join("");
+      column = 1;
+      last = at + 1;
     }
-    carry = carry.slice(at);
+    column += end - last;
+    const nextUrl = `${source.url}${source.url.includes("?") ? "&" : "?"}offset=${source.offset + end}`;
+    const lastLine = end > 0 && text.charCodeAt(end - 1) === 10 ? line - 1 : line;
+    const footer = `\n[truncated: showing lines ${source.line}-${lastLine}; next ${line}:${column}]\nFull result: ${source.url}\nContinue: read(${JSON.stringify({ url: nextUrl })})`;
+    const nextEnd = prefixEnd(text, TEXT_BUDGET.maxChars - footer.length, TEXT_BUDGET.maxLines - 3);
+    if (end > 0 && end <= nextEnd) return text.slice(0, end) + footer;
+    if (nextEnd === 0) throw new ResourceError("resource_too_large", "resource URL leaves no room for a progressing text page");
+    end = Math.min(end, nextEnd);
   }
-  if (carry.length > 0) collect(carry);
-  return out.join("");
 }
 
-export function fileText(file: string): AsyncIterable<string> {
-  return createReadStream(file, { encoding: "utf8" }) as AsyncIterable<string>;
+/** Collect only the selected lines and offset; do not buffer skipped file content. */
+export async function selectText(
+  input: string | AsyncIterable<string>,
+  range: { start?: number; end?: number },
+  offset: number,
+): Promise<{ text: string; line: number; column: number }> {
+  const start = range.start ?? 1;
+  const end = range.end ?? Number.MAX_SAFE_INTEGER;
+  const parts: string[] = [];
+  let line = 1;
+  let column = 1;
+  let remaining = offset;
+  let firstLine = start;
+  let firstColumn = 1;
+  let started = false;
+  for await (const chunk of typeof input === "string" ? [input] : input) {
+    let from = -1;
+    let to = 0;
+    for (let at = 0; at < chunk.length && line <= end;) {
+      const newline = chunk.indexOf("\n", at);
+      const stop = newline === -1 ? chunk.length : newline + 1;
+      if (line >= start) {
+        const skipped = Math.min(remaining, stop - at);
+        const begin = at + skipped;
+        if (
+          begin > at &&
+          begin < stop &&
+          chunk.charCodeAt(begin - 1) >= 0xd800 &&
+          chunk.charCodeAt(begin - 1) <= 0xdbff &&
+          chunk.charCodeAt(begin) >= 0xdc00 &&
+          chunk.charCodeAt(begin) <= 0xdfff
+        ) {
+          throw new ResourceError("invalid_resource_uri", "continuation offset splits a Unicode character");
+        }
+        remaining -= skipped;
+        if (begin < stop) {
+          if (!started) {
+            firstLine = line;
+            firstColumn = column + skipped;
+            started = true;
+          }
+          if (from === -1) from = begin;
+          to = stop;
+        }
+      }
+      if (newline === -1) column += stop - at;
+      else {
+        line += 1;
+        column = 1;
+      }
+      at = stop;
+    }
+    if (from !== -1) parts.push(chunk.slice(from, to));
+    if (line > end) break;
+  }
+  return { text: parts.join(""), line: firstLine, column: firstColumn };
 }

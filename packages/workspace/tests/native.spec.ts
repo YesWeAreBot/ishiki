@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { WorkspaceConfig } from "../src/config.js";
 import { createNativeShell, shellArgs } from "../src/native.js";
+import { WorkspaceScheme } from "../src/resource-schemes.js";
 import { defaultShell, resolveLayout, shellKindOf, type ShellKind, type ShellOptions } from "../src/shell.js";
 
 function nativeOptions(home: string, overrides: Partial<WorkspaceConfig> = {}): ShellOptions {
@@ -100,6 +101,22 @@ describe("native shell", () => {
       await shell.write(msysPath, "via msys");
       expect(await fs.readFile(path.join(home, "workspace", "marked.txt"), "utf8")).toBe("via msys");
       expect(await shell.read(msysPath)).toBe("via msys");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("serves host files through workspace URLs", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-native-"));
+    try {
+      const shell = await createNativeShell(resolveLayout(nativeOptions(home)));
+      await shell.write("note.txt", "宿主文件");
+      const file = path.join(home, "workspace", "note.txt");
+      // native 没有虚拟路径：URL 里的绝对路径就是宿主路径（Windows 用 git-bash 风格盘符写法）。
+      const urlPath = process.platform === "win32" ? `/${file[0]!.toLowerCase()}${file.slice(2).replaceAll("\\", "/")}` : file;
+      const payload = await new WorkspaceScheme(async () => shell.fs).resolve(`workspace://${urlPath}`);
+      expect(payload).toMatchObject({ type: "text", text: "宿主文件" });
+      expect(new TextDecoder().decode(await shell.fs.readFileBuffer(urlPath))).toBe("宿主文件");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }

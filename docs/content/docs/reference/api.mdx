@@ -179,38 +179,40 @@ handle.wake(prompt?);       // 主动打开一轮
 
 `agent.continue(prompt?)` 来自 `@yesimagent/core`：空闲时它排入一轮并返回 turn id；带 `prompt` 时该轮以这段文本作为开场的 user 消息（原文写入，不做包装），不带时这一轮直接基于已有历史开始，不写任何占位消息。忙碌或已有待发唤醒时，请求并入唯一那个待发唤醒并返回 `undefined`，待队列排空即触发——即使上一轮以终态收尾也会补上；此时多次 `continue` 的 `prompt` 以 `; ` 连接进同一条消息。
 
-## 资源方案：让 read/send_message 认识你的 URL
+## 资源方案：让 read 认识你的 URL
 
-实现 `SchemeHandler` 并 `context.resources.attach(handler)`：
+实现 `SchemeHandler` 并用 `context.resources.attach(handler)` 注册。中心只按 scheme 路由，handler 收到完整 URL，自行解释路径、query、view 或嵌套 URI。例如 `clock://now` 返回当前时间：
 
 ```ts
-import { SchemeHandler, ResourceError, ResourcePayload, ResourceUrl } from "koishi-plugin-ishiki";
+import { ResourceError, type ResourcePayload, type SchemeHandler } from "koishi-plugin-ishiki";
 
-export class MyHandler implements SchemeHandler {
-  readonly scheme = "myscheme";
+export class ClockHandler implements SchemeHandler {
+  readonly scheme = "clock";
 
-  public async resolve(url: ResourceUrl): Promise<ResourcePayload> {
-    // url.authority / url.segments / url.query / url.rawTail 已解析
-    if (无效) throw new ResourceError("resource_not_found", "…");
-    return { url: url.href, content: "文本…", size: 42 };      // 文本载荷
-    // 或 { url, bytes: Uint8Array, mediaType, size }            // 二进制载荷
+  resolve(input: string): ResourcePayload {
+    const url = new URL(input);
+    if (url.hostname !== "now") {
+      throw new ResourceError("resource_not_found", "expected clock://now");
+    }
+    const text = new Date().toISOString();
+    return { type: "text", url: input, text, size: Buffer.byteLength(text) };
   }
-
-  public async resolveView?(url: ResourceUrl, view: string): Promise<ResourcePayload> {
-    if (view !== "meta") throw new ResourceError("unsupported_view", `no "${view}" view`);
-    /* … */
-  }
-
-  public locate?(url: ResourceUrl): string { /* 宿主路径（可选） */ }
 }
 ```
 
+`ResourcePayload` 分成文本 `{ type:'text', url, text, size, mediaType?, filename?, source? }` 与媒体 `{ type:'file', url, bytes, mediaType, size, filename?, immutable }`。媒体的 `immutable: true` 只用于已固定内容的引用；动态来源使用 false，作为历史附件时由统一出口固化快照。
+
+普通 handler 无需提供续读协议：返回的文本在模型出口超预算时完整固化为 artifact，再从 artifact 分页。codemode 内 read 仍取得完整原始内容。
+
+文件型 scheme 继承 `FileScheme`，声明 scheme 并实现受保护的 `open(url: FileUrl)`。返回的 `FileEntry` 指明文件路径、可选 filesystem、媒体类型和元数据。未提供 filesystem 时使用宿主文件系统；提供实际沙箱的 `ResourceFileSystem` 时，读取同一个虚拟文件视图。`readFileBuffer`、`stat`、`readdir` 是必需能力，流式文本读取为可选优化。
+
+FileScheme 复用行选择、元数据视图与无损 offset 续读。其读取来源随结构化结果传递，不依赖闭包或跨调用缓存。根目录和符号链接约束由具体 scheme 的 open 实现负责；不能把宿主路径当作虚拟路径。
+
 约束：
 
-- `asset` / `artifact` / `local` 是保留方案，注册同名 handler 会被拒绝。
-- 错误用 `ResourceError` 并给出标准错误码（`invalid_resource_uri`、`resource_not_found`、`resource_too_large`、`unsupported_view` 等），read 工具会把原因透给模型。
-- 文本上限 1 MiB（超限抛 `resource_too_large`）是扩展方案的约定俗成，`skill`/`workspace` 方案遵循它；核心三方案走统一文本预算。
-- 行选择器（`:1-200`）由资源中心统一处理，handler 无需关心；`opaque: true` 声明（如 `mcp`）则连 URI 都不解析。
+- `asset` / `artifact` / `local` 是保留方案，注册同名 handler 会被拒绝；注册返回的 disposer 用于注销。
+- 使用 `ResourceError` 表达资源错误，例如 `invalid_resource_uri`、`resource_not_found`、`resource_too_large`、`unsupported_view`。
+- scheme 注册和存储按 Runtime 隔离；工具只有明确实现了资源中心读取，才能把该 scheme URL 作为数据来源。
 
 ## 事件与消息类型
 

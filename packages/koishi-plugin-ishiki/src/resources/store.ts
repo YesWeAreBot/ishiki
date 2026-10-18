@@ -95,11 +95,7 @@ export class ResourceStore {
     return `asset://${name}`;
   }
 
-  /**
-   * Content-addressed tool artifact named `<sha256 first 16>.bin`. Old
-   * `<hash>-<type><hash>.blob` names from earlier runtimes stay readable:
-   * they resolve through the same sidecar lookup.
-   */
+  /** Store a content-addressed tool output snapshot. */
   public async writeArtifact(tool: string, bytes: Uint8Array, meta: { mediaType?: string; filename?: string } = {}): Promise<string> {
     const namespace = tool.replace(/[^a-zA-Z0-9_-]/g, "_") || "tool";
     const name = `${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.${ARTIFACT_EXT}`;
@@ -135,6 +131,7 @@ export class ResourceStore {
 
   /** Metadata for one stored resource, or undefined. */
   public async getMeta(kind: ResourceKind, namespace: string, name: string): Promise<ResourceMeta | undefined> {
+    this.validate(kind, namespace, name);
     try {
       const raw = await fs.readFile(this.metaPath(kind, namespace, name), "utf-8");
       return JSON.parse(raw) as ResourceMeta;
@@ -168,6 +165,8 @@ export class ResourceStore {
 
   /** Payload names inside one namespace (blob files only, sidecars excluded). */
   public async names(kind: ResourceKind, namespace: string): Promise<string[]> {
+    if (kind === "asset" ? namespace !== "" : !NAME_RE.test(namespace) || namespace === "." || namespace === "..")
+      throw new ResourceError("invalid_resource_uri", `invalid resource namespace: ${namespace}`);
     try {
       const entries = await fs.readdir(path.join(this.kindDir(kind), namespace));
       return entries.filter((name) => NAME_RE.test(name) && !name.endsWith(".json") && !name.endsWith(".view"));
@@ -269,7 +268,7 @@ export class ResourceStore {
     const cached = this.memory.get(key);
     if (cached) return cached;
     try {
-      const bytes = new Uint8Array(await fs.readFile(path.join(this.home, "resources", key)));
+      const bytes = await fs.readFile(path.join(this.home, "resources", key));
       this.memory.set(key, bytes);
       return bytes;
     } catch {
@@ -291,10 +290,12 @@ export class ResourceStore {
 
   private validate(kind: ResourceKind, namespace: string, name: string): void {
     if (kind === "asset") {
+      if (namespace !== "") throw new ResourceError("invalid_resource_uri", "assets do not have namespaces");
       if (!ID_RE.test(name)) throw new ResourceError("invalid_resource_uri", `asset name must be a 32-hex id: ${name}`);
       return;
     }
-    if (!NAME_RE.test(namespace)) throw new ResourceError("invalid_resource_uri", `invalid artifact namespace: ${namespace}`);
+    if (!NAME_RE.test(namespace) || namespace === "." || namespace === "..")
+      throw new ResourceError("invalid_resource_uri", `invalid artifact namespace: ${namespace}`);
     if (!NAME_RE.test(name) || name.startsWith(".")) throw new ResourceError("invalid_resource_uri", `invalid artifact name: ${name}`);
   }
 }
@@ -305,7 +306,7 @@ export function decodeDataUrl(src: string): Uint8Array {
   const [, mediaType, isBase64, payload] = match;
   if (isBase64) {
     try {
-      return new Uint8Array(Buffer.from(payload!, "base64"));
+      return Buffer.from(payload!, "base64");
     } catch {
       throw new ResourceError("resource_read_failed", "data: URL base64 decode failed");
     }
@@ -313,7 +314,7 @@ export function decodeDataUrl(src: string): Uint8Array {
   if (mediaType && !mediaType.startsWith("text/")) {
     throw new ResourceError("resource_read_failed", `unsupported inline data type: ${mediaType}`);
   }
-  return new Uint8Array(Buffer.from(decodeURIComponent(payload!), "utf-8"));
+  return Buffer.from(decodeURIComponent(payload!), "utf-8");
 }
 
 export async function fetchBytes(src: string, signal?: AbortSignal): Promise<Uint8Array> {

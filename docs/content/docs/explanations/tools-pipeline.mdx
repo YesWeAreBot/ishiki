@@ -1,84 +1,88 @@
 ---
 title: 一次工具调用的旅程
-description: 从模型输出到工具结果回流，中间发生了什么
+description: 从模型输出到原始数据传递、资源固化和下一步附件
 ---
 
-模型按下工具按钮之后、看到结果之前，结果经历了一整条流水线：协议解析、执行、统一出口、附件投影。理解这条流水线，能解释大部分「为什么工具返回长这样」的疑问。
+一张截图可以先交给 OCR 工具处理，再交给模型查看。这两个阶段使用不同的数据形态：代码里传完整媒体数据，模型出口把媒体固化为资源引用，再由下一步附件投影加载。
 
-## 全景
+## 调用与模型出口
 
 ```mermaid
 flowchart TD
-    M["模型输出"] -->|"native: function call"| EXEC["工具执行"]
-    M -->|"文本协议: JSON/XML/…"| PARSE["协议引擎解析"] --> EXEC
-    M -->|"codemode: JS 程序"| SANDBOX["QuickJS 沙箱<br/>await tools.x()"] --> EXEC
-    EXEC --> EXIT["统一输出出口"]
-    EXIT -->|"文本"| CUT["按预算截断"]
-    EXIT -->|"媒体"| ARCHIVE["归档为 artifact<br/>替换为占位标记"]
-    CUT --> HIST["进入事实流"]
-    ARCHIVE --> ATTACH["附件消息<br/>（下一步投给模型）"]
-    HIST --> M2["下一轮模型请求"]
-    ATTACH --> M2
+    M[模型发起调用] -->|直调| EXEC[工具 execute]
+    M -->|codemode| CODE[QuickJS 程序]
+    CODE --> INNER[内部工具 execute]
+    INNER -->|原始 JSON 安全值| CODE
+    CODE -->|最终 return| CONVERT[外层 toModelOutput]
+    EXEC --> CONVERT
+    CONVERT --> EXIT[统一资源输出处理]
+    EXIT --> TEXT[预算内文本与续读 URL]
+    EXIT --> MEDIA[固化媒体或复用引用]
+    MEDIA --> ATTACH[Runtime 提交附件消息]
+    TEXT --> NEXT[下一 step]
+    ATTACH --> POLICY[按模型能力与配额投影]
+    POLICY --> NEXT
 ```
 
-## 出发：三种调用形态
+原生工具调用与文本协议引擎都先执行工具，再进入模型出口。文本协议负责把 JSON/XML 等输出解析成工具调用，不改变资源处理规则。
 
-**原生调用（native 引擎）**：模型输出结构化的 function call，直接执行。最可靠，前提是模型支持。
+codemode 内部只执行工具的 execute，不调用内部工具的 toModelOutput。代码按当前目录的 outputSchema 读取返回值，再把需要的字段交给另一个工具。中间结果不因模型展示预算截断或归档；现有 SDK 的传输大小、最终结果、内存和超时限制仍然有效。
 
-**文本协议（v3/hermes/qwen3coder/morph-xml/yaml-xml 引擎）**：模型把调用写进普通文本（如 v3 的 ```json 块），协议引擎注入协议说明、解析输出、提取调用。解析失败按错误处理，不会静默丢弃。适合无原生 function call 能力的模型。
+`send_message` 在直调和 codemode 两侧可达；`finish`、`wait` 只留直调目录。每次 codemode 调用启动独立程序，需要给下一步的数据必须最终 return。
 
-**codemode（代码模式）**：模型改写一段 JS 程序，程序在 QuickJS 沙箱里 `await tools.x(input)` 调工具。关键差异：**中间数据不出沙箱**。十个工具的串联结果在程序内自由传递，模型只看到最终返回值。
+## 最终返回值中的媒体
 
-<Callout title="codemode 的两条固定规则">
-`send_message` 在沙箱与直调两面都可达（程序里也能说话）；`finish` 只留直调目录（收尾必须由模型亲自发起）。`direct` 名单调整其余工具的归属。
-</Callout>
+codemode 在最终业务返回值的顶层 `attachments` 数组中声明要交给模型的媒体。支持 MCP image/audio、read 的 file 节点、嵌入 MCP resource 和明确的资源引用；数组外的一切按普通 JSON 处理，不递归猜测媒体。
 
-codemode 传媒体出沙箱只有一条路：返回值顶层 `attachment` 数组。数组里的块（MCP image/audio、read 的 file 节点、内嵌 resource）被归档并以附件消息投给下一步；数组外的一切按普通 JSON 处理（会被截断预算约束）。
+提交新数据时，以实际字节为准。只有 URL 时，统一出口解析它：已固化内容可以复用，workspace 等实时媒体引用则固化快照。附件关联外层 codemode 调用，因为只有最终 return 才决定哪些内部结果交给模型。
 
-## 归宿：统一输出出口
+已有资源 URL 不是媒体数据。接收工具要求 base64 时，代码先 read 再传入 data；只有明确接入当前 Runtime 资源中心的工具，才能直接接受该 scheme 的 URL。系统不自动重写工具入参。
 
-不管哪种形态，工具结果都过同一个出口（`processOutput`）：
+## 文本固化与原来源续读
 
-1. **文本**：按全局文本预算截断（2000 行 / 单行 2000 字符 / 30,000 字符），截断带 Continue 锚点。工具自己的 `toModelOutput` 转换优先于默认渲染（如 bash 工具的 `exit code/stdout/stderr` 拼排）。
-2. **媒体**：字节归档为 `artifact://<工具名>/<内容寻址名>`，模型看到的位置替换为占位标记 `[attachment: artifact://…; image/png; 12345 bytes]`。**工具结果里从此不再有裸 base64**——这是上下文不被媒体撑爆的关键。
-3. **codemode 的 attachment 数组**：同样归档，但额外生成一条附件消息。
+工具原生 toModelOutput 先决定展示表示，例如 bash 的 stdout/stderr 拼排；统一出口在这个表示上抽取媒体、处理文本预算。
 
-归档是幂等的：同一字节（SHA-256 相同）重复产生不重复占盘。
+**普通超长内容**完整固化为 artifact，模型看到前缀与 Continue。归档保存媒体替换后的完整展示内容，不额外保存 execute 原始对象。例如动态 `example://large.text` 首次返回大段内容后，后续读取的是这次响应的 artifact，不再逐页调用 example。
 
-## 回流：附件消息与投影
+**FileScheme 文本**已有可以直接读取的来源，使用原 URL 分页。local、workspace、已有 artifact 的读取页不再复制成页面 artifact。FileScheme 自行解释范围、view 和 offset，中心只路由完整 URL。
 
-归档的媒体以 `ishiki.attachment` 消息进入事实流，在**下一轮请求**时经附件投影投给模型：
+所有展示正文和续读说明共用 2000 行 / 30,000 个 UTF-16 code unit。Continue 保存请求范围与位置，超长单行也可以读完；截断不拆开 Unicode 代理对。每次续读前进，到达范围末尾后不再生成锚点。
 
-- 配额（张数/字节/尺寸）每请求一份、最新优先——新截图挤不掉，古老的大图先出局，出局者保留 URL 与原因。
-- 来源消息被撤回（或工具结果已不在投影里）的附件自动消失——附件永远跟着它的宿主走。
-- `imageInput: false` 时，模型收到的是附件的描述与元数据而非像素；但 codemode 内字节仍可流转给其他工具。
+普通 URL 可以表示当前资源，原来源续读不承诺跨次一致性；artifact 表示已保存的内容快照。
 
-## read 工具的特殊地位
+## 附件消息与请求投影
 
-`read` 是唯一「模型主动读资源」的通道，它和统一出口共享同一份预算：read 自己截断并附锚点，出口不再二次截断归档。这让「分段读大文件」成为可能：每段按锚点续读，行号始终对齐源文件。
+资源处理返回模型可见内容和附件引用，由 Runtime 提交 `ishiki.attachment`。下一 step 请求时，附件按当前模型能力和请求配额转换成 user message 内容：
 
-二进制资源 read 返回 base64 文件节点——在 codemode 里这个节点可以原样塞进 `attachment` 数组或传给下一个工具；直调时它转为附件自动投给下一步。
+- 平台和工具附件共用一份张数、字节及尺寸预算，按最新优先分配。
+- 来源关联检查在 context engine 可能折叠工具结果之前执行；原消息撤回或工具结果不在历史中时，附件不能脱离来源继续展示。
+- 不支持、超配额或读取失败的媒体保留 URL 和原因，不向 Provider 发送不支持的媒体数据。
+- `imageInput: false` 时，模型取得引用与描述；代码仍能把实际媒体数据交给其他工具。
 
-## 设计动机小结
+历史附件保存资源引用和来源关联，不保存某次请求的展示选择，因此切换模型或能力变化时可以重新投影。
 
-这条流水线反复出现的主题是**预算与留痕**：媒体永远留痕（URL 可回溯）不占预算；文本按预算截断但留续读锚点；事实流永远完整（截断只发生在投影层）。于是「历史」与「知觉」分离：什么都没丢，只是每轮请求选择性地看见。
+## read 的两个出口
+
+read 的原始结果是结构化数据：文本含完整 text 和可选的文件来源，媒体含 base64 data、类型与来源。原始数据适合 codemode 使用；只有模型转换阶段才生成页面或媒体附件。
+
+FileScheme 的读取来源以可序列化数据保留，不通过页脚文案识别“已处理页面”，也不靠工具名豁免预算。没有文件读取来源的普通长文本则进入上面的 artifact 路径。
 
 ## 继续阅读
 
 <Cards>
   <Card
     title="模型工具与资源协议"
-    description="五个内置工具的输入输出与资源 URL 语法"
+    description="内置工具、结构化 read、文件范围和文本预算"
     href="/docs/reference/tools"
   />
   <Card
     title="启用工作区"
-    description="bash / read_file / write_file / edit_file 与技能注入"
+    description="沙箱、挂载文件、workspace URL 与技能"
     href="/docs/guides/workspace"
   />
   <Card
     title="扩展 API 参考"
-    description="贡献工具、引擎与资源方案"
+    description="贡献工具、引擎与完整 URL handler"
     href="/docs/reference/api"
   />
 </Cards>

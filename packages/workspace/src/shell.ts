@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 import type { Logger } from "koishi";
-import type { ResourceCenter } from "koishi-plugin-ishiki";
+import type { ResourceCenter, ResourceFileSystem } from "koishi-plugin-ishiki";
 
 import type { WorkspaceConfig } from "./config.js";
 import { resolveMounts, resolveSkillMounts, type HostMount } from "./mounts.js";
@@ -40,6 +40,13 @@ export interface WorkspaceLayout {
 }
 
 export interface WorkspaceShell extends WorkspaceLayout {
+  /**
+   * The shell's own file view, shared with the workspace URL scheme: the
+   * sandbox's virtual, mounted and persistent files (the same bytes bash
+   * sees) in sandbox mode, the host filesystem in native mode. Never a
+   * reconstructed host path for the sandbox.
+   */
+  readonly fs: ResourceFileSystem;
   /** path 相对 cwd 解析；sandbox 用 posix 语义，native 用宿主语义（含 git-bash 风格盘符转换）。 */
   exec(command: string, signal?: AbortSignal): Promise<ExecResult>;
   read(path: string): Promise<string>;

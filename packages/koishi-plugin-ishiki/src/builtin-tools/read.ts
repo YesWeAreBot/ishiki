@@ -1,13 +1,10 @@
 import { jsonSchema, tool, type Tool, type ToolResultOutput } from "@yesimagent/core";
 
-import type { ResourceCenter } from "../resources/center.js";
-import { concreteMediaType } from "../resources/media.js";
-import { splitSelectors } from "../resources/selectors.js";
-import { describeTruncation, readBudget, selectLines, truncate } from "../resources/text.js";
+import type { ResourceCenter, ResourceText } from "../resources/center.js";
+import { renderTextPage, TEXT_BUDGET } from "../resources/text.js";
 
 export const READ_TOOL = "read";
 
-/** A file payload: the whole `type: 'file'` node an attachment array accepts verbatim. */
 export interface ReadFile {
   type: "file";
   url: string;
@@ -15,6 +12,7 @@ export interface ReadFile {
   data: string;
   byteLength: number;
   filename?: string;
+  immutable: boolean;
 }
 
 export namespace ReadTool {
@@ -24,48 +22,55 @@ export namespace ReadTool {
   export interface Input {
     url: string;
   }
-  /** Full text of the requested line range, or the complete file node. */
-  export type Output = string | ReadFile;
+  export type Output = ResourceText | ReadFile;
 }
 
-/**
- * The read tool. `execute` returns the raw payload — full text of the
- * requested line range, or the file node with base64 data — so codemode can
- * keep processing it. Truncation happens in `toModelOutput`, whose anchor
- * points at the source URL; the unified wrapper then finds the result inside
- * the shared budget and never archives a read page twice.
- */
+/** Raw structured data in code; source-aware pages and media only at model conversion. */
 export function createReadTool({ center }: ReadTool.Options): Tool<ReadTool.Input, ReadTool.Output> {
-  const accepts = (scheme: string): boolean => center.acceptsSelectors(scheme);
   return tool({
-    description:
-      "Read an existing resource by asset://<id>, artifact://<tool>/<name>, local://<path> or extension URL. Text returns the full content of the requested line range (:1-200 or :50+30 selects lines; whole reads are size-capped); binary files return {type:'file', url, mediaType, data(base64), byteLength, filename?}. Inside codemode, pass the file node into another tool, or return it inside the attachment array to carry the media to your next step. ?view=meta probes metadata without fetching bytes. Direct calls show at most 2000 lines / 30000 characters of text with a Continue anchor; images become attachments automatically — inspect the attachment before reading the same image again. Reading cannot bypass model modality or image quotas.",
+    description: `Read an existing resource URL. Inside codemode, text results contain {type:'text',text,url,size,source?}; file results contain {type:'file',data(base64),mediaType,url,byteLength,filename?,immutable}. Pass text or media data to another tool according to its input schema, or include media in the final attachments array. File schemes support :N, :N-M, :N+M and ?view=meta; use the exact Continue URL for later pages. Model-visible text is limited to ${TEXT_BUDGET.maxLines} lines / ${TEXT_BUDGET.maxChars} characters. Ordinary oversized results are saved as artifact snapshots; file pages retain their source. Media cannot bypass model capabilities or quotas.`,
     inputSchema: jsonSchema<ReadTool.Input>({ type: "object", properties: { url: { type: "string" } }, required: ["url"] }),
     outputSchema: jsonSchema<ReadTool.Output>({
       oneOf: [
-        { type: "string" },
+        {
+          type: "object",
+          properties: {
+            type: { const: "text" },
+            url: { type: "string" },
+            text: { type: "string" },
+            size: { type: "number" },
+            mediaType: { type: "string" },
+            filename: { type: "string" },
+            source: {
+              type: "object",
+              properties: {
+                url: { type: "string" },
+                offset: { type: "integer", minimum: 0 },
+                line: { type: "integer", minimum: 1 },
+                column: { type: "integer", minimum: 1 },
+              },
+              required: ["url", "offset", "line", "column"],
+            },
+          },
+          required: ["type", "url", "text", "size"],
+        },
         {
           type: "object",
           properties: {
             type: { const: "file" },
             url: { type: "string" },
             mediaType: { type: "string" },
-            data: { type: "string", description: "Base64 bytes" },
+            data: { type: "string", description: "Base64 media bytes" },
             byteLength: { type: "number" },
             filename: { type: "string" },
+            immutable: { type: "boolean" },
           },
-          required: ["type", "url", "mediaType", "data", "byteLength"],
+          required: ["type", "url", "mediaType", "data", "byteLength", "immutable"],
         },
       ],
     }),
-    toModelOutput: ({ input, output }): ToolResultOutput => {
-      if (typeof output === "string") {
-        // The selector in the request gives the slice its absolute line numbers,
-        // so a truncated slice anchors past its own head instead of looping.
-        const { url, range } = splitSelectors(input.url.trim(), accepts);
-        const cut = truncate(output, { startLine: range?.start ?? 1, ...readBudget() });
-        return { type: "text", value: cut === undefined ? output : describeTruncation(cut, url) };
-      }
+    toModelOutput: ({ output }): ToolResultOutput => {
+      if (output.type === "text") return { type: "text", value: output.source === undefined ? output.text : renderTextPage(output.text, output.source) };
       return {
         type: "content",
         value: [
@@ -73,29 +78,23 @@ export function createReadTool({ center }: ReadTool.Options): Tool<ReadTool.Inpu
             type: "file",
             mediaType: output.mediaType,
             ...(output.filename === undefined ? {} : { filename: output.filename }),
-            // `URL` with originalUrl preserves non-HTTP resource schemes verbatim.
-            data: { type: "url", url: new URL(output.url), originalUrl: output.url },
+            data: output.immutable ? { type: "url", url: new URL(output.url), originalUrl: output.url } : { type: "data", data: output.data },
           },
         ],
       };
     },
-    execute: async (input) => {
-      const { url, range } = splitSelectors(input.url.trim(), accepts);
-      // Fast path: stream the requested lines from disk for file-backed schemes.
-      const streamed = await center.readTextLines(url, range ?? {});
-      if (streamed !== undefined) return streamed;
-      const payload = await center.resolve(url);
-      if (payload.bytes !== undefined) {
-        return {
-          type: "file",
-          url,
-          mediaType: concreteMediaType(payload.mediaType, payload.bytes) ?? "application/octet-stream",
-          data: Buffer.from(payload.bytes).toString("base64"),
-          byteLength: payload.bytes.byteLength,
-          ...(payload.filename === undefined ? {} : { filename: payload.filename }),
-        } satisfies ReadFile;
-      }
-      return selectLines(payload.content ?? "", range ?? {});
+    execute: async ({ url }) => {
+      const payload = await center.resolve(url.trim());
+      if (payload.type === "text") return payload;
+      return {
+        type: "file",
+        url: payload.url,
+        mediaType: payload.mediaType,
+        data: Buffer.from(payload.bytes.buffer, payload.bytes.byteOffset, payload.bytes.byteLength).toString("base64"),
+        byteLength: payload.size,
+        immutable: payload.immutable,
+        ...(payload.filename === undefined ? {} : { filename: payload.filename }),
+      };
     },
   });
 }

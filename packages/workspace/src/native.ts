@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -17,12 +18,13 @@ export function shellArgs(kind: ShellKind, command: string): string[] {
   return ["-c", command];
 }
 
-/** git-bash 风格盘符路径 /d/x → D:/x。仅 Windows 生效，只识别单字母首段，/home 等不受影响。 */
+/** git-bash 风格盘符路径 /d/x 与 /D:/x → D:/x。仅 Windows 生效，只识别单字母首段，/home 等不受影响。 */
 function msysToWin32(target: string): string {
   if (process.platform !== "win32") return target;
-  const matched = /^\/([a-z])(?=\/|$)/i.exec(target);
+  const matched = /^\/([a-z]):?(?=\/|$)/i.exec(target);
   if (matched === null) return target;
-  return `${matched[1].toUpperCase()}:${target.slice(matched[0].length) || path.sep}`;
+  const rest = target.slice(matched[0].length);
+  return `${matched[1].toUpperCase()}:${rest.length === 0 ? path.sep : rest}`;
 }
 
 function resolveHostPath(layout: WorkspaceLayout, target: string): string {
@@ -51,6 +53,27 @@ function mapExecError(error: unknown, layout: WorkspaceLayout, timeoutSignal: Ab
 export async function createNativeShell(layout: WorkspaceLayout): Promise<WorkspaceShell> {
   return {
     ...layout,
+    // native 没有虚拟根：整个宿主文件系统就是视图，路径解析与 exec/read_file 完全一致。
+    fs: {
+      async stat(target) {
+        const stat = await fs.stat(resolveHostPath(layout, target));
+        return { isDirectory: stat.isDirectory(), size: stat.size };
+      },
+      readFileBuffer: (target) => fs.readFile(resolveHostPath(layout, target)),
+      readdir: (target) => fs.readdir(resolveHostPath(layout, target)),
+      readText: (target) => createReadStream(resolveHostPath(layout, target), { encoding: "utf8" }),
+      // 前缀探测 + 流式读让按行选择只读需要的那一段，不必整份载入宿主文件。
+      async readFilePrefix(target, length) {
+        const handle = await fs.open(resolveHostPath(layout, target), "r");
+        try {
+          const bytes = Buffer.allocUnsafe(length);
+          const result = await handle.read(bytes, 0, length, 0);
+          return bytes.subarray(0, result.bytesRead);
+        } finally {
+          await handle.close();
+        }
+      },
+    },
     async exec(command, signal) {
       const timeoutSignal = AbortSignal.timeout(layout.timeoutMs);
       const composed = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal]);

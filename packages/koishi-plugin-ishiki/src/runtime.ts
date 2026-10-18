@@ -3,18 +3,21 @@ import path from "node:path";
 
 import {
   createAgent,
+  createCustomMessage,
   createJsonlStorage,
   LanguageModelV4,
   ToolConflictError,
   type Agent,
   type AgentMessage,
   type AgentStorage,
+  type JSONValue,
+  type Tool,
   type ToolCallers,
+  type ToolResultOutput,
   type ToolSet,
 } from "@yesimagent/core";
 import type { Logger } from "koishi";
 
-import { Attachment, type AttachmentConfig } from "./attachment/index.js";
 import { CODEMODE_TOOL, createCodemode } from "./builtin-tools/codemode.js";
 import { FINISH_TOOL } from "./builtin-tools/finish.js";
 import { SEND_MESSAGE_TOOL } from "./builtin-tools/send-message.js";
@@ -24,7 +27,11 @@ import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
 import type { CodemodeConfig, ToolsearchConfig } from "./profile/index.js";
-import { ResourceCenter } from "./resources/center.js";
+import { captureResources } from "./resources/capture.js";
+import type { ResourceCenter } from "./resources/center.js";
+import { type AttachmentConfig } from "./resources/config.js";
+import { processOutput } from "./resources/output.js";
+import { attachmentMessages, projectAttachments } from "./resources/projection.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
 
@@ -76,7 +83,6 @@ export class AgentRuntime {
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
   private readonly extensions: ExtensionInstance[];
-  private readonly attachment: Attachment;
   private readonly toolsearch: ToolsearchState;
 
   private disposeContext?: () => void;
@@ -96,7 +102,6 @@ export class AgentRuntime {
     this.context = config.context;
     this.extensions = config.extensions;
     this.resources = config.resources;
-    this.attachment = new Attachment(config.attachment, config.resources, this);
     this.toolsearch = new ToolsearchState(config.toolsearch);
     this.initTools = config.tools;
     this.condition = new WaitConditionMachine(config.logger);
@@ -131,13 +136,17 @@ export class AgentRuntime {
           transformEntries: (entries, options) => {
             return this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries;
           },
-          transformMessages: (messages, options) => {
-            return this.attachment.project(messages, options);
+          transformMessages: async (messages, options) => {
+            const associated = attachmentMessages(messages);
+            const rendered = (await this.context.renderMessages?.(associated, options)) ?? associated;
+            return projectAttachments(rendered, this.resources, this.config.attachment);
           },
           toModelMessages: (message: unknown) => {
-            const custom = message as { role?: string; type?: string; data?: { text?: string } };
-            if (custom.role !== "custom" || custom.type !== "ishiki.tools.catalog") return undefined;
-            return [{ role: "user" as const, content: custom.data!.text! }];
+            if (message === null || typeof message !== "object" || !("role" in message) || message.role !== "custom") return undefined;
+            if (!("type" in message) || message.type !== "ishiki.tools.catalog" || !("data" in message)) return undefined;
+            const data = message.data;
+            if (data === null || typeof data !== "object" || !("text" in data) || typeof data.text !== "string") return undefined;
+            return [{ role: "user" as const, content: data.text }];
           },
           extendInstructions: async () => {
             const parts = [config.instructions];
@@ -173,7 +182,8 @@ export class AgentRuntime {
                 if (part.type !== "tool-call") continue;
                 calls.add(part.toolName);
                 if (part.toolName !== SEND_MESSAGE_TOOL) continue;
-                if ((part.input as { continue?: boolean } | undefined)?.continue === true) {
+                const input: unknown = part.input;
+                if (input !== null && typeof input === "object" && "continue" in input && input.continue === true) {
                   continueRequested = true;
                   break;
                 }
@@ -228,7 +238,32 @@ export class AgentRuntime {
       final[CODEMODE_TOOL] = sandbox.tool;
     }
     if (this.config.toolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
-    const wrapped = this.attachment.wrap(final);
+    const wrapped: ToolSet = {};
+    for (const [name, original] of Object.entries(final)) {
+      const descriptors = Object.getOwnPropertyDescriptors(original);
+      descriptors.toModelOutput = {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value: async (options: Parameters<NonNullable<Tool["toModelOutput"]>>[0]) => {
+          const converted: ToolResultOutput =
+            original.toModelOutput !== undefined
+              ? await original.toModelOutput.call(original, options)
+              : typeof options.output === "string"
+                ? { type: "text", value: options.output }
+                : { type: "json", value: options.output as JSONValue };
+          const { output, items } = await processOutput(this.resources, name, converted, options.output);
+          if (items.length > 0) {
+            this.agent.send(createCustomMessage("ishiki.attachment", { source: "tool", toolName: name, toolCallId: options.toolCallId, items }), {
+              ifBusy: "join",
+              trigger: false,
+            });
+          }
+          return output;
+        },
+      };
+      wrapped[name] = Object.defineProperties({}, descriptors) as Tool;
+    }
     if (this.config.toolsearch.enable) {
       this.toolsearch.codemodeEnabled = this.config.codemode.enable;
       this.toolsearch.refresh(final, new Set(this.toolsearch.residentNames()), new Set(Object.keys(this.toolCallers)));
@@ -257,7 +292,14 @@ export class AgentRuntime {
   async deliver(event: IshikiEvent): Promise<void> {
     if (event.type === "ishiki.message.created") {
       const { platform, selfId, channelId, messageId, content } = event.data;
-      event.data.content = await this.attachment.capture(content, { platform, selfId, channelId, messageId });
+      const captured = await captureResources(this.resources, content);
+      event.data.content = captured.content;
+      if (captured.items.length > 0) {
+        this.agent.send(createCustomMessage("ishiki.attachment", { source: "platform", platform, selfId, channelId, messageId, items: captured.items }), {
+          ifBusy: "join",
+          trigger: false,
+        });
+      }
     }
 
     this.agent.send(event, { trigger: false, ifBusy: "join" });

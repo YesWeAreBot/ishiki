@@ -4,7 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Logger } from "koishi";
-import { jsonSchema, tool, ResourceError, type ToolResultOutput, type ToolSet } from "koishi-plugin-ishiki";
+import { jsonSchema, tool, ResourceError, type JSONSchema7, type ToolResultOutput, type ToolSet } from "koishi-plugin-ishiki";
 
 import type { McpServer } from "./config.js";
 
@@ -56,24 +56,7 @@ export class McpConnection {
         description: declared.description,
         inputSchema: jsonSchema(declared.inputSchema as Record<string, unknown>),
         execute: (params) => this.call(declared.name, params),
-        outputSchema: jsonSchema<McpBlock[]>({
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              type: { type: "string" },
-              text: { type: "string" },
-              data: { type: "string", description: "Base64 media bytes" },
-              mimeType: { type: "string" },
-              resource: {
-                type: "object",
-                properties: { uri: { type: "string" }, text: { type: "string" }, blob: { type: "string" }, mimeType: { type: "string" } },
-              },
-            },
-            required: ["type"],
-            additionalProperties: true,
-          },
-        }),
+        outputSchema: jsonSchema<McpBlock[]>(MCP_BLOCKS_SCHEMA),
         toModelOutput: ({ output }): ToolResultOutput => ({
           // Pure format conversion: MCP blocks become standard content parts.
           // Archiving, truncation and attachment emission belong to the unified
@@ -147,6 +130,48 @@ function convertBlock(block: McpBlock): { type: "text"; text: string } | { type:
       return { type: "text", text: typeof block.text === "string" ? block.text : JSON.stringify(block) };
   }
 }
+
+/**
+ * Raw MCP content blocks as `execute` returns them — the union of shapes the
+ * platform actually hands over, verbatim (unknown fields and unknown block
+ * types pass through unchanged).
+ */
+const MCP_BLOCKS_SCHEMA: JSONSchema7 = {
+  type: "array",
+  items: {
+    anyOf: [
+      { type: "object", properties: { type: { const: "text" }, text: { type: "string" } }, required: ["type", "text"] },
+      {
+        type: "object",
+        properties: { type: { enum: ["image", "audio"] }, data: { type: "string", description: "Base64 media bytes" }, mimeType: { type: "string" } },
+        required: ["type", "data"],
+      },
+      {
+        type: "object",
+        properties: {
+          type: { const: "resource" },
+          resource: {
+            type: "object",
+            properties: {
+              uri: { type: "string" },
+              mimeType: { type: "string" },
+              text: { type: "string" },
+              blob: { type: "string", description: "Base64 bytes" },
+            },
+            required: ["uri"],
+          },
+        },
+        required: ["type", "resource"],
+      },
+      {
+        type: "object",
+        properties: { type: { const: "resource_link" }, uri: { type: "string" }, name: { type: "string" }, mimeType: { type: "string" } },
+        required: ["type", "uri"],
+      },
+      { type: "object", properties: { type: { type: "string" } }, required: ["type"] },
+    ],
+  },
+};
 
 function safeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^[_-]+|[_-]+$/g, "") || "mcp";

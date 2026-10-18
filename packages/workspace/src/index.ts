@@ -4,7 +4,7 @@ import { Extension, type ExtensionContext, type ToolSet } from "koishi-plugin-is
 import { WorkspaceConfig } from "./config.js";
 import { createNativeShell } from "./native.js";
 import { workspaceInstructions } from "./prompt.js";
-import { SkillHandler, WorkspaceHandler } from "./resource-schemes.js";
+import { SkillScheme, WorkspaceScheme } from "./resource-schemes.js";
 import { createSandbox } from "./sandbox.js";
 import { resolveLayout, type WorkspaceShell } from "./shell.js";
 import { skillCatalog } from "./skills.js";
@@ -38,9 +38,9 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
     // 懒加载单例：tools 与 instructions 共用同一个 shell。
     const box = (): Promise<WorkspaceShell> => (shell ??= layout.backend === "native" ? createNativeShell(layout) : createSandbox(layout, shellOptions));
     const disposers: Array<() => void> = [];
-    // 资源 URL 面：技能内容与 workspace 持久根，与沙箱挂载同源。
-    disposers.push(context.resources?.attach(new SkillHandler(layout.skills)));
-    disposers.push(context.resources?.attach(new WorkspaceHandler(context.home)));
+    // 资源 URL 面：技能内容与 workspace 文件视图（沙箱实际可见的文件系统；native 是宿主视图）。
+    disposers.push(context.resources?.attach(new SkillScheme(layout.skills)));
+    disposers.push(context.resources?.attach(new WorkspaceScheme(async () => (await box()).fs)));
     return {
       name: "ishiki.workspace",
       extendTools: async () => (tools ??= createWorkspaceTools(await box())),

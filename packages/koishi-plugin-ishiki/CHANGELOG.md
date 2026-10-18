@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial plugin surface: profile configuration with validation and channel rules, scene management with frame rendering, session handlers for message creation and deletion, focus switching, notifications, self message events, and typing delay configuration.
 
 ### Changed
+- Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order.
+- Resource handlers receive complete URLs. File-backed schemes share `FileScheme`; `read` returns structured text or base64 media, and codemode declares final media through `attachments`.
+- Ordinary oversized results become artifact snapshots; file pages continue at their source with lossless offsets, including Unicode and long single lines. Existing SDK execution limits remain unchanged.
 - Extension packs are now Koishi services assembled inside the profile fiber.
 - The extension face converged onto `ctx.ishiki.provide()` with `ExtensionInstance` packs, `provide` moved under `agent.use`, and engine variants isolated as their own services with a callable provider.
 - Profile model flattened: the preset layer is gone; one `profile.yaml` is one profile.
@@ -31,13 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependency pins: `@yesimagent/core` and `@yesimagent/gateway` at 0.0.8, `@ai-sdk/code-mode` at 1.0.94 with `@ai-sdk-tool/parser` at 5.1.6.
 - Wakeup engines subscribe to committed messages and schedule their own wakes; `decide` and `WakeupDecision` are gone
 - Dependency pins: `@yesimagent/core` and `@yesimagent/gateway` at 0.0.9, `@ai-sdk/code-mode` at 1.0.94 with `@ai-sdk-tool/parser` at 5.1.6
+- Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order
+- Resource handlers receive complete URLs. File-backed schemes share `FileScheme`; `read` returns structured text or base64 media, and codemode declares final media through `attachments`
+- Ordinary oversized results become artifact snapshots; file pages continue at their source with lossless offsets, including Unicode and long single lines. Existing SDK execution limits remain unchanged
 
 ### Removed
+- The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration.
 - `think` tool, succeeded by `inner_thoughts`.
 - Cross-scene delivery tool, replaced by the aggregated cross-channel windows.
+- The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration
 
 ### Fixed
+- Platform attachments preserve document order when asynchronous registrations complete out of order.
+- Live media references are snapshotted before attachment submission, and unresolved declared media reports its read error without a fabricated reference.
 - Context budgets use token-based accounting and are recalculated at turn end, with trimming applied to whole turns.
 - Compressed history is demoted to supplementary material, with instructions kept in their own system prompt.
 - Attachment extraction requires a payload or URL up front.
 - The first request carries the baseline tool catalog instead of an empty one.
+- Platform attachments preserve document order when asynchronous registrations complete out of order
+- Live media references are snapshotted before attachment submission, and unresolved declared media reports its read error without a fabricated reference
