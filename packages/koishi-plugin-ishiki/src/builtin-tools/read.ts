@@ -1,7 +1,7 @@
 import { jsonSchema, tool, type Tool, type ToolResultOutput } from "@yesimagent/core";
 
-import type { ResourceCenter, ResourceText } from "../resources/center.js";
-import { renderTextPage, TEXT_BUDGET } from "../resources/text.js";
+import type { ResourceCenter, ResourceText } from "../resource/center.js";
+import { renderTextPage, TEXT_BUDGET } from "../resource/text.js";
 
 export const READ_TOOL = "read";
 

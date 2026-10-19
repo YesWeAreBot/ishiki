@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createReadTool, type ReadTool } from "../src/builtin-tools/read.js";
-import { ResourceCenter } from "../src/resources/center.js";
-import { processOutput } from "../src/resources/output.js";
-import { ResourceStore } from "../src/resources/store.js";
-import { TEXT_BUDGET } from "../src/resources/text.js";
+import { ResourceCenter } from "../src/resource/center.js";
+import { processOutput } from "../src/resource/output.js";
+import { ResourceStore } from "../src/resource/store.js";
+import { TEXT_BUDGET } from "../src/resource/text.js";
 
 let home: string;
 let center: ResourceCenter;

@@ -15,8 +15,8 @@ import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
-import { supportsImageInput } from "./resources/capabilities.js";
-import { ResourceCenter } from "./resources/center.js";
+import { supportsImageInput } from "./resource/capabilities.js";
+import { ResourceCenter } from "./resource/center.js";
 import { AgentRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -393,6 +393,6 @@ export * from "./wakeup/index.js";
 
 export * from "./builtin-tools/index.js";
 export * from "./profile/index.js";
-export * from "./resources/index.js";
+export * from "./resource/index.js";
 
 export default Ishiki;

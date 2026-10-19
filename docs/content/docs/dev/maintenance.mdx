@@ -86,7 +86,7 @@ bun run --filter @ishiki/docs types:check # next typegen + tsc --noEmit
 - 文档地图：首页的 `<DocsGraph />` 依赖 `lib/source.ts` 里的 `extractLinkReferences: true`（提取页间链接），页内链接写 `[文字](/docs/...)` 即可参与构图。
 - 布局：文档路由使用 Notebook 布局，源码由 Fumadocs CLI 复制到 `src/layouts/`（别名配置见 `cli.json`），`app/docs/layout.tsx` 与 `app/docs/[[...slug]]/page.tsx` 指向本地副本；升级 fumadocs 后可用 `npx @fumadocs/cli customize` 重新拉取。
 - 站点身份：`lib/shared.ts` 的 `appName` 与 `gitConfig`（页面上「在 GitHub 上编辑」的仓库与分支）、`app/layout.tsx` 的 metadata、`next.config.mjs` 的 `basePath` / `trailingSlash`（GitHub Pages 项目页）。部署由 `.github/workflows/pages.yml` 在 `main` 上 `docs/**` 变更时触发。
-- 事实同步：配置字段以 `packages/koishi-plugin-ishiki/src/profile/config.ts` 为准；工具行为以 `src/builtin-tools/` 为准；资源方案以 `src/resources/` 为准。文档与源码冲突时改文档。
+- 事实同步：配置字段以 `packages/koishi-plugin-ishiki/src/profile/config.ts` 为准；工具行为以 `src/builtin-tools/` 为准；资源方案以 `src/resource/` 为准。文档与源码冲突时改文档。
 - 事实同步留痕（0.0.x 接口变更）：`WakeupEngineInstance` 只剩必选 `attach(agent): () => void`（订阅 `message.appended`、自行调度、与 `agent.isIdle()` 配合调 `continue()`），`decide`/`WakeupDecision` 已删除；`runtime.deliver(event)` 退为纯摄取（`agent.send(event, { trigger: false, ifBusy: "join" })`，成功投递即返回，落盘以 `message.appended` 为准），`runtime.wake(prompt?)`；`wait` 与显式 `wake` 独立于引擎。
 - 已知待修正的源码内不一致（文档已按现状处理，改源码时同步）：`mcp.schema.json` 描述的工具名前缀（连字符）与实现（下划线）不符。
 - 新增页面记得同步对应目录的 `meta.json`。

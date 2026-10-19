@@ -2,7 +2,7 @@ import { ToolSet } from "@yesimagent/core";
 import { Awaitable, Service, type Context, type Logger, type Schema } from "koishi";
 
 import type { InstanceDomain } from "./profile/index.js";
-import type { ResourceCenter } from "./resources/center.js";
+import type { ResourceCenter } from "./resource/center.js";
 import { AgentRuntime } from "./runtime.js";
 
 export interface ExtensionContext {

@@ -4,8 +4,8 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ResourceCenter, ResourceError, RESERVED_SCHEMES } from "../src/resources/center.js";
-import { ResourceStore } from "../src/resources/store.js";
+import { ResourceCenter, ResourceError, RESERVED_SCHEMES } from "../src/resource/center.js";
+import { ResourceStore } from "../src/resource/store.js";
 
 let home: string;
 beforeEach(async () => {

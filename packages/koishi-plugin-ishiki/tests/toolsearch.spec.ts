@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SEARCH_TOOL, ToolsearchState, createSearchTool } from "../src/builtin-tools/toolsearch.js";
 import { buildCodeModeToolCatalogMessage } from "../src/builtin-tools/vendor/tool-prompt.js";
-import { ResourceCenter } from "../src/resources/center.js";
+import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime, type AgentRuntimeConfig } from "../src/runtime.js";
 import { StandardWakeupInstance } from "../src/wakeup/index.js";
 

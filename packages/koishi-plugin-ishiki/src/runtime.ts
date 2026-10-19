@@ -27,11 +27,11 @@ import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
 import type { CodemodeConfig, ToolsearchConfig } from "./profile/index.js";
-import { captureResources } from "./resources/capture.js";
-import type { ResourceCenter } from "./resources/center.js";
-import { type AttachmentConfig } from "./resources/config.js";
-import { processOutput } from "./resources/output.js";
-import { attachmentMessages, projectAttachments } from "./resources/projection.js";
+import { captureResources } from "./resource/capture.js";
+import type { ResourceCenter } from "./resource/center.js";
+import { type AttachmentConfig } from "./resource/config.js";
+import { processOutput } from "./resource/output.js";
+import { attachmentMessages, projectAttachments } from "./resource/projection.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
 

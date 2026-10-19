@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFinish } from "../src/builtin-tools/finish.js";
 import { collapse } from "../src/context/standard.engine.js";
 import type { ExtensionInstance } from "../src/extension.js";
-import { ResourceCenter } from "../src/resources/center.js";
+import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime } from "../src/runtime.js";
 import type { IshikiMessageCreated } from "../src/types.js";
 import { StandardWakeupInstance, type WakeupEngineInstance } from "../src/wakeup/index.js";

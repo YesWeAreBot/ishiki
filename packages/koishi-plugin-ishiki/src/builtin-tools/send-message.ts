@@ -2,9 +2,9 @@ import { jsonSchema, tool, type Tool } from "@yesimagent/core";
 import { Context, h, Logger, sleep } from "koishi";
 
 import { matchesChannel, type InstanceDomain, type TypingConfig } from "../profile/index.js";
-import type { ResourceCenter } from "../resources/center.js";
-import { ResourceError } from "../resources/center.js";
-import { concreteMediaType } from "../resources/media.js";
+import type { ResourceCenter } from "../resource/center.js";
+import { ResourceError } from "../resource/center.js";
+import { concreteMediaType } from "../resource/media.js";
 
 export const SEND_MESSAGE_TOOL = "send_message";
 
