@@ -60,13 +60,21 @@ const ARTIFACT_EXT = "bin";
 const MAX_FETCH_BYTES = 20 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
 
+/** Byte ceiling of the in-process copy; a read that misses goes back to disk. */
+const MAX_CACHE_BYTES = 32 * 1024 * 1024;
+
 /**
  * The one byte-and-meta store behind every runtime-scoped scheme handler.
  * Layout: `resources/assets/<id>` or `resources/artifacts/<tool>/<name>`, with `<name>.json` sidecars.
  * All writes are atomic (temp + rename); sidecar carries everything mutable.
+ * Recently read bytes are also kept in memory up to {@link MAX_CACHE_BYTES};
+ * eviction is least-recently-used, and bytes larger than the ceiling are not
+ * cached at all.
  */
 export class ResourceStore {
+  /** Insertion order is recency: a hit is re-inserted at the tail. */
   private memory = new Map<string, Uint8Array>();
+  private cachedBytes = 0;
   private inflight = new Map<string, Promise<Uint8Array>>();
 
   public constructor(public readonly home: string) {}
@@ -125,7 +133,7 @@ export class ResourceStore {
       filename: meta.filename ?? existing?.filename,
       sourceInfo: meta.sourceInfo ?? existing?.sourceInfo,
     });
-    this.memory.set(this.key(kind, namespace, name), bytes);
+    this.cacheSet(this.key(kind, namespace, name), bytes);
     return kind === "asset" ? `asset://${name}` : `artifact://${namespace}/${name}`;
   }
 
@@ -266,14 +274,38 @@ export class ResourceStore {
 
   private async cacheGet(key: string): Promise<Uint8Array | undefined> {
     const cached = this.memory.get(key);
-    if (cached) return cached;
+    if (cached !== undefined) {
+      // Recency is insertion order: a hit moves to the tail.
+      this.memory.delete(key);
+      this.memory.set(key, cached);
+      return cached;
+    }
     try {
       const bytes = await fs.readFile(path.join(this.home, "resources", key));
-      this.memory.set(key, bytes);
+      this.cacheSet(key, bytes);
       return bytes;
     } catch {
       return undefined;
     }
+  }
+
+  /** Insert or refresh one entry, evicting the least recently used until it fits. */
+  private cacheSet(key: string, bytes: Uint8Array): void {
+    const existing = this.memory.get(key);
+    if (existing !== undefined) {
+      this.memory.delete(key);
+      this.cachedBytes -= existing.byteLength;
+    }
+    if (bytes.byteLength > MAX_CACHE_BYTES) return;
+    while (this.cachedBytes + bytes.byteLength > MAX_CACHE_BYTES) {
+      const oldest = this.memory.keys().next().value;
+      if (oldest === undefined) break;
+      const evicted = this.memory.get(oldest);
+      this.memory.delete(oldest);
+      if (evicted !== undefined) this.cachedBytes -= evicted.byteLength;
+    }
+    this.memory.set(key, bytes);
+    this.cachedBytes += bytes.byteLength;
   }
 
   private key(kind: ResourceKind, namespace: string, name: string): string {

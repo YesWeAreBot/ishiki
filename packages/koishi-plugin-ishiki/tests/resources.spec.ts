@@ -144,4 +144,28 @@ describe("stored snapshots and file schemes", () => {
     await expect(center.resolve(`${url}?view=thumb`)).rejects.toMatchObject({ code: "unsupported_view" });
     expect((await store.getMeta("asset", "", url.slice(8)))?.fetchedAt).toBeUndefined();
   });
+
+  it("evicts the least recently used bytes and falls back to disk", async () => {
+    const { store, center } = assemble();
+    // Three 12 MiB artifacts overflow the 32 MiB in-process ceiling, so the
+    // first write is already evicted by the time the third lands.
+    const size = 12 * 1024 * 1024;
+    const urls: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const bytes = new Uint8Array(size);
+      bytes[size - 1] = index;
+      urls.push(await store.writeArtifact("cache", bytes, { mediaType: "image/png" }));
+    }
+    // The store's private cache is the only place a miss-then-hit transition is
+    // observable, and this test exists to pin eviction rather than content.
+    const cache = (store as unknown as { memory: Map<string, Uint8Array> }).memory;
+    const firstKey = urls[0]!.replace("artifact://", "artifacts/");
+    expect(cache.size).toBe(2);
+    expect(cache.has(firstKey)).toBe(false);
+
+    // A miss reads the evicted bytes back from disk and evicts the oldest resident.
+    expect(await center.resolve(urls[0]!)).toMatchObject({ type: "file", size });
+    expect(cache.has(firstKey)).toBe(true);
+    expect(cache.size).toBe(2);
+  }, 30000);
 });
