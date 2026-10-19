@@ -13,6 +13,8 @@ export default defineConfig({
     "**/dist/**",
     "**/lib/**",
     "**/node_modules/**",
+    // 由 packages/onebot/scripts/generate-catalog.mjs 生成，格式由脚本自己负责。
+    "packages/onebot/src/catalog/generated.ts",
     "docs/**",
   ],
   sortImports: {

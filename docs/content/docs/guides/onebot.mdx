@@ -1,0 +1,104 @@
+---
+title: 使用 OneBot 扩展
+description: 通过 OneBot v11 协议端调用群管理、文件、表情回应等协议特有动作
+---
+
+OneBot 扩展（`koishi-plugin-ishiki-onebot`）把 NapCat 与 SnowLuma 的 OneBot v11 动作目录带进对话，让 Agent 能查询并调用核心工具没有覆盖的协议能力：群管理、群文件、群相册、表情回应、历史消息、好友管理、资料修改等。
+
+普通发言仍用 `send_message`；这些工具只补足协议特有的操作。
+
+## 动作从哪来
+
+目录由 `packages/onebot/scripts/generate-catalog.mjs` 从两边的 OpenAPI 文档生成，产物 `packages/onebot/src/catalog/generated.ts` 提交进仓库，运行时不依赖参考仓库：
+
+```bash
+node packages/onebot/scripts/generate-catalog.mjs          # 重新生成
+node packages/onebot/scripts/generate-catalog.mjs --check  # 只校验
+```
+
+脚本读取 `NAPCAT_DOCS` 与 `SNOWLUMA_DOCS` 指向的仓库，默认 `D:/Codespace/references/NapCatDocs` 与 `D:/Codespace/references/SnowLumaDocs`。
+
+两边的动作集合不同：交集为 159 个，NapCat 独有 19 个，SnowLuma 独有 34 个；交集里 80 个动作的参数形状不同。目录保留这些差异：公共参数放顶层，单后端独有的参数进对应后端的变体，同一个规范名在两个后端可以对应不同的线上名（例如 `share_peer` 在 NapCat 上是 `ArkSharePeer`）。
+
+## 启用
+
+构建并链接 `packages/onebot`（包名 `koishi-plugin-ishiki-onebot`），在 `koishi.yml` 启用：
+
+```yaml
+plugins:
+  ishiki-onebot: {}
+```
+
+然后在 profile 中声明：
+
+```yaml
+extends:
+  onebot:
+    config:
+      backend: napcat   # 必填：napcat | snowluma
+      mode: read        # docs | read | write，默认 read
+```
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `backend` | 必填 | 动作集合、参数形状、只读判定都按它选择 |
+| `mode` | `read` | `docs` 只查目录；`read` 加只读执行；`write` 加全部执行 |
+| `maxInlineBytes` | 8 MiB | 资源转 `base64://` 的字节上限 |
+| `resourceBaseUrl` | Koishi 的 `selfUrl` | 协议端访问 Koishi HTTP 服务的 origin，用于需要 URL 的参数 |
+| `denyActions` | `[]` | 额外禁用的动作名或别名 |
+
+## 工具
+
+| 工具 | 模式 | 说明 |
+| --- | --- | --- |
+| `list_actions` | 全部 | 按分类列出轻量索引 |
+| `get_action` | 全部 | 单个动作的参数表、必填项、后端差异、别名 |
+| `search_actions` | 全部 | 按名称、摘要、别名、分类、参数名搜索 |
+| `list_categories` | 全部 | 分类与动作数量 |
+| `query_action` | `read` / `write` | 只执行标记为只读的动作 |
+| `invoke_action` | `write` | 执行任意动作，包含有副作用的 |
+
+模式之外还有一层执行期校验：`query_action` 永远拒绝写动作，`invoke_action` 在非 write 模式直接报错，`denyActions` 与内置禁用表在两条路径上都生效。
+
+完整目录也是资源：`onebot://actions` 是分类索引，`onebot://actions/<name>` 是单动作详情，可以用 `read` 工具翻。
+
+## 后端差异
+
+同一个动作在两个后端上的参数不一定相同。目录会把当前后端的参数放在「参数」一节，把另一个后端独有的参数放在单独一节，方便对照：
+
+| 动作 | NapCat | SnowLuma |
+| --- | --- | --- |
+| `get_group_msg_history` | `message_seq`、`reverseOrder` | `message_id`、`reverse_order` |
+| `mark_group_msg_as_read` | `group_id` | `message_id` 必填 |
+| `upload_group_file` | `file`、`name`、`folder` | 另有 `upload_file` |
+| `move_group_file` | `current_parent_directory`、`target_parent_directory` | `parent_directory`、`target_directory` |
+| `ocr_image` | 路径、URL、base64 | 只接受 http(s) URL 或已缓存的 `file_id` |
+
+只存在于一个后端的动作不会出现在另一个后端的目录里；调用它会被拒绝，并提示查看当前后端的目录。
+
+## 媒体参数
+
+动作参数里的资源 URL 按参数类型处理：
+
+- 默认可内联的参数转成 `base64://`，两个后端都接受。
+- 标记为需要 URL 的参数（SnowLuma 的 `ocr_image.image`、`send_tuwen_ark.preview_url`、`get_mini_app_ark` 的图片地址、`download_file.url`）发布到 Koishi 的 HTTP 服务，返回临时 URL 交给协议端拉取。
+- `http(s)://`、`base64://`、`data:`、`file://` 和宿主路径原样保留。
+- 文本资源、超过 `maxInlineBytes` 的字节都直接报错，不截断。
+
+临时 URL 的路由挂在 Koishi 自己的 HTTP 服务上（`@koishijs/plugin-server`），每个 profile 一条，条目十分钟过期，最多 8 条、总计 32 MiB。协议端与 Koishi 不在同一网络命名空间时，用 `resourceBaseUrl` 指向协议端能访问的地址：
+
+```yaml
+extends:
+  onebot:
+    config:
+      backend: snowluma
+      mode: read
+      resourceBaseUrl: http://host.docker.internal:5140
+```
+
+## 安全边界
+
+- `bot_exit`、`set_restart`、`send_packet`、`get_cookies`、`get_credentials`、`get_csrf_token` 默认禁用，`denyActions` 可以再加。
+- `query_action` 只接受当前后端标记为只读的动作；写操作必须走 `invoke_action`，且 profile 必须是 `write` 模式。
+- 跨频道模式（`mode: cross`）必须显式给 `account`，取值是 profile 已认领的账号；频道模式固定用该频道的账号。
+- OneBot 的业务失败（`retcode !== 0`）作为正常结果返回，模型自己读 `message`；只有传输失败才抛错。

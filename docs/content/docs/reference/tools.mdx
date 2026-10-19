@@ -114,6 +114,7 @@ read({ url: "local://notes.txt?view=meta" })
 | `skill` | `skill://<技能名>/<路径>` | workspace 扩展注册；路径缺省为 `SKILL.md`；共用 FileScheme |
 | `workspace` | `workspace:///绝对路径` | workspace 扩展注册；sandbox 下读取实际虚拟文件系统，含持久文件、临时文件与挂载点 |
 | `mcp` | `mcp://<服务器>/<资源URI>` | mcp-client 扩展注册；内部 URI 连同 query、冒号与 fragment 原样透传 |
+| `onebot` | `onebot://actions`、`onebot://actions/<动作名>` | onebot 扩展注册；前者是当前后端的分类索引，后者是单动作的参数与后端差异 |
 
 `asset` / `artifact` / `local` 是内置保留方案。FileScheme 自行解析行选择器、`?view=meta` 与续读 offset；资源中心只按 scheme 路由完整 URL。文件名中的字面冒号使用 `%3A`。native 后端的 workspace URL 使用实际宿主路径；Windows 可写为 `workspace:///d/work/report.txt`，盘符段的字面冒号也需编码为 `%3A`。
 

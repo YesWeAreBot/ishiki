@@ -1,0 +1,41 @@
+{
+  "name": "koishi-plugin-ishiki-onebot",
+  "version": "0.0.1",
+  "files": [
+    "lib"
+  ],
+  "main": "./lib/index.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js",
+      "require": "./lib/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "catalog": "node scripts/generate-catalog.mjs",
+    "catalog:check": "node scripts/generate-catalog.mjs --check"
+  },
+  "devDependencies": {
+    "@koishijs/plugin-server": "^3.2.9",
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": "workspace:*"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": "workspace:^"
+  },
+  "koishi": {
+    "description": {
+      "zh": "OneBot v11 动作目录与调用工具",
+      "en": "OneBot v11 action catalog and tools"
+    }
+  }
+}
