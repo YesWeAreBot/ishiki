@@ -7,7 +7,8 @@ const logger = { warn() {}, error() {}, info() {}, debug() {}, level: 1 } as nev
 
 function harness() {
   const wakes = vi.fn<Agent["continue"]>(() => "wake-turn");
-  const agent = { continue: wakes } as never;
+  // bind 订阅 agent.channel；单测直接驱动 onTurnStart / countInput，这里只提供订阅面。
+  const agent = { continue: wakes, channel: { subscribe: () => () => {} } } as never;
   const machine = new WaitConditionMachine(logger);
   machine.bind(agent);
   return { machine, wakes };

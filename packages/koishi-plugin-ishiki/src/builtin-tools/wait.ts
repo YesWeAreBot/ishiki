@@ -33,11 +33,27 @@ export class WaitConditionMachine {
   private duringTurn = 0;
   /** 本轮的声明；undefined 表示未声明，轮末不装任何条件。 */
   private pending?: WaitOutcome;
+  /** bind 时挂上的事实流监听：订阅由本机持有，dispose 时一并摘掉。 */
+  private detach?: () => void;
 
   constructor(private readonly logger: Logger) {}
 
   bind(agent: Agent): void {
     this.agent = agent;
+    // 声明窗口的计数从事实流出发：message.appended 只在落库后发出，join 进当前轮的
+    // 消息也走同一条路。turn.start 清掉轮内到达计数——开轮之前的消息由这一轮本身消化，
+    // 不重复结算。
+    this.detach = agent.channel.subscribe("agent", (event) => {
+      if (event.type === "turn.start") {
+        this.onTurnStart();
+        return;
+      }
+      if (event.type !== "message.appended") return;
+      const message = event.message;
+      if (message.role !== "custom") return;
+      if (message.type !== "ishiki.message.created" && message.type !== "ishiki.message.deleted") return;
+      this.countInput();
+    });
   }
 
   /**
@@ -86,6 +102,8 @@ export class WaitConditionMachine {
 
   /** 停表：runtime 停止时调用。条件不持久化，没有需要留给下一次的状态。 */
   dispose(): void {
+    this.detach?.();
+    this.detach = undefined;
     this.deactivate();
   }
 
