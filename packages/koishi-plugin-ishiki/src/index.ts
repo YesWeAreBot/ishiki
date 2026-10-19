@@ -329,9 +329,9 @@ return { text: shot[0].text, attachments: [shot[1]] }; // keep the text and carr
 After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not carry media out.
 
 {% if enableImageInput %}
-Image input is enabled. Inspect the next step's attachment message for the image or its loading reason before taking another screenshot. A URL alone does not prove the image loaded. If a quota, unsupported format or resource error prevents loading, use the stated reason; repeating read on the same image does not bypass the policy.
+Image input is enabled. Inspect the next step's attachment message for the image or its loading reason before taking another screenshot. A URL alone does not prove the image loaded. Each attachment is supplied once: after you have seen it, later requests no longer carry it, and its URL stays behind in the tool result marker or the source message body. To look at it again, call read on that URL — that is the intended way back, not a policy bypass. If a capability, format, quota or resource error states why the bytes were never supplied, that item will not reappear; the reason is final.
 {% else %}
-Image input is disabled. You receive attachment references and descriptions, not visual content. Raw image bytes remain usable by tools inside codemode; base64 text does not let you visually inspect the image. Repeating read does not enable vision.
+Image input is disabled. Attachment messages state why no visual content is supplied, and they are not repeated. Raw image bytes remain usable by tools inside codemode; base64 text does not let you visually inspect the image. Repeating read does not enable vision.
 {% endif %}
 
 ## Reading and sending resources

@@ -29,7 +29,7 @@ import { captureResources } from "../src/resource/capture.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AttachmentConfig } from "../src/resource/config.js";
 import { processOutput } from "../src/resource/output.js";
-import { attachmentMessages, projectAttachments } from "../src/resource/projection.js";
+import { attachmentMessages, projectAttachments, type AttachmentLedger } from "../src/resource/projection.js";
 import { TEXT_BUDGET } from "../src/resource/text.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { StandardWakeupInstance } from "../src/wakeup/index.js";
@@ -81,6 +81,13 @@ function attachmentsOf(value: unknown): Array<Record<string, unknown>> {
 
 function toolMessage(toolName = "probe", toolCallId = "call-1", output: ToolResultOutput = { type: "text", value: "ok" }) {
   return createToolMessage([{ type: "tool-result", toolName, toolCallId, output }]);
+}
+
+/** Inlined image parts of a projected request. */
+function imageParts(messages: readonly AgentMessage[]) {
+  return messages.flatMap((message) =>
+    message.role === "user" && Array.isArray(message.content) ? message.content.filter((part) => part.type === "file") : [],
+  );
 }
 
 async function attachmentFor(name: string, callId: string) {
@@ -399,32 +406,50 @@ describe("request projection", () => {
     expect(attachmentMessages([event, platformAttachment, deleted])).not.toContain(platformAttachment);
   });
 
-  it("allocates quotas newest-first while keeping message order", async () => {
+  it("drains capacity oldest-first, leaves the rest waiting, and renders each item once", async () => {
     const first = (await process({ attachments: [imageBlock()] }, undefined, "a")).items[0]!;
     const second = (await process({ attachments: [imageBlock()] }, undefined, "b")).items[0]!;
     const messages = [
       createCustomMessage("ishiki.attachment", { source: "tool", toolName: "a", toolCallId: "1", items: [first] }),
       createCustomMessage("ishiki.attachment", { source: "tool", toolName: "b", toolCallId: "2", items: [second] }),
     ];
-    const result = await projectAttachments(messages, center, { imageInput: true, maxImageCount: 1 });
-    const imageParts = result.flatMap((m) => (m.role === "user" && Array.isArray(m.content) ? m.content.filter((p) => p.type === "file") : []));
-    expect(imageParts).toHaveLength(1);
-    // the newest message wins the quota; the older one is described only
-    expect(JSON.stringify(result[0])).toContain("count limit");
-    expect(JSON.stringify(result[1])).toContain("include: original bytes");
+    const ledger: AttachmentLedger = { slots: new Map() };
+    const result = await projectAttachments(messages, center, { imageInput: true, maxImageCount: 1 }, ledger);
+    // The older item takes the only slot; the newer one waits without a message.
+    expect(result).toHaveLength(1);
+    expect(imageParts(result)).toHaveLength(1);
     expect(JSON.stringify(result)).not.toContain(PNG);
-    // replays recompute from scratch
-    const replay = await projectAttachments(messages, center, { imageInput: true, maxImageCount: 2 });
-    expect(replay.flatMap((m) => (m.role === "user" && Array.isArray(m.content) ? m.content.filter((p) => p.type === "file") : []))).toHaveLength(2);
+
+    // The next request has capacity again: the waiting item is delivered, the spent one is gone.
+    const next = await projectAttachments(messages, center, { imageInput: true, maxImageCount: 1 }, ledger);
+    expect(next).toHaveLength(1);
+    expect(JSON.stringify(next)).toContain("tool b, call 2");
+    expect(imageParts(next)).toHaveLength(1);
+
+    // Third request: nothing is left to say.
+    expect(await projectAttachments(messages, center, { imageInput: true, maxImageCount: 1 }, ledger)).toEqual([]);
   });
 
-  it("describes policy-rejected images without base64", async () => {
+  it("renders an item at most maxImageRenders times", async () => {
+    const item = (await process({ attachments: [imageBlock()] }, undefined, "a")).items[0]!;
+    const messages = [createCustomMessage("ishiki.attachment", { source: "tool", toolName: "a", toolCallId: "1", items: [item] })];
+    const ledger: AttachmentLedger = { slots: new Map() };
+    const policy = { imageInput: true, maxImageRenders: 2 };
+    expect(imageParts(await projectAttachments(messages, center, policy, ledger))).toHaveLength(1);
+    expect(imageParts(await projectAttachments(messages, center, policy, ledger))).toHaveLength(1);
+    expect(await projectAttachments(messages, center, policy, ledger)).toEqual([]);
+  });
+
+  it("states a terminal rejection once and never repeats it", async () => {
     const item = (await process({ attachments: [imageBlock()] }, undefined, "x")).items[0]!;
     const messages = [createCustomMessage("ishiki.attachment", { source: "tool", toolName: "x", toolCallId: "1", items: [item] })];
     for (const policy of [{ imageInput: false }, { imageInput: true, maxImageBytes: 1 }, { imageInput: true, maxTotalImageBytes: 1 }]) {
-      const result = await projectAttachments(messages, center, policy);
-      expect(result.flatMap((m) => (m.role === "user" && Array.isArray(m.content) ? m.content.filter((p) => p.type === "file") : []))).toHaveLength(0);
+      const ledger: AttachmentLedger = { slots: new Map() };
+      const result = await projectAttachments(messages, center, policy, ledger);
+      expect(imageParts(result)).toHaveLength(0);
       expect(JSON.stringify(result)).toContain(item.url);
+      expect(JSON.stringify(result)).toContain("not supplied");
+      expect(await projectAttachments(messages, center, policy, ledger)).toEqual([]);
     }
     const missing = createCustomMessage("ishiki.attachment", {
       source: "tool",
@@ -432,8 +457,8 @@ describe("request projection", () => {
       toolCallId: "2",
       items: [{ url: "artifact://x/missing", mediaType: "image/png" }],
     });
-    const absent = await projectAttachments([missing], center, { imageInput: true });
-    expect(JSON.stringify(absent)).toContain("resource unavailable");
+    const ledger: AttachmentLedger = { slots: new Map() };
+    expect(JSON.stringify(await projectAttachments([missing], center, { imageInput: true }, ledger))).toContain("resource unavailable");
   });
 
   it("keeps attachments in standard and v3 context engines", async () => {
@@ -840,7 +865,8 @@ describe("real Agent / codemode / provider smoke", () => {
     const replayed = await probe.run("replay", "m2");
     expect(replayed.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toHaveLength(2);
     expect(await probe.resources.store.names("artifact", "Screenshot")).toHaveLength(1);
-    expect(imageUrls(probe.bodies[2]!)).toHaveLength(1);
+    // Both attachments already spent their single render in the first turn.
+    expect(imageUrls(probe.bodies[2]!)).toHaveLength(0);
     // Context trimming cannot revive an attachment whose successful result was removed.
     const agent = await probe.agent;
     const snapshot = await agent.storage.read();

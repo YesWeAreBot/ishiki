@@ -31,7 +31,7 @@ import { captureResources } from "./resource/capture.js";
 import type { ResourceCenter } from "./resource/center.js";
 import { type AttachmentConfig } from "./resource/config.js";
 import { processOutput } from "./resource/output.js";
-import { attachmentMessages, projectAttachments } from "./resource/projection.js";
+import { attachmentMessages, projectAttachments, type AttachmentLedger } from "./resource/projection.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
 
@@ -90,6 +90,7 @@ export class AgentRuntime {
   private readonly toolCallers: ToolCallers = {};
   private readonly initTools: ToolSet;
   private readonly condition: WaitConditionMachine;
+  private readonly attachments: AttachmentLedger = { slots: new Map() };
   private readonly disposeExtensions: Array<() => void> = [];
   private readonly config: AgentRuntimeConfig;
 
@@ -145,7 +146,7 @@ export class AgentRuntime {
           transformMessages: async (messages, options) => {
             const associated = attachmentMessages(messages);
             const rendered = (await this.context.renderMessages?.(associated, options)) ?? associated;
-            return projectAttachments(rendered, this.resources, this.config.attachment);
+            return projectAttachments(rendered, this.resources, this.config.attachment, this.attachments);
           },
           toModelMessages: (message: unknown) => {
             if (message === null || typeof message !== "object" || !("role" in message) || message.role !== "custom") return undefined;

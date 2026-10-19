@@ -12,6 +12,7 @@ Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能�
 ```yaml
 attachment:
   imageInput: true           # 本 profile 的能力上限开关
+  maxImageRenders: 1         # 每张图一生最多内联几次，默认 1
   maxImageBytes: 5242880     # 单图上限，默认 5 MiB
   maxTotalImageBytes: 10485760   # 整次请求所有图累计，默认 10 MiB
   maxImageCount: 4           # 单次请求图片张数上限，默认 4
@@ -22,12 +23,15 @@ attachment:
 profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml` 里声明 `input: [text, image]`。只要有任何一个候选没声明，profile 装配即失败并报 `profile imageInput requires declared image input on every candidate of …`。这是故意的——故障转移不能把请求落到看不见图的模型上。
 </Callout>
 
-配额是**每次请求一份预算**，平台图片和工具图片共用，按「最新优先」分配：历史很久的图会被新图挤出预算，旧图保留引用与描述，不保留像素。
+图片被消费一次就丢弃：`maxImageRenders`（默认 1）规定一张图一生最多被内联几次，达到上限后它不再进入任何请求。轮到但容量不足的图不消耗额度，按到达顺序在后续请求里内联，因此一次涌入的多张图不会饿死较旧的几张。
+
+描述行只在判定终止时出现一次：能力关闭、格式不支持、单图超限、读取失败、同一请求内已有相同媒体。之后该附件消息不再出现；URL 仍留在工具结果的 `[attachment: …]` 标记或源消息体里。
 
 几个明确的行为边界：
 
-- 图片不自动缩放；超过任一配额的图保留 URL 与原因说明，不加载。
-- 加载失败（配额、格式不支持、源失效）时，下一条附件消息会带原因，重试同样的 read 不会绕过。
+- 图片不自动缩放；超过任一配额的图不再内联，原因说明只发一次。
+- 抓取失败（源失效、超时）按已消费处理，不会在每条后续请求里重试。
+- 内联过的图想再看，用 `read` 读它的 URL：这会生成新的附件记录，额度重新开始。
 - 即使 `imageInput: false`，模型仍可在 codemode 里把图片字节传给其他工具（比如交给 OCR 工具），只是它自己「看不见」。
 
 ## 让 bot 发图
@@ -68,7 +72,8 @@ profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml`
 
 - 入站图片在到达时注册为 `asset://<id>` 资源，随后以一条「附件消息」进入对话；原消息被撤回时，附件消息自动从历史投影中消失。
 - 工具返回的媒体统一归档为 `artifact://<tool>/<name>`，模型看到的是占位标记 `[attachment: artifact://…; image/png; …]`，真实字节在资源里。
-- 模型想回看某张图，用 `read` 工具按 URL 读（`imageInput` 开启时投为图像，关闭时得到描述与元数据）。
+- 附件消息只在还有东西要交付时出现：要内联的字节，或者一次性的失败原因。交付完就整条退出请求，源消息体与工具结果里的 URL 仍在。
+- 模型想回看某张图，用 `read` 工具按 URL 读（`imageInput` 开启时投为图像，关闭时得到描述与元数据），这会生成新的附件记录。
 
 ## 排错
 
@@ -77,4 +82,4 @@ profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml`
 | 装配报 `requires declared image input` | 模型/failover 候选未声明 `input: [text, image]` | 补全 models.yaml 的模型声明 |
 | 图发出去是空的或没发出去 | `src` 不在白名单协议、资源已失效 | 用工具结果里的原样 URL |
 | bot 说「看不见图」 | `imageInput` 关着；或配额把图挡了 | 开启开关；调大配额；看附件消息里的原因 |
-| 历史里的图「不见了」 | 被 newer 附件挤出请求预算 | 正常行为；需要时让 bot 重新 read 对应 URL |
+| 历史里的图「不见了」 | 图片已消费完它的渲染额度 | 正常行为；需要时让 bot 重新 read 对应 URL |

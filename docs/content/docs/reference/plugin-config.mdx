@@ -266,6 +266,11 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
       default: 'false',
       description: '能力上限开关；开启要求模型/组内候选全部声明 input: [text, image]',
     },
+    maxImageRenders: {
+      type: 'number',
+      default: '1',
+      description: '每张图一生最多内联的请求次数；达到后不再进入请求',
+    },
     maxImageBytes: {
       type: 'number',
       default: '5 MiB',
@@ -289,7 +294,7 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
   }}
 />
 
-配额为每请求一份，平台与工具附件共用，最新优先分配。
+`maxImageRenders` 是每张图的一生额度；其余配额是每请求一份，平台与工具附件共用。容量不足的图不消耗额度，按到达顺序在后续请求里内联。终止性判定（能力关闭、格式不支持、单图超限、读取失败、同请求重复媒体）只输出一次原因，之后该附件消息不再出现。
 
 ## 引擎配置段
 

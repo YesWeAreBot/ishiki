@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
+- `attachment.maxImageRenders`: each image is inlined at most that many times in its life (default once); after that the attachment leaves the request, and its URL stays recoverable through `read`.
 - Incremental tool catalogs with `catalogMode`, `fullSnapshotEvery`, and `knownIndex`; incremental updates send only new, changed, or removed tools, with catalog-version recovery after context compaction.
 - Shared output-type aliases in catalogs, so repeated MCP return shapes are declared once.
 - `wait` tool for agent-declared wake conditions.
@@ -23,9 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Thinking via `inner_thoughts`, with a degradation retry on failed model calls.
 - Workspace context budgeting driven from the profile (`workspaceTokenLimit`, `charsPerToken`).
 - Initial plugin surface: profile configuration with validation and channel rules, scene management with frame rendering, session handlers for message creation and deletion, focus switching, notifications, self message events, and typing delay configuration.
+- `attachment.maxImageRenders`: each image is inlined at most that many times in its life (default once); after that the attachment leaves the request, and its URL stays recoverable through `read`
 
 ### Changed
-
+- Request projection spends a lifetime render quota per image and drains request capacity oldest-first; terminal rejections are stated once, and delivered attachments then leave the request.
 - Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order.
 - Resource handlers receive complete URLs. File-backed schemes share `FileScheme`; `read` returns structured text or base64 media, and codemode declares final media through `attachments`.
 - Ordinary oversized results become artifact snapshots; file pages continue at their source with lossless offsets, including Unicode and long single lines. Existing SDK execution limits remain unchanged.
@@ -43,9 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ordinary oversized results become artifact snapshots; file pages continue at their source with lossless offsets, including Unicode and long single lines. Existing SDK execution limits remain unchanged
 - Search matches return a name and a short hint; the next catalog update carries their full signatures
 - Codemode and toolsearch prompt sections explain catalog updates and when to re-inspect attachments
+- Request projection spends a lifetime render quota per image and drains request capacity oldest-first; terminal rejections are stated once, and delivered attachments then leave the request
 
 ### Removed
-
 - The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types.
 - The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration.
 - `think` tool, succeeded by `inner_thoughts`.
@@ -54,7 +55,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types
 
 ### Fixed
-
 - Declared `msgs` wake windows count committed inbound input again: the wait machine subscribes to `message.appended` and `turn.start` to arm, count, and fire them.
 - Platform attachments preserve document order when asynchronous registrations complete out of order.
 - Live media references are snapshotted before attachment submission, and unresolved declared media reports its read error without a fabricated reference.
