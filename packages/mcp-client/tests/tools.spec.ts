@@ -1,6 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import type { Logger } from "koishi";
+import { ToolConflictError } from "koishi-plugin-ishiki";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { ProfilePool } from "../src/pool.js";
 import { McpConnection } from "../src/server.js";
 import { BLOCKS, NOTES, PNG, startMcpServer, type McpFixture } from "./fixture.js";
 
@@ -40,7 +46,7 @@ describe("MCP tools", () => {
     try {
       const tool = connection.tools.t_look;
       expect(tool).toBeDefined();
-      expect(Object.keys(connection.tools)).toEqual(["t_look"]);
+      expect(Object.keys(connection.tools)).toEqual(["t_look", "t_peek"]);
 
       const output = await tool!.execute!({ what: "pic" }, { toolCallId: "c1", messages: [] });
       // execute 交回平台原始块：不替换媒体、不截断、不生成任何引用。
@@ -68,9 +74,86 @@ describe("MCP tools", () => {
   it("falls back to the tool index when a server has no instructions", async () => {
     const connection = await McpConnection.connect("t", { type: "http", url: fixture.url, headers: {}, enabled: true, instructions: true }, silent);
     try {
-      expect(connection.summary).toBe("### t\nTools: t_look");
+      expect(connection.summary).toBe("### t\nTools: t_look, t_peek");
     } finally {
       await connection.close();
+    }
+  });
+
+  it("drops the server name prefix when prefix is false", async () => {
+    const connection = await McpConnection.connect(
+      "t",
+      { type: "http", url: fixture.url, headers: {}, enabled: true, instructions: true, prefix: false },
+      silent,
+    );
+    try {
+      expect(Object.keys(connection.tools)).toEqual(["look", "peek"]);
+      expect(connection.summary).toBe("### t\nTools: look, peek");
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("uses a custom string prefix", async () => {
+    const connection = await McpConnection.connect(
+      "t",
+      { type: "http", url: fixture.url, headers: {}, enabled: true, instructions: true, prefix: "mcp" },
+      silent,
+    );
+    try {
+      expect(Object.keys(connection.tools)).toEqual(["mcp_look", "mcp_peek"]);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("denies tools by their raw names before prefixing", async () => {
+    const connection = await McpConnection.connect(
+      "t",
+      { type: "http", url: fixture.url, headers: {}, enabled: true, instructions: true, prefix: "mcp", deny: ["peek"] },
+      silent,
+    );
+    try {
+      expect(Object.keys(connection.tools)).toEqual(["mcp_look"]);
+      expect(connection.summary).toBe("### t\nTools: mcp_look");
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("applies prefix and deny from a profile mcp.json", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ishiki-mcp-tools-"));
+    await writeFile(path.join(directory, "mcp.json"), JSON.stringify({ mcpServers: { t: { type: "http", url: fixture.url, prefix: "mcp", deny: ["peek"] } } }));
+    const pool = new ProfilePool(directory, path.join(directory, "fallback.json"), silent);
+    try {
+      await pool.connecting;
+      expect(Object.keys(pool.tools())).toEqual(["mcp_look"]);
+    } finally {
+      await pool.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects identical exposed names from different servers", async () => {
+    const second = await startMcpServer();
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ishiki-mcp-tools-"));
+    await writeFile(
+      path.join(directory, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          a: { type: "http", url: fixture.url, prefix: false },
+          b: { type: "http", url: second.url, prefix: false },
+        },
+      }),
+    );
+    const pool = new ProfilePool(directory, path.join(directory, "fallback.json"), silent);
+    try {
+      await pool.connecting;
+      expect(() => pool.tools()).toThrow(ToolConflictError);
+    } finally {
+      await pool.close();
+      await second.close();
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
@@ -81,7 +164,7 @@ describe("MCP tools", () => {
       silent,
     );
     try {
-      expect(withIndex.summary).toBe("### t\nTools: t_look");
+      expect(withIndex.summary).toBe("### t\nTools: t_look, t_peek");
     } finally {
       await withIndex.close();
     }

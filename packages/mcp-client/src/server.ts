@@ -51,7 +51,8 @@ export class McpConnection {
     const tools: ToolSet = {};
     const used = new Set<string>();
     for (const declared of listed.tools) {
-      const exposed = uniqueName(`${this.name}_${safeName(declared.name)}`, used);
+      if (this.server.deny?.includes(declared.name)) continue;
+      const exposed = uniqueName(this.expose(declared.name), used);
       tools[exposed] = tool({
         description: declared.description,
         inputSchema: jsonSchema(declared.inputSchema as Record<string, unknown>),
@@ -75,6 +76,13 @@ export class McpConnection {
     const names = Object.keys(this.tools);
     if (this.server.toolIndex !== false && names.length > 0) lines.push(`Tools: ${names.join(", ")}`);
     this.summary = lines.length > 1 ? lines.join("\n") : undefined;
+  }
+
+  private expose(toolName: string): string {
+    const name = safeName(toolName);
+    const prefix = this.server.prefix ?? true;
+    if (prefix === false || prefix === "") return name;
+    return `${safeName(prefix === true ? this.name : prefix)}_${name}`;
   }
 
   private async call(toolName: string, params: unknown): Promise<McpBlock[]> {

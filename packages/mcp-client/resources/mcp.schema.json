@@ -12,7 +12,7 @@
     },
     "mcpServers": {
       "type": "object",
-      "description": "服务器名到配置的映射。名字会作为工具名前缀（<服务器名>-<工具名>）。",
+      "description": "服务器名到配置的映射。默认把服务器名作为工具名前缀（<服务器名>_<工具名>），可用 prefix 改写。",
       "propertyNames": {
         "pattern": "^[A-Za-z0-9_-]{1,64}$"
       },
@@ -56,6 +56,18 @@
           "type": "boolean",
           "default": true,
           "description": "是否在系统提示词里列出该服务器的工具名。false 只关工具名列表，不影响工具可见性。"
+        },
+        "prefix": {
+          "oneOf": [{ "type": "boolean" }, { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$" }],
+          "default": true,
+          "description": "工具名前缀：true 用服务器名（默认），false 不加前缀，字符串用自定义前缀。"
+        },
+        "deny": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "default": [],
+          "description": "排除名单：按服务器暴露的原始工具名排除，不按加前缀后的名字匹配。"
         }
       }
     },
@@ -71,6 +83,8 @@
             "timeout": {},
             "instructions": {},
             "toolIndex": {},
+            "prefix": {},
+            "deny": {},
             "type": { "type": "string", "enum": ["stdio"], "default": "stdio" },
             "command": { "type": "string", "minLength": 1, "description": "要拉起的可执行文件名。" },
             "args": { "type": "array", "items": { "type": "string" }, "description": "传给该进程的命令行参数。" },
@@ -97,6 +111,8 @@
             "timeout": {},
             "instructions": {},
             "toolIndex": {},
+            "prefix": {},
+            "deny": {},
             "type": { "type": "string", "enum": ["http"] },
             "url": { "type": "string", "minLength": 1, "description": "MCP 端点地址。" },
             "headers": {
@@ -121,6 +137,8 @@
             "timeout": {},
             "instructions": {},
             "toolIndex": {},
+            "prefix": {},
+            "deny": {},
             "type": { "type": "string", "enum": ["sse"] },
             "url": { "type": "string", "minLength": 1, "description": "MCP 端点地址。" },
             "headers": {

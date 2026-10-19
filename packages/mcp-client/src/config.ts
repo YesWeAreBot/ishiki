@@ -5,6 +5,8 @@ const ServerBase = Schema.object({
   timeout: Schema.number(),
   instructions: Schema.boolean().default(true),
   toolIndex: Schema.boolean().default(true),
+  prefix: Schema.union([Schema.boolean(), Schema.string()]).description("工具名前缀：true 用服务器名，false 不加前缀，字符串用自定义前缀").default(true),
+  deny: Schema.array(Schema.string()).description("按服务器暴露的原始工具名排除工具").default([]),
 });
 
 export interface McpStdioServer {
@@ -17,6 +19,8 @@ export interface McpStdioServer {
   timeout?: number;
   instructions: boolean;
   toolIndex?: boolean;
+  prefix?: boolean | string;
+  deny?: string[];
 }
 
 export interface McpHttpServer {
@@ -27,6 +31,8 @@ export interface McpHttpServer {
   timeout?: number;
   instructions: boolean;
   toolIndex?: boolean;
+  prefix?: boolean | string;
+  deny?: string[];
 }
 
 export interface McpSseServer {
@@ -37,6 +43,8 @@ export interface McpSseServer {
   timeout?: number;
   instructions: boolean;
   toolIndex?: boolean;
+  prefix?: boolean | string;
+  deny?: string[];
 }
 
 export type McpServer = McpStdioServer | McpHttpServer | McpSseServer;

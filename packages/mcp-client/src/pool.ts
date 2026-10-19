@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Logger } from "koishi";
-import type { ToolSet } from "koishi-plugin-ishiki";
+import { ToolConflictError, type ToolSet } from "koishi-plugin-ishiki";
 
 import { McpConfig, ServerConfig, type McpServer } from "./config.js";
 import { McpConnection } from "./server.js";
@@ -61,7 +61,14 @@ export class ProfilePool {
   }
 
   public tools(): ToolSet {
-    return Object.assign({}, ...this.connections.map((connection) => connection.tools));
+    const merged: ToolSet = {};
+    for (const connection of this.connections) {
+      for (const [name, tool] of Object.entries(connection.tools)) {
+        if (name in merged) throw new ToolConflictError(name);
+        merged[name] = tool;
+      }
+    }
+    return merged;
   }
 
   public instructions(): string | undefined {

@@ -38,7 +38,10 @@ export async function startMcpServer(): Promise<McpFixture> {
       void server.close();
     });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [{ name: "look", description: "看一眼", inputSchema: { type: "object", properties: { what: { type: "string" } } } }],
+      tools: [
+        { name: "look", description: "看一眼", inputSchema: { type: "object", properties: { what: { type: "string" } } } },
+        { name: "peek", description: "瞄一眼", inputSchema: { type: "object", properties: {} } },
+      ],
     }));
     server.setRequestHandler(CallToolRequestSchema, async () => ({ content: BLOCKS }));
     server.setRequestHandler(ReadResourceRequestSchema, async (input): Promise<ReadResourceResult> => {

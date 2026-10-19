@@ -93,14 +93,11 @@ profile 缺少某个已声明的扩展服务时会停在等待态并报 `missing
 
 ## 工具如何出现在模型面前
 
-- **命名**：`<服务器名>_<工具名>`，如服务器 `windows-mcp` 的工具 `Screenshot` 暴露为 `windows-mcp_Screenshot`。
+- **命名**：默认 `<服务器名>_<工具名>`，如服务器 `windows-mcp` 的工具 `Screenshot` 暴露为 `windows-mcp_Screenshot`。服务器配置里的 `prefix` 可以改写：`false` 直接使用原始工具名，字符串则替换服务器名（`"prefix": "win"` → `win_Screenshot`）。
+- **排除**：服务器配置里的 `deny` 按原始工具名排除，如 `"deny": ["Screenshot"]`；匹配发生在加前缀之前。
 - **发现**：连接成功后立即拉取工具列表；服务器运行中变更工具列表（如动态开关能力）会自动刷新。
-- **冲突**：工具名与内置工具或其它扩展重名会让 profile 装配失败（`ToolConflictError`），重名服务器需改名。
+- **冲突**：工具名与内置工具、其它扩展或另一台服务器重名会让回合失败（`ToolConflictError`）；去掉前缀或共用自定义前缀时要确认各服务器的原始工具名不重复。
 - 每个工具的输出经统一的输出包装器处理：媒体归档为 `artifact`，超长文本截断，规则见[参考：模型工具](/docs/reference/tools)。
-
-<Callout type="warn" title="文档与实现的一处不一致">
-包内 JSON Schema 的描述文字写的是连字符 `-`，与实际实现的下划线 `_` 不一致，以下划线为准。
-</Callout>
 
 ## 验证与排错
 
