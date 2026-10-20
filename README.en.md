@@ -1,12 +1,13 @@
-# Ishiki · 意識
-
-**Give consciousness a form. Let every Agent find its own character.**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/public/logo.en-dark.svg">
+  <img src="docs/public/logo.en.svg" alt="Ishiki: A runtime for consciousness. A home for personality." width="740">
+</picture>
 
 [中文](README.md) · [Documentation](https://ishiki.js.org/docs/) · [Quick start](https://ishiki.js.org/docs/tutorial/quickstart/) · [Core runtime](packages/koishi-plugin-ishiki/README.en.md)
 
 Ishiki is a **Bot development meta-framework for building autonomous Agents**. It separates context construction, model interaction, and execution timing into three replaceable engine families, alongside programmable tool use, on-demand discovery, unified resource access, and multi-instance operation.
 
-The name comes from the Japanese word _ishiki_ (意識), meaning consciousness or awareness. We want AI to develop a sense of presence through ongoing memory, action, and interaction. Ishiki provides components and concepts that give developers room to concentrate on their creations.
+The name comes from the Japanese word _ishiki_ (意識), meaning consciousness or awareness. We want AI to develop a sense of presence through ongoing memory, action, and interaction. Ishiki provides components and concepts that give developers room to concentrate on their creations. Give consciousness a form. Let every Agent find its own character.
 
 ## Shape your Agent
 

@@ -1,12 +1,13 @@
-# Ishiki · 意识
-
-**为意识赋形，让 Agent 自成一格。**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/public/logo-dark.svg">
+  <img src="docs/public/logo.svg" alt="Ishiki：意识的运行时，人格的栖息地" width="740">
+</picture>
 
 [文档](https://ishiki.js.org/docs/) · [快速开始](https://ishiki.js.org/docs/tutorial/quickstart/) · [核心运行时](packages/koishi-plugin-ishiki/README.md) · [English](README.en.md)
 
 Ishiki 是一个用于构建自主 Agent 的 **Bot 开发元框架**。它将上下文组织、模型交互与运行节律抽象为三组可替换引擎，并提供工具编程、按需发现、统一资源访问与多实例运行能力，让开发者自由塑造自己的 Agent。
 
-名字取自日语「意識（いしき）」，意为意识、自觉。我们期待 AI 在持续的记忆、行动与交互中，逐渐拥有自己的存在方式；Ishiki 为这样的创作提供组件与概念，让开发者能够把精力放在作品本身。
+名字取自日语「意識（いしき）」，意为意识、自觉。我们期待 AI 在持续的记忆、行动与交互中，逐渐拥有自己的存在方式；Ishiki 为这样的创作提供组件与概念，让开发者能够把精力放在作品本身。为意识赋形，让 Agent 自成一格。
 
 ## 塑造你的 Agent
 

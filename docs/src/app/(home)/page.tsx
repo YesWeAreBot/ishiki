@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { appName } from "@/lib/shared";
 
-const slogan = "为意识赋形，让 Agent 自成一格。";
+const slogan = "意识的运行时，人格的栖息地";
 
 const sections = [
   {
@@ -30,9 +30,11 @@ const sections = [
 export default function HomePage() {
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col items-center justify-center gap-12 px-6 py-16 text-center">
-      <div className="space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">{appName} · 意识</h1>
-        <p className="text-lg font-medium">{slogan}</p>
+      <div className="w-full space-y-4">
+        <h1>
+          <img src="/logo.svg" width={740} height={240} alt={`${appName} · ${slogan}`} className="mx-auto h-auto w-full max-w-[740px] dark:hidden" />
+          <img src="/logo-dark.svg" width={740} height={240} alt={`${appName} · ${slogan}`} className="mx-auto hidden h-auto w-full max-w-[740px] dark:block" />
+        </h1>
         <p className="mx-auto max-w-2xl text-lg text-fd-muted-foreground">
           用于构建自主 Agent 的 Bot 开发元框架。通过三族可替换引擎塑造上下文、模型交互与运行节律，使用工具编程、统一资源与多实例部署拓展能力。
         </p>

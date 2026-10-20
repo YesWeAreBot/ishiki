@@ -1,6 +1,9 @@
 # Ishiki 核心运行时
 
-**为意识赋形，让 Agent 自成一格。**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/public/logo-dark.svg">
+  <img src="../../docs/public/logo.svg" alt="Ishiki：意识的运行时，人格的栖息地" width="740">
+</picture>
 
 [项目首页](../../README.md) · [完整文档](https://ishiki.js.org/docs/) · [扩展 API](https://ishiki.js.org/docs/reference/api/) · [English](README.en.md)
 

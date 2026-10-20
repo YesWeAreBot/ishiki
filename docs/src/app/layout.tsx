@@ -13,6 +13,12 @@ const inter = Inter({
 export const metadata: Metadata = {
   // 静态导出的 OG 图等绝对地址以此为准，与部署域名保持一致
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://ishiki.js.org"),
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml", media: "(prefers-color-scheme: light)" },
+      { url: "/icon-dark.svg", type: "image/svg+xml", media: "(prefers-color-scheme: dark)" },
+    ],
+  },
   title: {
     default: appName,
     template: `%s | ${appName}`,

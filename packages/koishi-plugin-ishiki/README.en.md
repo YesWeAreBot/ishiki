@@ -1,6 +1,9 @@
 # Ishiki Core Runtime
 
-**Give consciousness a form. Let every Agent find its own character.**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/public/logo.en-dark.svg">
+  <img src="../../docs/public/logo.en.svg" alt="Ishiki: A runtime for consciousness. A home for personality." width="740">
+</picture>
 
 [中文](README.md) · [Project](../../README.en.md) · [Documentation](https://ishiki.js.org/docs/) · [Extension API](https://ishiki.js.org/docs/reference/api/)
 

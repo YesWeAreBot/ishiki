@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 240" width="740" height="240" role="img" aria-labelledby="logo-title logo-desc" style="--c1:#66CCFF;--c2:#FB8190;--fg:#F2F5FA;--muted:#B2BDCC;--accent:#F2F5FA">
+  <title id="logo-title">Ishiki</title>
+  <desc id="logo-desc">意识的运行时，人格的栖息地</desc>
+  <g fill="none" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M132 44 L60 116 Q56 120 60 124 L104 168 M120 184 L132 196" stroke="var(--c1)"/>
+    <path d="M92 44 L104 56 M120 72 L164 116 Q168 120 164 124 L92 196" stroke="var(--c2)"/>
+  </g>
+  <circle cx="112" cy="120" r="8" fill="var(--accent)"/>
+  <g transform="translate(252 62)" fill="none" stroke="var(--fg)" stroke-width="8" stroke-linecap="square" stroke-linejoin="round">
+    <path d="M0 0 H32 M16 0 V80 M0 80 H32"/>
+    <path d="M120 0 H76 Q64 0 64 12 V28 Q64 40 76 40 H108 Q120 40 120 52 V68 Q120 80 108 80 H64"/>
+    <path d="M152 0 V80 M208 0 V80 M152 40 H208"/>
+    <path d="M240 0 H272 M256 0 V80 M240 80 H272"/>
+    <path d="M304 0 V80 M360 0 L304 40 L360 80"/>
+    <path d="M392 0 H424 M408 0 V80 M392 80 H424"/>
+  </g>
+  <text x="252" y="188" fill="var(--muted)" font-family="Noto Sans SC, Microsoft YaHei, sans-serif" font-size="22" letter-spacing="1">意识的运行时，人格的栖息地</text>
+</svg>
