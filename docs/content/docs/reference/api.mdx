@@ -3,80 +3,122 @@ title: 扩展 API 参考
 description: 为 Ishiki 编写扩展、引擎与资源方案的接口契约
 ---
 
-本文面向二次开发者：Ishiki 的可编程面由三部分组成——扩展（Extension）、引擎（Context/Wakeup/Toolcall Engine）、资源方案（SchemeHandler）。全部接口由主包 `koishi-plugin-ishiki` 导出（源码：`packages/koishi-plugin-ishiki/src/`）。
+本文面向二次开发者。Ishiki 的可编程面包括扩展（Extension）、三族引擎（Context / Wakeup / Toolcall Engine）与资源方案（SchemeHandler），接口由主包 `koishi-plugin-ishiki` 导出，源码位于 `packages/koishi-plugin-ishiki/src/`。
 
 ## 扩展：贡献工具与提示词
 
-扩展是一个继承 `Extension` 的 Koishi Service，按 profile 的 `extends.<包名>` 被装配。基类契约（`src/extension.ts`）：
+扩展是一个继承 `Extension` 的 Koishi Service，服务名为 `ishiki.ext.<名字>`。profile 的 `extends.<名字>` 决定是否启用，`enable: false` 的条目在解析时丢弃。
 
 ```ts
-import { Extension, type ExtensionContext, type ExtensionInstance } from "koishi-plugin-ishiki";
-import { Service, type Context, type Schema } from "koishi";
+import { appendFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Logger, Schema, Service } from "koishi";
+import type { Context } from "koishi";
+import { Extension, jsonSchema, tool } from "koishi-plugin-ishiki";
+import type { ExtensionContext, ExtensionInstance, ToolSet } from "koishi-plugin-ishiki";
 
-export default class MyExt extends Extension<MyConfig> {
-  static inject = ["ishiki"];
+export interface NoteSettings {
+  prefix: string;
+}
 
-  // 可选：实例配置的 Schema（来自 profile 的 extends.<名>.config）。
-  // 缺省时配置原样透传。注意这不是插件自身的 Koishi 配置。
-  public Schema?: Schema<MyConfig>;
+const NoteSettings: Schema<NoteSettings> = Schema.object({
+  prefix: Schema.string().default("note"),
+});
 
-  constructor(ctx: Context, config: MyExt.Config) {
-    super(ctx, "my-ext");                 // 注册为 ishiki.ext.my-ext 服务
-    ctx.ishiki;                            // 主插件服务（dataPath 等）
+class NoteExtension extends Extension<NoteSettings> {
+  public readonly Schema = NoteSettings;
+
+  public constructor(ctx: Context, config: NoteExtension.Config) {
+    super(ctx, "note");
+    this.logger.level = config.logLevel;
   }
 
-  // 每个 runtime 实例装配期调用一次；返回 undefined 表示该实例不贡献
-  public [Service.invoke](config: MyConfig, context: ExtensionContext): ExtensionInstance {
+  public [Service.invoke](config: NoteSettings, context: ExtensionContext): ExtensionInstance {
     return {
-      extendInstructions?: () => string | Promise<string>,      // 追加系统提示词
-      extendTools?: () => ToolSet | Promise<ToolSet>,            // 追加工具
-      attach?: (handle: AgentRuntime) => (() => void) | void | Promise<void>,  // runtime 装配完成后调用一次，返回值作为释放函数
-      stop?: () => void | Promise<void>,                         // runtime 停止时清理
+      extendInstructions: () => "Use note_write to record durable notes.",
+      extendTools: (): ToolSet => ({
+        note_write: tool({
+          description: "Record a short durable note.",
+          inputSchema: jsonSchema<{ text: string }>({
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+          }),
+          outputSchema: jsonSchema<{ url: string }>({
+            type: "object",
+            properties: { url: { type: "string" } },
+            required: ["url"],
+          }),
+          execute: async ({ text }) => {
+            await appendFile(join(context.home, "notes.txt"), `${config.prefix}: ${text}\n`, "utf8");
+            return { url: "local://notes.txt" };
+          },
+        }),
+      }),
     };
   }
 }
 
-namespace MyExt {
-  export interface Config { logLevel: number }   // 插件自身配置（koishi.yml）
-  export const Config: Schema<Config> = /* … */;
+namespace NoteExtension {
+  export interface Config {
+    logLevel: number;
+  }
+
+  export const Config: Schema<Config> = Schema.object({
+    logLevel: Schema.number().default(Logger.INFO),
+  });
+}
+
+export default NoteExtension;
+```
+
+实例契约（`src/extension.ts`）：
+
+```ts
+import type { AgentRuntime, ToolSet } from "koishi-plugin-ishiki";
+import type { Awaitable } from "koishi";
+
+export interface ExtensionInstance {
+  attach?(handle: AgentRuntime): Awaitable<void | (() => void)>;
+  extendInstructions?(): Awaitable<string>;
+  extendTools?(): Awaitable<ToolSet>;
+  stop?(): Awaitable<void>;
 }
 ```
 
-要点与约束：
+装配与生命周期：
 
-<Callout title="能贡献的只有工具与提示词">
-这是刻意的边界：扩展不改变控制流。要改变「理不理」「看什么」「怎么调」，请写引擎。
-</Callout>
-- 工具名与内置工具或其它扩展重名会让该 profile 装配失败（`ToolConflictError`）。
-- `context.resources.attach(handler)` 注册自定义资源方案；`stop()` 里应 `dispose()` 注销。
-- 同一 profile 的所有实例共享你 `[Service.invoke]` 的每次调用产物之间的隔离取决于你自己——每个实例独立调用一次。
+- `Schema` 是**实例配置**的 Schema，对应 profile 的 `extends.<名字>.config`。它与插件自身的 Koishi 配置（构造器第二个参数、命名空间 `Config`）相互独立；缺省时实例配置原样透传。配置校验在 profile 激活时执行一次，无效配置会使该 profile 激活失败并记录错误。
+- `[Service.invoke](config, context)` 在每个 runtime 创建时调用一次，`context` 是该 runtime 的 `ExtensionContext`。返回 `undefined` 表示这个 runtime 不贡献任何内容。
+- 每个 runtime 得到独立的 `ExtensionInstance`。需要跨 runtime 共享的连接池、索引等状态放在 Extension Service 实例上，并按 `context.root` 区分 profile；在 `context.fiber` 的 `dispose` 事件里关闭。
+- `extendTools` 与 `extendInstructions` 在每轮第一步组装工具面与提示词时调用；开启 toolsearch 时，`extendTools` 还会在初始化阶段调用一次，用于写入基线目录。内核不缓存返回值，跨轮稳定的结果请放在实例闭包里。
+- 工具合并顺序为：内核工具（`read`、`send_message`、`finish`）、各扩展按 `extends` 顺序贡献的工具、`wait`，随后是 codemode 收窄与 toolsearch 的 `search`。工具撞名在实际组装时抛出 `ToolConflictError`；每轮组装时的错误进入该轮次的 `turn.failed`，开启 toolsearch 时的初始化组装也可能报告错误。`wait`、`codemode`、`search` 是内核保留名。
+- `attach(handle)` 在 runtime 构造完成后调用一次。返回值可以是释放函数，也可以是解析为释放函数的 Promise；抛错只记录警告，不会阻止 runtime 启动。
+- `stop()` 与 `attach` 返回的释放函数都在 runtime 停止时执行，`stop()` 先执行。定时器、订阅与外部资源在这两个位置清理。
+- `context.resources.attach(handler)` 注册资源方案并返回注销函数。资源中心按 runtime 隔离，注销函数在 runtime 停止前调用即可。
 
 ### 运行时句柄（AgentRuntime）
 
-`attach(handle)` 在 runtime 装配完成后调用一次，`handle` 是该实例的 `AgentRuntime`——宿主自用的那组原语：
+`attach(handle)` 收到的 `AgentRuntime` 暴露宿主自用的原语：
 
 <TypeTable
   type={{
     deliver: {
       type: '(event: IshikiEvent) => Promise<void>',
-      description: '投递一个事件：捕获附件后 agent.send(event, { trigger: false, ifBusy: "join" })，成功投递即返回。纯摄取——不做决定，不攒消息，也不自己开轮；是否已落盘以 message.appended 通知为准',
+      description: '把事件交给 runtime：捕获附件后 agent.send(event, { trigger: false, ifBusy: "join" })，成功投递即返回。纯摄取，不攒消息，也不开启轮次；是否落盘以 message.appended 通知为准',
     },
     wake: {
       type: '(prompt?: string) => string | undefined',
-      description: '主动打开一轮，等价于 agent.continue(prompt)；绕开唤醒引擎',
+      description: '主动打开一轮，等价于 agent.continue(prompt)；不经过唤醒引擎',
     },
     agent: {
       type: 'Agent',
-      description: '实例的 core Agent：订阅其 channel、检查 isIdle()、调用 continue() 都由它出面',
+      description: '实例的 core Agent：订阅 channel、检查 isIdle()、调用 continue()',
     },
   }}
 />
 
-要点：
-
-- `attach` 可以返回一个释放函数；runtime 停止时，释放函数与 `stop()` 都会被调用。
-- 扩展的定时器与主动消息走 `wake`；要把外部输入交给事实流则用 `deliver`。
-- 日程、防抖这类自动响应策略请注册一个唤醒引擎：它订阅提交通知，按自己的规则决定何时开轮。显式 `wake` 始终可用，不受引擎影响。
+`deliver` 与 `wake` 的完整语义见下文「运行时：输入提交与唤醒」。
 
 ### ExtensionContext 字段
 
@@ -84,7 +126,7 @@ namespace MyExt {
   type={{
     runtimeId: {
       type: 'string',
-      description: '实例 key（如 my-profile/onebot:123/456789）',
+      description: '实例 key（如 my-profile/onebot:BOT_ID/CHANNEL_ID）',
     },
     domain: {
       type: 'InstanceDomain',
@@ -118,79 +160,222 @@ namespace MyExt {
 从主包导出（`@yesimagent/core` 再导出 AI SDK 全量）：
 
 - `tool({ description, inputSchema, outputSchema, execute, toModelOutput? })`：定义工具；`inputSchema` 用 `jsonSchema<T>()` 声明。
-- `jsonSchema`、`ToolSet`、`ToolCallers`（供 codemode 收编的工具路由）。
-- 工具返回值最终会过统一输出出口（截断、媒体归档），你不需要（也不应该）在工具内自行截断。
+- `jsonSchema`；类型 `ToolSet`、`ToolCallers`（工具路由表，codemode 用它将工具收进沙箱）。
+- 模型可见的工具结果会经过统一输出出口（截断、媒体归档）。在工具内自行截断会绕开 artifact 续读，保持原样返回即可。
 
 ### 现成范例
 
-- `packages/workspace`：完整扩展——四个工具、技能发现、两个自定义 scheme、profile 级配置 Schema。
-- `packages/mcp-client`：按 profile 建连接池、`mcp://` 不透明 scheme、工具名冲突规避。
+- `packages/workspace`：完整扩展——四个工具、技能发现、两个自定义 scheme、实例配置 Schema 与懒加载的沙箱单例。
+- `packages/mcp-client`：按 profile 共享连接池、`mcp://` 不透明 scheme、跨 server 的工具名冲突检查。
 - `packages/onebot`：构建期生成的动作目录、按模式增减的执行工具、`onebot://` scheme，以及把资源字节发布到 Koishi HTTP 服务的临时 URL。
 
 ## 引擎：替换三族行为之一
 
-三族引擎（上下文/唤醒/工具调用）都是继承各自基类的 Koishi Service，按名字注册为 `ishiki.engine.<族>.<名字>`：
+三族引擎都是继承各自基类的 Koishi Service，服务名由基类的 `GetName` 生成：
 
-```ts
-import { ContextEngine, type ContextEngineInstance } from "koishi-plugin-ishiki";
+- `ishiki.engine.context.<名字>`，基类 `ContextEngine`，provider 的 `[Service.invoke](config, context: ExtensionContext)` 返回 `ContextEngineInstance`。
+- `ishiki.engine.wakeup.<名字>`，基类 `WakeupEngine`，provider 的 `[Service.invoke](config, context: ExtensionContext)` 返回 `WakeupEngineInstance`。
+- `ishiki.engine.toolcall.<名字>`，基类 `ToolcallEngine`，provider 的 `[Service.invoke](config)` 返回 `ToolcallEngineInstance`。包装器在 profile 级共享，因此这里不接收 runtime 坐标。
 
-export class MyContextEngine extends ContextEngine<"my-engine"> {
-  constructor(ctx: Context) {
-    super(ctx, "my-engine");
-  }
+一个 runtime 在每一族里只使用一个变体。provider 在 profile 激活时按配置里的名字取到，实例创建时机见下文各族的说明。
 
-  public [Service.invoke](config, context: ExtensionContext): ContextEngineInstance {
-    return new MyContextInstance(config.myEngine, context);
-  }
-}
-```
+### 上下文引擎
 
-实例接口（按族）：
+实例方法全部可选：
 
 <TypeTable
   type={{
-    ContextEngineInstance: {
-      type: 'interface',
-      description: 'prepareEntries?(entries, { turnId, signal }) 请求前整理条目；instructions?() 追加系统提示词；attach?(agent) / 随 dispose 清理。内置两例：standard 的压缩水位、v3 的 WorldState 渲染。',
+    attach: {
+      type: '(agent: Agent) => () => void',
+      description: '订阅轮次事件并维护投影状态；返回值负责注销',
     },
-    WakeupEngineInstance: {
-      type: 'interface',
-      description: 'attach(agent: Agent): () => void —— 必选且唯一的成员。订阅 core 的 message.appended 提交通知，挑出关心的消息（同一批通知里还混着工具目录、附件与模型输出），认定该醒时 agent.continue() 打开一轮；返回值负责注销订阅与清理待办。开轮前、以及延迟或异步判定返回后都要检查 agent.isIdle()。',
+    prepareEntries: {
+      type: '(entries: readonly AgentEntry[], request?: ContextRequest) => Awaitable<readonly AgentEntry[]>',
+      description: '请求前整理条目：筛选、重排、替换，或在前部加入派生条目',
     },
-    ToolcallEngineInstance: {
-      type: 'interface',
-      description: 'middleware() 返回 AI SDK 工具中间件（native 返回 undefined 表示用原生 function call）。',
+    renderMessages: {
+      type: '(messages: AgentMessage[], request?: ContextRequest) => Awaitable<AgentMessage[]>',
+      description: '把消息渲染成模型输入，可以合并、改写或插入消息；返回值随后经过附件投影',
+    },
+    instructions: {
+      type: '() => Awaitable<string | undefined>',
+      description: '追加本引擎需要的系统提示词',
     },
   }}
 />
 
-把配置写进引擎 map（`declare module` 合并 `ContextEngines` 等）即可获得 profile 配置段的类型支持；用户在 profile 里写 `engine: my-engine` 即可启用。主插件构造时只注册内置引擎；自定义引擎作为普通 Koishi 插件安装，profile 激活时按服务名发现，缺了就停在等待态。
+`ContextRequest` 提供 `turnId` 与 `signal`。实例按 runtime 创建，可以保存该会话的预算、投影或摘要状态；事实流已有条目不被修改，压缩结果作为新条目追加。
 
-## 运行时：投递事件与唤醒
-
-实例的 `AgentRuntime` 就是扩展 `attach` 收到的那个句柄，它把两个内部原语直接暴露出来：
+下面的引擎保留默认消息历史，并在每轮读取 profile 目录中的任务记录，将内容加入系统提示词。使用前创建 `briefing.md`，写入需要模型持续参考的任务或背景；修改文件后，下一轮会读取更新内容。
 
 ```ts
-handle.deliver(event);      // 投递一个事件（整形好的 IshikiEvent）
-handle.wake(prompt?);       // 主动打开一轮
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { Service } from "koishi";
+import type { Context } from "koishi";
+import { ContextEngine } from "koishi-plugin-ishiki";
+import type { ContextEngineInstance, ContextEngines, EngineConfig, ExtensionContext } from "koishi-plugin-ishiki";
+
+export interface BriefingConfig {
+  filename: string;
+}
+
+declare module "koishi-plugin-ishiki" {
+  interface ContextEngines {
+    briefing: BriefingConfig;
+  }
+}
+
+export class BriefingContextEngine extends ContextEngine<"briefing"> {
+  public constructor(ctx: Context) {
+    super(ctx, "briefing");
+  }
+
+  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "briefing">>, context: ExtensionContext): ContextEngineInstance {
+    const filename = resolve(context.root, config.briefing?.filename ?? "briefing.md");
+    return {
+      instructions: () => readFile(filename, "utf8"),
+    };
+  }
+}
+
+export default BriefingContextEngine;
 ```
 
-- `deliver(event)` 是纯摄取：捕获附件，然后 `agent.send(event, { trigger: false, ifBusy: "join" })`，成功投递后即返回——返回不代表已经落盘。空闲时持久化在后台进行；有轮在跑时消息接入那一轮，在这一步的输出批次之后一起提交。提交完成的信号是 `message.appended` 通知。它不做任何决定，也不自己开轮——要不要开轮由唤醒引擎或显式 `wake` 决定。
+### 唤醒引擎
+
+实例只有一个必选方法：
+
+```ts
+import type { Agent } from "koishi-plugin-ishiki";
+
+export interface WakeupEngineInstance {
+  attach(agent: Agent): () => void;
+}
+```
+
+`attach` 在 runtime 初始化时调用一次。实例按 runtime 创建，状态只在当前 runtime 内共享。引擎可以订阅 `agent.channel` 的事件、维护定时器或读取外部状态，在合适的时机调用 `agent.continue()`。返回值在 runtime 停止时执行，负责取消订阅、清除定时器与放弃未完成的任务。接口允许在没有外部输入时按自己的计划开启轮次，完整示例见[引擎系统](/docs/explanations/engines#写一个自主调度的唤醒引擎)。
+
+开启轮次前检查 `agent.isIdle()`；异步判定返回后再检查一次。订阅回调会被 core 等待，耗时任务要脱离回调执行并自行捕获错误。
+
+### 工具调用引擎
+
+`ToolcallEngineInstance` 是一个抽象类：
+
+```ts
+import { wrapLanguageModel } from "koishi-plugin-ishiki";
+import type { LanguageModelV4, LanguageModelV4Middleware } from "koishi-plugin-ishiki";
+
+export abstract class ToolcallEngineInstance {
+  protected abstract middleware(): LanguageModelV4Middleware | undefined;
+
+  public wrap(model: LanguageModelV4): LanguageModelV4 {
+    const middleware = this.middleware();
+    if (middleware === undefined) return model;
+    return wrapLanguageModel({ model, middleware });
+  }
+}
+```
+
+- `middleware()` 返回 `LanguageModelV4Middleware`；`wrap()` 用 `wrapLanguageModel` 组合它。返回 `undefined` 表示不改写模型调用（`native` 的做法）。
+- 覆盖 `wrap()` 可以返回自定义的 `LanguageModelV4`。多阶段、多模型编排都写在这个实现里：`narrative` 的 `NarrativeToolcallInstance` 在 `doGenerate` / `doStream` 内运行 Narrator，再分支到 Action Decoder 或 Replyer，最后返回标准的 content、finishReason 与 usage。它要求叙事上下文提供的输入标记；缺少标记时该轮报错。
+- 实例在 profile 激活时创建一次，`wrap()` 也只调用一次，包装后的模型由该 profile 的所有 runtime 共用。会话状态不能放在这里。
+
+下面的引擎通过 middleware 给每次模型调用追加一条系统说明：
+
+```ts
+import { Service } from "koishi";
+import type { Context } from "koishi";
+import { ToolcallEngine, ToolcallEngineInstance } from "koishi-plugin-ishiki";
+import type { EngineConfig, LanguageModelV4CallOptions, LanguageModelV4Middleware, ToolcallEngines } from "koishi-plugin-ishiki";
+
+export interface GroundingConfig {
+  instruction: string;
+}
+
+declare module "koishi-plugin-ishiki" {
+  interface ToolcallEngines {
+    grounding: GroundingConfig;
+  }
+}
+
+class GroundingInstance extends ToolcallEngineInstance {
+  public constructor(private readonly instruction: string) {
+    super();
+  }
+
+  protected middleware(): LanguageModelV4Middleware {
+    return {
+      specificationVersion: "v4",
+      transformParams: async ({ params }): Promise<LanguageModelV4CallOptions> => ({
+        ...params,
+        prompt: [{ role: "system", content: this.instruction }, ...params.prompt],
+      }),
+    };
+  }
+}
+
+export class GroundingToolcallEngine extends ToolcallEngine<"grounding"> {
+  public constructor(ctx: Context) {
+    super(ctx, "grounding");
+  }
+
+  public [Service.invoke](config: EngineConfig<Pick<ToolcallEngines, "grounding">>): ToolcallEngineInstance {
+    return new GroundingInstance(config.grounding?.instruction ?? "Cite a resource URL for every factual claim.");
+  }
+}
+
+export default GroundingToolcallEngine;
+```
+
+把变体配置写进引擎 map 即可获得 profile 配置段的类型支持：
+
+```ts
+export {};
+
+declare module "koishi-plugin-ishiki" {
+  interface ContextEngines {
+    briefing: { filename: string };
+  }
+  interface WakeupEngines {
+    rhythm: { everySeconds: number };
+  }
+  interface ToolcallEngines {
+    grounding: { instruction: string };
+  }
+}
+```
+
+profile 片段写作 `context: { engine: briefing, briefing: { filename: briefing.md } }`，其余两族同理。
+
+### 装配与等待
+
+主插件在构造时注册内置变体；自定义引擎作为普通 Koishi 插件安装，由插件自己的 `ctx.plugin` 注册服务。profile 激活时，内核把三族的服务名和已启用扩展的服务名一起交给 `ctx.inject`：缺少服务时记录一条 `missing required service` 并停在等待状态，服务出现后继续装配。
+
+## 运行时：输入提交与唤醒
+
+`AgentRuntime` 提供 `deliver(event)` 与 `wake(prompt?)`，分别负责提交输入与触发一轮。
+
+- `deliver(event)` 是纯摄取：捕获附件，然后 `agent.send(event, { trigger: false, ifBusy: "join" })`，成功投递后返回。返回不代表已经落盘。空闲时持久化在后台进行；有轮次正在运行时消息接入那一轮，在这一步的输出批次之后一起提交。提交完成的信号是 `message.appended` 通知。它不做决定，也不开启轮次。
 - `wake(prompt?)` 等价于 `agent.continue(prompt)`，是绕开唤醒引擎的显式唤醒，供扩展的定时器与主动消息使用。
 
-`agent.continue(prompt?)` 来自 `@yesimagent/core`：空闲时它排入一轮并返回 turn id；带 `prompt` 时该轮以这段文本作为开场的 user 消息（原文写入，不做包装），不带时这一轮直接基于已有历史开始，不写任何占位消息。忙碌或已有待发唤醒时，请求并入唯一那个待发唤醒并返回 `undefined`，待队列排空即触发——即使上一轮以终态收尾也会补上；此时多次 `continue` 的 `prompt` 以 `; ` 连接进同一条消息。
+`agent.continue(prompt?)` 来自 `@yesimagent/core`：空闲时它排入一轮并返回 turn id；带 `prompt` 时该轮以这段文本作为开场的 user 消息（原文写入，不做包装），不带时直接基于已有历史开始，不写占位消息。忙碌或已有待发唤醒时，请求并入唯一那个待发唤醒并返回 `undefined`，待队列排空即触发；此时多次 `continue` 的 `prompt` 以 `; ` 连接进同一条消息。
+
+`wait` 条件同样直接调用 `continue`，与引擎的订阅互不相干：引擎无法阻止 `wait` 或显式 `wake` 打开一轮。
 
 ## 资源方案：让 read 认识你的 URL
 
 实现 `SchemeHandler` 并用 `context.resources.attach(handler)` 注册。中心只按 scheme 路由，handler 收到完整 URL，自行解释路径、query、view 或嵌套 URI。例如 `clock://now` 返回当前时间：
 
 ```ts
-import { ResourceError, type ResourcePayload, type SchemeHandler } from "koishi-plugin-ishiki";
+import { Buffer } from "node:buffer";
+import { ResourceError } from "koishi-plugin-ishiki";
+import type { ResourcePayload, SchemeHandler } from "koishi-plugin-ishiki";
 
 export class ClockHandler implements SchemeHandler {
-  readonly scheme = "clock";
+  public readonly scheme = "clock";
 
-  resolve(input: string): ResourcePayload {
+  public resolve(input: string): ResourcePayload {
     const url = new URL(input);
     if (url.hostname !== "now") {
       throw new ResourceError("resource_not_found", "expected clock://now");
@@ -201,28 +386,35 @@ export class ClockHandler implements SchemeHandler {
 }
 ```
 
-`ResourcePayload` 分成文本 `{ type:'text', url, text, size, mediaType?, filename?, source? }` 与媒体 `{ type:'file', url, bytes, mediaType, size, filename?, immutable }`。媒体的 `immutable: true` 只用于已固定内容的引用；动态来源使用 false，作为历史附件时由统一出口固化快照。
+`SchemeHandler.resolve` 可以返回 `ResourcePayload` 或它的 Promise。`ResourcePayload` 分成文本 `{ type: 'text', url, text, size, mediaType?, filename?, source? }` 与媒体 `{ type: 'file', url, bytes, mediaType, size, filename?, immutable }`。媒体的 `immutable: true` 用于已固定内容的引用；动态来源使用 `false`，作为历史附件时由统一出口固化快照。
 
-普通 handler 无需提供续读协议：返回的文本在模型出口超预算时完整固化为 artifact，再从 artifact 分页。codemode 内 read 仍取得完整原始内容。
+普通 handler 无需提供续读协议：返回的文本在模型出口超预算时完整固化为 artifact，再从 artifact 分页。codemode 内的 `read` 取得未经模型出口截断的原始内容。
 
-文件型 scheme 继承 `FileScheme`，声明 scheme 并实现受保护的 `open(url: FileUrl)`。返回的 `FileEntry` 指明文件路径、可选 filesystem、媒体类型和元数据。未提供 filesystem 时使用宿主文件系统；提供实际沙箱的 `ResourceFileSystem` 时，读取同一个虚拟文件视图。`readFileBuffer`、`stat`、`readdir` 是必需能力，流式文本读取为可选优化。
+文件型 scheme 继承 `FileScheme`，声明 scheme 并实现受保护的 `open(url: FileUrl)`。返回的 `FileEntry` 指明文件路径、可选 filesystem、媒体类型和元数据；`bytes` 可以直接携带内存中的内容。未提供 filesystem 时使用宿主文件系统；提供实际沙箱的 `ResourceFileSystem` 时，读取同一个虚拟文件视图。`readFileBuffer`、`stat`、`readdir` 是必需能力，`readText` / `readFilePrefix` 为可选的流式优化。
 
-FileScheme 复用行选择、元数据视图与无损 offset 续读。其读取来源随结构化结果传递，不依赖闭包或跨调用缓存。根目录和符号链接约束由具体 scheme 的 open 实现负责；不能把宿主路径当作虚拟路径。
+`FileScheme` 复用行选择、元数据视图与无损 offset 续读。其读取来源随结构化结果传递，不依赖闭包或跨调用缓存。根目录和符号链接约束由具体 scheme 的 `open` 实现负责；不能把宿主路径当作虚拟路径。
 
 约束：
 
-- `asset` / `artifact` / `local` 是保留方案，注册同名 handler 会被拒绝；注册返回的 disposer 用于注销。
-- 使用 `ResourceError` 表达资源错误，例如 `invalid_resource_uri`、`resource_not_found`、`resource_too_large`、`unsupported_view`。
-- scheme 注册和存储按 Runtime 隔离；工具只有明确实现了资源中心读取，才能把该 scheme URL 作为数据来源。
+- `asset` / `artifact` / `local` 是保留方案，注册同名 handler 会被拒绝；注册返回的 disposer 用于注销，同一个 scheme 不能重复注册。
+- 使用 `ResourceError` 表达资源错误，例如 `invalid_resource_uri`、`unsupported_view`、`resource_unavailable`、`resource_not_found`、`resource_too_large`、`resource_read_failed`。
+- scheme 注册和存储按 Runtime 隔离。URL 只在对应的资源中心里解析，同一个字符串在不同 runtime 或部署中不保证指向同一内容。
+- 工具是否接受 URL 由它自己的输入契约决定。资源中心不会改写任意工具的入参；HTTP(S) 资源可以按同一接口实现 handler，当前不内置。
 
 ## 事件与消息类型
 
-`IshikiEvent`（`src/types.ts`）是实例收到的输入：`ishiki.message.created` / `ishiki.message.deleted` / `ishiki.attachment` / `ishiki.tools.catalog`，字段见源码。它是 core `AgentCustomMessage` 声明的联合：要加自己的事件类型，用 `declare module "@yesimagent/core"` 把类型并进 `AgentCustomMessage`，再用 `createCustomMessage` 构造，`deliver` 与 `message.appended` 的窄化就都认识它。核心不识别具体平台事件——平台事件由会话处理器整形成 `ishiki.message.created` 才进入事实流。
+`IshikiEvent`（`src/types.ts`）是 core `AgentCustomMessage` 声明的联合：
 
-扩展一般不直接消费事件——唤醒引擎与上下文引擎才是它们的第一读者。入站事件先写进事实流，`message.appended` 通知随后到达每条订阅；同一批通知里还混着工具目录、附件与模型输出，所以谁关心什么由订阅方自己过滤。
+- `ishiki.message.created` / `ishiki.message.deleted`：入站消息与撤回。
+- `ishiki.attachment`：附件记录，由 runtime 或统一输出出口写入。
+- `ishiki.tools.catalog`：toolsearch 的目录更新。
 
-## 版本与兼容提示
+平台事件由会话处理器整形成 `ishiki.message.created` 或 `ishiki.message.deleted` 后进入事实流。附件与工具目录由内核运行过程生成，三类记录共同构成后续上下文投影的输入。
 
-- 全部接口随 0.0.x 演进，**以主包导出的 TypeScript 类型为准**；本文描述与类型冲突时以类型为准。
-- 主包 re-export `@yesimagent/core`（Agent 运行时）与 `@yesimagent/gateway`（模型网关），扩展可直接 import 主包而不必声明这两个依赖。
-- 装配失败（服务缺失、工具重名、配置校验不过）一律表现为 profile 停在等待态或被跳过，开发期把 `logLevel` 开到 3 定位。
+入站事件先写进事实流，`message.appended` 通知随后到达每条订阅。同一批通知里还混着工具目录、附件与模型输出，谁关心什么由订阅方自己过滤。扩展通常通过 `extendTools` / `extendInstructions` / `attach` 参与；直接订阅 agent 事件的是唤醒引擎，以及需要维护投影状态的上下文引擎。
+
+## 错误与排查
+
+- 主包再导出 `@yesimagent/core`（含 AI SDK 的类型、工具构造件与 `createAgent`）。模型网关通过 `ctx.ishiki.gateway` 使用，读取它时需在插件类上声明 `static inject = ["ishiki"]`；需要网关的显式类型时从 `@yesimagent/gateway` 引入，并把该包列进自己的依赖。
+- 失败位置各不相同：缺少服务时 profile 停在等待态；profile 配置损坏或认领冲突时该 profile 被跳过；扩展 Schema 校验失败时 profile 激活失败；工具重名发生在轮次组装，表现为该轮 `turn.failed`；引擎 provider 在创建实例时抛错，则对应的 profile 或地址无法建立，错误记入日志。
+- 开发期把 `logLevel` 开到 3 定位问题；`debugStream` 会实时输出模型流。

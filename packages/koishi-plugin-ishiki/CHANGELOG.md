@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Search matches return a name and a short hint; the next catalog update carries their full signatures
 - Codemode and toolsearch prompt sections explain catalog updates and when to re-inspect attachments
 - Request projection spends a lifetime render quota per image and drains request capacity oldest-first; terminal rejections are stated once, and delivered attachments then leave the request
+- Documentation presents Ishiki as a Bot meta-framework for autonomous agents, with the core runtime README rewritten around the three engine families
 
 ### Removed
 - The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types.

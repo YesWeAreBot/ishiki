@@ -1,160 +1,149 @@
 ---
 title: 快速上手
-description: 从源码构建到第一次对话的完整流程
+description: 从源码接入到第一个 Agent 的完整配置流程
 ---
 
-本教程带你从零搭建一个能说话的 Ishiki：构建插件、准备模型配置、写第一份 profile 和人设，然后在频道里和它对话。全程不需要写代码。
+完成这篇教程后，你会有一份已激活的 profile：它拥有自己的模型、人格和认领频道，可以通过 Koishi 接收消息、使用工具并发送回复。
 
-## 你需要准备什么
+## 准备环境
 
-- 一个可用的 **Koishi 应用**（模板项目或启动器均可，要求 Koishi 4.18 以上），并且至少接入了一个聊天平台适配器（如 OneBot）。
-- **Node.js 20+** 与 **Bun**（用于构建源码）。
-- 一个大模型的 **API Key**。本文以任意 OpenAI 兼容接口为例。
+- 一个 **Koishi 4.18.11 或更高的 4.x 应用**，并且已经配置至少一个聊天平台适配器。
+- **Node.js 20+** 与 **Bun**。
+- 一个支持原生工具调用的模型接口及 API Key。本教程使用 OpenAI 兼容接口与默认 `native` 工具调用引擎。
 
-本教程的示例约定：Koishi 应用目录为 `koishi-app`，Ishiki 源码克隆到它的同级目录 `ishiki`。你的实际路径可以不同，但下文命令中的路径要相应替换。
+以下使用 Bun 接入插件，假设 Koishi 应用目录 `koishi-app` 与 Ishiki 源码目录 `ishiki` 位于同一个父目录。
 
-## 开始接入
+## 接入核心运行时
 
 <Steps>
 <Step>
 
-### 构建 Ishiki
+### 构建源码
 
-Ishiki 是 monorepo，核心是三个包：`koishi-plugin-ishiki`（插件本体）、`koishi-plugin-ishiki-workspace`（工作区扩展，可选）、`koishi-plugin-ishiki-mcp-client`（MCP 扩展，可选）。插件本体是必需的，两个扩展本教程暂不使用。
+从两个目录的共同父目录开始执行：
 
 ```bash
-git clone <仓库地址> ishiki
+git clone https://github.com/YesWeAreBot/ishiki.git
 cd ishiki
 bun install
 bun run build
 ```
 
-构建完成后，`packages/koishi-plugin-ishiki/lib/` 下会出现可加载的插件产物。升级源码后需要重新执行 `bun run build`。
+构建产物位于 `packages/koishi-plugin-ishiki/lib/`。本教程只需接入核心包；workspace、MCP、narrative 等扩展可以按需启用。
 
 </Step>
 <Step>
 
-### 把插件接入 Koishi 应用
+### 链接到 Koishi 应用
 
-把构建好的包链接进 Koishi 应用，选一种包管理器：
-
-<Tabs groupId="package-manager" items={['Bun', 'Yarn', 'npm']}>
-<Tab value="Bun">
+接着在当前 `ishiki` 目录执行：
 
 ```bash
-cd ishiki/packages/koishi-plugin-ishiki
+cd packages/koishi-plugin-ishiki
 bun link
-
-cd ../koishi-app
+cd ../../../koishi-app
 bun link koishi-plugin-ishiki
 ```
 
-</Tab>
-<Tab value="Yarn">
+相对路径按上述同级目录布局计算。如果应用位于其他位置，请将 `../../../koishi-app` 替换为应用目录。
 
-在 Koishi 应用的 `package.json` 里加一条 `resolutions`，把 `koishi-plugin-ishiki` 指向本地路径，然后重新 `yarn install`。任选其一，效果相同。
-
-</Tab>
-<Tab value="npm">
-
-```bash
-cd ishiki/packages/koishi-plugin-ishiki
-npm link
-
-cd ../koishi-app
-npm link koishi-plugin-ishiki
-```
-
-</Tab>
-</Tabs>
-
-然后在 Koishi 应用根目录的 `koishi.yml` 的 `plugins` 段中启用插件：
+在 Koishi 应用的 `koishi.yml` 中启用插件：
 
 ```yaml
 plugins:
   ishiki: {}
 ```
 
-也可以在 Koishi 控制台的「插件配置」页面安装并启用，效果一致。此时启动应用，日志里会出现一条警告「Model config file not found …」，这是正常的——插件启动时会在数据目录自动创建一个空的 `models.yaml`，下一步我们就去填它。
-
 </Step>
 <Step>
 
-### 填写 models.yaml
+### 配置模型
 
-`models.yaml` 是 Ishiki 的模型网关配置，位于数据目录（默认 `data/ishiki`，即 Koishi 应用目录下的 `data/ishiki/`）。它声明「有哪些模型可买」，profile 再从中「点单」。
-
-创建 `data/ishiki/models.yaml`：
+在 Koishi 应用中创建 `data/ishiki/models.yaml`：
 
 ```yaml
 providers:
-  my-api:                      # 供应商标识，自定义，profile 里引用它
-    api: openai-completions    # OpenAI 兼容接口用这个方言
-    baseUrl: https://api.example.com/v1   # 替换为你的接口地址
-    apiKey: sk-xxxxxxxx        # 替换为你的密钥
+  my-api:
+    api: openai-completions
+    baseUrl: https://api.example.com/v1
+    apiKey: YOUR_API_KEY
     models:
-      - id: your-model-name    # 替换为模型 ID（对应接口的 model 参数）
-        input: [text]          # 该模型接受的输入类型
-        contextWindow: 128000  # 上下文窗口大小，按模型实际能力填
-        maxTokens: 8192        # 单次回复的输出上限
+      - id: your-model-name
+        input: [text]
+        contextWindow: 128000
+        maxTokens: 8192
 ```
 
-三处需要替换：`baseUrl`、`apiKey`、`id`。如果接口兼容 Anthropic 或 Google 协议，把 `api` 换成 `anthropic-messages` 或 `google-generative-ai`，字段写法见[接入模型供应商](/docs/guides/models)。
+替换 `baseUrl`、`apiKey` 和模型 `id`，并按模型能力填写上下文窗口与输出上限。`my-api` 是自定义供应商名称，profile 通过 `my-api:your-model-name` 引用这个模型。
 
-<Callout type="warn">
-密钥是明文存储在文件里的，不要把 `data/` 目录提交到代码仓库。
+`data/ishiki` 是默认数据目录，可以在插件的 `dataPath` 配置中修改。其他接口方言与模型组见[接入模型供应商](/docs/guides/models)。
+
+<Callout type="warn" title="保存好模型凭据">
+API Key 以明文保存在文件中。请限制文件访问权限，避免将数据目录提交到版本库。
 </Callout>
 
 </Step>
 <Step>
 
-### 写第一份 profile
-
-profile（档案）是 Ishiki 的生效单位：它声明「这个 bot 用什么模型、在哪些频道活动、有什么性格」。每个 profile 是数据目录下 `profiles/` 里的一个子目录。
+### 创建 profile
 
 创建 `data/ishiki/profiles/my-first/profile.yml`：
 
 ```yaml
-model: my-api:your-model-name   # provider:model，对应上一步 models.yaml 的两层键名
+model: my-api:your-model-name
+mode: channel
 
 channels:
-  "onebot:10000":               # 你的机器人账号，格式 platform:selfId
-    - "*"                       # 认领该账号的全部频道
+  "onebot:BOT_ID":
+    - "CHANNEL_ID"
 ```
 
-两处需要替换：账号的 `platform:selfId`（OneBot 平台的 platform 就是 `onebot`，selfId 是机器人 QQ 号），以及频道名单。`"*"` 表示全收；想排除某个群，写 `"!群号"`，规则详见[编写 profile](/docs/guides/profile)。
+将 `onebot:BOT_ID` 替换为机器人账号的 `platform:selfId`，将 `CHANNEL_ID` 替换为实际频道标识。这里的 `onebot` 对应 OneBot 适配器；使用其他平台时，填写该适配器的 platform。
 
-再创建同目录下的 `persona.md`，写下它的性格：
+每份 profile 是一份稳定人格的配置，`channels` 声明它接管的账号与频道。`"*"` 可以认领该账号的全部频道，`"!CHANNEL_ID"` 可以排除指定频道，完整规则见[编写 profile](/docs/guides/profile)。
 
-```markdown
-你是小雪，一个话不多的朋友。用短句说话，偶尔发表情，
-别人聊到你感兴趣的话题时才插话。
-```
-
-`persona.md` 会原样注入系统提示词，写中文即可。
+本例使用默认引擎：`context.engine: standard`、`wakeup.engine: standard`、`toolcall.engine: native`。`channel` 模式为各频道分别创建 runtime。
 
 </Step>
 <Step>
 
-### 启动并对话
+### 写下人格
 
-启动 Koishi 应用。日志中依次出现：
+创建同目录下的 `persona.md`：
 
-```text
-[Ishiki] profile "my-first" activated: mode=channel, accounts=1
-[Ishiki] runtime created: my-first/onebot:10000/群号
+```markdown
+你是小雪。表达清晰，保留自己的判断与好奇心。
+记住正在推进的事情，使用工具完成能够执行的任务；
+需要向对方表达时，直接说明结果。
 ```
 
-现在在已认领的频道里 @ 它，或直接私聊。默认唤醒规则是：私聊必醒、被 @ 必醒、被引用回复必醒。它醒来后会先在心里「想一想」，然后通过 `send_message` 说话。
+人格会进入系统提示词。同一 profile 派生的 runtime 使用同一份人格声明。
 
-如果它没反应，直接跳到本页最后的故障排查。
+</Step>
+<Step>
+
+### 启动并发送消息
+
+启动 Koishi。日志中应出现：
+
+```text
+profile "my-first" activated: mode=channel, accounts=1
+```
+
+在已认领的频道中 @ 机器人，或引用它的消息。已认领的私聊也会命中默认唤醒规则。第一次输入路由到该频道时，会创建 runtime，日志包含：
+
+```text
+[my-first] runtime created: my-first/onebot:BOT_ID/CHANNEL_ID
+```
+
+Agent 运行后，通过 `send_message` 将可见消息发送到平台。若没有收到回复，检查本页的故障排查表。
 
 </Step>
 </Steps>
 
-## 验证你做对了什么
+## 检查配置与实例数据
 
-到这里，你的数据目录应该是这样（点开文件夹可以看到内容）：
+运行前的目录包含：
 
 ```files
 data/ishiki
@@ -165,22 +154,26 @@ data/ishiki
         └── persona.md
 ```
 
-- `models.yaml`：模型网关，声明「有哪些模型可买」。
-- `profiles/`：一个 profile 一个目录，目录名即 profile ID。
-- `profile.yml`：生效单位，认领频道、选模型、配引擎。
-- `persona.md`：人设，原样注入系统提示词。
+runtime 创建后，profile 下会生成 `runtimes/`，保存实例的会话日志和资源。修改模型、profile 或人格文件后，需要重新加载插件；更新源码后，需要重新执行 `bun run build`。
 
-第一次对话成功后，`profiles/my-first/` 下会多出 `runtimes/` 目录——那是每个频道的意识实例存放记忆和资源的地方，不需要手动管理。想让它学会更多本领（读图、执行命令、接入 MCP 工具），从操作指南分区挑一篇继续。
+## 增加能力
+
+<Cards>
+  <Card title="启用工作区" description="让 Agent 读写文件、执行命令与使用技能" href="/docs/guides/workspace" />
+  <Card title="连接 MCP" description="接入已有 MCP 服务的工具与资源" href="/docs/guides/mcp" />
+  <Card title="选择运行节律" description="配置内置唤醒策略，了解等待与自主调度" href="/docs/guides/wakeup" />
+  <Card title="组织多个实例" description="选择按频道隔离或跨频道共享上下文" href="/docs/explanations/profiles-runtimes" />
+</Cards>
 
 ## 故障排查
 
-| 现象（日志原文） | 原因 | 处理 |
+| 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| `Model config file not found … creating an empty one` 后无其他输出 | `models.yaml` 是空的，没有任何模型 | 按第三步填写 |
-| `[my-first] missing required service "…"; profile is waiting` | profile 声明了当前不存在的扩展或引擎 | 检查 `extends` 或 `engine` 名字的拼写；装了对应扩展插件后它会自动装配 |
-| `[my-first] profile skipped: profile "…" already claims channels of "…"` | 两个 profile 认领了重叠的频道 | 给其中一个加上 `!` 排除项让路 |
-| `[my-first] profile skipped: Profile "my-first" claims no accounts` | `channels` 为空或没写 | 补上至少一个账号 |
-| 激活成功但消息无反应 | 频道没被认领（pattern 不匹配），或唤醒条件没命中 | 核对 `platform:selfId` 与频道号；私聊或 @ 一次测试 |
-| 回复报模型调用错误 | `models.yaml` 的 `baseUrl`/`apiKey`/`id` 不对 | 用 curl 或其他客户端先验证接口本身可用 |
+| `Model config file not found` | 指定数据目录没有模型配置 | 创建或填写 `models.yaml`，重新加载插件 |
+| `missing required service`，profile 等待 | 引擎或扩展服务缺失 | 核对名称，安装并启用对应 Koishi 插件 |
+| profile 因认领冲突被跳过 | 多份 profile 接管了相同账号和频道 | 用 `!` 排除重叠频道，或调整认领范围 |
+| `claims no accounts` | `channels` 缺失或为空 | 声明至少一个账号及其频道名单 |
+| profile 已激活，输入没有触发运行 | 频道未被认领，或未命中唤醒条件 | 核对 `platform:selfId` 与频道标识，在认领频道中 @ 机器人 |
+| 模型请求失败 | 接口配置有误或模型不支持所需能力 | 核对接口方言、地址、凭据、模型名称与工具调用支持情况 |
 
-更多调试手段（请求落盘、日志级别）见[调试与排障](/docs/guides/debugging)。
+请求记录与详细日志的使用方法见[调试与排障](/docs/guides/debugging)。

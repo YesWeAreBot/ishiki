@@ -11,14 +11,13 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  // 静态导出的 OG 图等绝对地址以此为准，与 next.config.mjs 的 basePath 保持一致
-  // TODO: ishiki.js.org 生效后改为该域名
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://yeswearebot.github.io/ishiki"),
+  // 静态导出的 OG 图等绝对地址以此为准，与部署域名保持一致
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://ishiki.js.org"),
   title: {
     default: appName,
     template: `%s | ${appName}`,
   },
-  description: "Ishiki（意识）是事件驱动的 Koishi 群聊人格运行时：让大语言模型以「一个真实的人」的方式生活在群聊与私聊里。",
+  description: "Ishiki（意识）是用于构建自主 Agent 的 Bot 开发元框架：上下文、唤醒与工具调用三族引擎可替换，提供工具编程、按需发现、统一资源访问与多实例运行。",
 };
 
 export default function Layout({ children }: LayoutProps<"/">) {

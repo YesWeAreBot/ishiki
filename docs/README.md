@@ -8,12 +8,12 @@
 
 ```bash
 bun install                              # 在仓库根执行，会一并安装 docs 依赖
-bun run --filter @ishiki/docs dev         # http://localhost:3000/ishiki/docs
+bun run --filter @ishiki/docs dev         # http://localhost:3000/docs
 bun run --filter @ishiki/docs build       # 静态导出到 docs/out
 bun run --filter @ishiki/docs types:check # next typegen + tsc --noEmit
 ```
 
-`next.config.mjs` 设置了 `basePath: '/ishiki'`（GitHub Pages 项目页），本地访问也要带这个前缀。
+站点使用根路径部署，本地首页为 `http://localhost:3000/`，手册入口为 `http://localhost:3000/docs/`。
 
 ## 结构
 
@@ -32,4 +32,4 @@ bun run --filter @ishiki/docs types:check # next typegen + tsc --noEmit
 
 ## 部署
 
-`.github/workflows/pages.yml` 在 `main` 分支的 `docs/**` 变更时构建并发布到 GitHub Pages（`https://yeswearebot.github.io/ishiki/`）。
+`.github/workflows/pages.yml` 在 `main` 分支的文档或构建依赖变更时构建并发布到 GitHub Pages。正式地址为 `https://ishiki.js.org/`，自定义域名保存在 `public/CNAME`。

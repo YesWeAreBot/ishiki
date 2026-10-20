@@ -1,76 +1,79 @@
 ---
 title: Ishiki 是什么
-description: 事件驱动的 Koishi 群聊人格运行时
+description: 用于构建自主 Agent 的 Bot 开发元框架
 ---
 
-Ishiki（意识）是一个 Koishi 插件，让大语言模型以「一个真实的人」的方式生活在你的群聊和私聊里：它按事件醒来、自行决定要不要说话、能调用工具做事，并始终以你写的人格（persona）存在。
+**Ishiki（意识）** 是用于构建自主 Agent 的 Bot 开发元框架。名称取自日语「意識（いしき）」。
 
-## 它解决什么问题
+> 为意识赋形，让 Agent 自成一格。
 
-普通聊天机器人是「请求—响应」模型：收到消息就回复。Ishiki 把对话当作**事件流**来处理：
+它把上下文组织、模型交互与运行节律抽象为三个可替换的引擎族，并在三者之上提供工具编程、按需发现、统一资源访问与多实例运行。`koishi-plugin-ishiki` 是当前基于 Koishi 的核心运行时。
 
-- **意识不是连续的**。核心没有内建的持续思考循环：默认情况下 runtime 因输入而醒来，但唤醒还有别的来路——模型自己声明的等待条件、唤醒引擎的机械信号、以及扩展或宿主安排的外部唤醒，三者任一都能打开一轮。每次醒来处理一轮事件，然后沉寂，两次醒来之间什么都不运行。
-- **说话是一种选择**。消息进来后先经过唤醒引擎判断「要不要理」，被 @ 、私聊、命中关键词、或者模型自己判断「此刻有话想说」，才开口。沉默不需要理由，也不需要表演。
-- **发言只走一个出口**。模型写的普通文本是它的内心独白，别人看不见；只有显式调用 `send_message` 工具，消息才会真正发到平台上。
-- **能做事，不只是聊天**。通过内置工具和扩展接入的 MCP 服务器、工作区（文件与命令执行）等能力，它可以查资料、读图片、执行命令，再把结果用自然的方式带进对话。
+## 分层
 
-## 一次典型的醒来
+| 层 | 承担的事 |
+| --- | --- |
+| `@yesimagent/core` | Agent 轮次、事实日志、插件钩子、工具与消息类型 |
+| `@yesimagent/gateway` | `models.yaml`、供应商接入、模型组与候选排序 |
+| `koishi-plugin-ishiki` | profile 与 runtime 装配、引擎选择、扩展装配、资源中心、Koishi 接入 |
 
-```mermaid
-sequenceDiagram
-    participant P as 平台（如 OneBot）
-    participant K as Koishi
-    participant W as 唤醒引擎
-    participant A as 模型
-    P->>K: 消息事件
-    K->>W: 先记入事实流，再判定要不要理
-    alt 唤醒
-        W->>A: 开始一轮思考（注入上下文）
-        A->>A: 内心独白（私有）
-        A->>P: send_message 发出可见消息
-        A->>A: finish 结束本轮
-    else 不唤醒
-        W-->>K: 保持沉默（消息已在事实流里）
-    end
-```
+`yesimagent` 提供轻量、可扩展的 Agent 运行时。Ishiki 把它的插件接口收敛成一份清晰的扩展契约，再补上角色运行需要的配置、寻址与资源管理。
 
-## 与前身 YesImBot 的关系
+## 三个引擎族
 
-Ishiki 是 YesImBot（Athena）设计思想的延续与重写。YesImBot 的核心概念——场景化人格、响应意愿、消息级事件——在 Ishiki 中以 profile、唤醒引擎、上下文引擎的形式继续存在；YesImBot 自带的平台翻译层、模型 Provider 插件体系则不再保留，改由 Koishi 原生适配器加 `models.yaml` 模型网关承担。
+| 引擎族 | 回答的问题 | 内置变体 |
+| --- | --- | --- |
+| 上下文（context） | 本轮向模型提供哪些输入 | standard、v3 |
+| 唤醒（wakeup） | Agent 何时运行、如何安排节律 | standard、v3、jev |
+| 工具调用（toolcall） | 模型交互如何组织、如何产生工具调用 | native、v3、hermes、qwen3coder、morph-xml、yaml-xml |
 
-<Callout type="warn">
-两个项目相互独立、不能混装：同时启用 YesImBot 与 Ishiki 会出现重复响应与配置冲突。
-</Callout>
+同一个 runtime 在每一族里选择一个变体。上下文引擎检索与组织信息，形成模型输入；工具调用引擎通过 `LanguageModelV4` 中间件定义交互流程；唤醒引擎自行安排运行时机，可以基于事件判断，也可以在没有外部输入时持续调度。
 
-## 它适合谁
+三个关注点可以分别定制，具体变体按各自的接口约定配合工作。
+
+每个变体是一个 Koishi 服务，按 `ishiki.engine.<族>.<名字>` 注册。第三方实现作为普通 Koishi 插件安装后按服务名被发现，profile 写名字即可选用；profile 引用了尚未安装的引擎时，这个 profile 停在等待态，依赖装好后再装配。
+
+`narrative` 是独立插件提供的配套变体：上下文引擎维护可恢复的叙事，工具调用引擎在同一个模型调用内组织 Narrator、Action Decoder 与 Replyer。Narrator 推进叙事并选择下一步，Action Decoder 与 Replyer 是两条分支，分别产生工具调用与面向用户的回复。工具执行与会话存储仍由宿主负责。
+
+## 工具与资源
+
+- 内置工具包括 `read`、`send_message`、`finish` 与 `wait`。模型的普通文本默认只写入事实日志；要让消息到达平台，需要调用 `send_message`。
+- `codemode` 默认关闭。开启后，多数业务工具收进 QuickJS，由模型写程序组合调用；`finish` 与 `wait` 保持直调，`send_message` 在直调与程序两侧都可用。
+- `toolsearch` 默认关闭。开启后，非常驻工具延迟披露，`search` 命中的工具从下一步开始可调用。
+- 每个 runtime 拥有独立的资源中心，内置 `asset`、`artifact`、`local` 三种方案。workspace、skill、mcp、onebot 等方案随对应扩展注册；`read` 接收完整 URL，交给对应方案解释。
+
+## profile 与 runtime
+
+- **profile** 是人格、激活与依赖隔离的单位。一份 `profile.yml` 声明模型、频道认领、三族引擎与 `extends` 扩展，`persona.md` 存放人设。
+- **runtime** 是一个地址上的运行实例。channel 模式按频道各派生一份；cross 模式把认领的频道合流成一份，上下文跨频道共享。
+- 上下文与唤醒实例、事实日志、资源目录按 runtime 独立；模型与工具调用包装按 profile 共享。
+- runtime 按需创建：常见时机是第一条落到该地址的输入；创建后，后续输入与显式唤醒复用同一实例。
+
+## 从哪里开始
 
 <Cards>
   <Card
-    title="Koishi 用户"
-    description="想要一个像人一样参与群聊的机器人，从快速上手开始"
+    title="快速开始"
+    description="从源码构建到第一次对话，跟着做就能跑起来"
     href="/docs/tutorial/quickstart"
   />
   <Card
-    title="部署者"
-    description="想精细控制唤醒策略、上下文窗口、模型故障转移与故障恢复"
-    href="/docs/guides/wakeup"
+    title="编写 profile"
+    description="人格、频道认领、引擎选择与扩展配置"
+    href="/docs/guides/profile"
   />
   <Card
-    title="扩展开发者"
-    description="想为它写工具、替换引擎或接入新的资源方案"
-    href="/docs/reference/api"
-  />
-  <Card
-    title="只想先看看"
-    description="从架构总览开始，理解它为什么长成现在这样"
+    title="架构总览"
+    description="模块边界、输入与调度的分离、三族引擎的装配方式"
     href="/docs/explanations/architecture"
+  />
+  <Card
+    title="扩展 API"
+    description="贡献工具、编写引擎变体、注册资源方案"
+    href="/docs/reference/api"
   />
 </Cards>
 
-## 当前状态
+## 开始构建
 
-<Callout type="warn" title="0.0.x 活跃开发期">
-各包尚未上架 npm 与 Koishi 插件市场，安装以源码构建接入为准，见[快速上手](/docs/tutorial/quickstart)。
-</Callout>
-
-配置字段随版本演进，本文档以当前仓库源码为准；字段变更时请以 `packages/koishi-plugin-ishiki/src/profile/config.ts` 为最终依据。
+当前使用源码构建，将核心运行时接入 Koishi。按[快速上手](/docs/tutorial/quickstart)配置模型与第一份 profile，即可开始运行。独立于 Koishi 的运行方式是项目的发展方向。

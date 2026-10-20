@@ -3,8 +3,6 @@ title: 模型工具与资源协议
 description: 内置工具的输入输出与资源 URL 的完整语法
 ---
 
-本文是模型侧可调用面的参考：六个内置工具、资源 URL 方案、文本预算。
-
 ## 内置工具
 
 ### send_message
@@ -20,13 +18,13 @@ description: 内置工具的输入输出与资源 URL 的完整语法
     },
     mode: {
       type: '"element" | "raw"',
-      default: 'element',
-      description: 'element：按消息元素解析（可含 <img/>、<at/> 等）；raw：纯文本',
+      default: 'raw',
+      description: 'element：按消息元素解析（可含 <img/>、<at/> 等）；raw 或省略：纯文本',
     },
     continue: {
       type: 'boolean',
       default: 'false',
-      description: 'true 时某条失败后继续发余下消息；默认失败即停',
+      description: 'true 时发送失败仍继续处理后续消息，并允许后续模型步骤；默认在失败时返回错误，发送成功后结束本轮',
     },
     target: {
       type: '{ sid, channelId }',
@@ -42,14 +40,14 @@ description: 内置工具的输入输出与资源 URL 的完整语法
 - 消息里的媒体 `src` 支持 `asset://`、`artifact://`、`local://`、`workspace://`，解析为内联数据发送；解析失败的媒体被剔除并报告，不阻塞消息。
 - cross 模式必须带 `target`，且目标必须在 profile 认领范围内。
 - 打字延迟按 `typing` 配置逐条计算（中文按 `charPerSecond`、拉丁按其 1.5 倍，带抖动）。
-- 结束轮次的隐式规则：一轮内只调了 `send_message` 且全部成功，轮次自动结束；显式调 `finish` 也一样。
+- 模型直接调用 `send_message` 成功且未设置 `continue: true` 时，本轮结束；显式调用 `finish` 或 `wait` 也会结束本轮。
 
 ### read
 
 读取资源，输入 `{ url }`。文件型 URL 支持行范围和元数据视图：
 
 ```text
-read({ url: "artifact://codemode/abc123.bin:1-200" })
+read({ url: "artifact://bash/output.txt:1-200" })
 read({ url: "asset://<32位十六进制>" })
 read({ url: "workspace:///home/workspace/report.txt" })
 read({ url: "local://notes.txt?view=meta" })
@@ -85,14 +83,14 @@ read({ url: "local://notes.txt?view=meta" })
   }}
 />
 
-两个窗口谁先到谁生效，一轮里最后一次调用生效。它是**一次性声明，不是定时触发器**：触发一次即作废，没有周期，也没有 profile 默认值兜底——不调用就等于「不叫醒我」，之后只有机械信号与外部唤醒能打开下一轮。返回值回显真正生效的窗口；空调用返回 `none: true`。条件只活在内存里，不写入事实流、重启后不恢复。完整语义与选择建议见[调整唤醒行为](/docs/guides/wakeup)。
+两个窗口中先满足的条件生效，每轮采用最后一次调用的声明。条件在轮次结束时启用，触发一次后清除；返回值回显当前声明，空调用返回 `none: true`。条件保存在内存中，重启后清除。持续的调度策略可以由自定义唤醒引擎管理，显式 `wake` 也可以独立触发运行。完整语义见[调整唤醒行为](/docs/guides/wakeup)。
 
 ### codemode
 
-把一批工具收进 QuickJS 沙箱，模型改写一段 JS 程序在其中调用工具。开关与配额见[参考：插件与 profile 配置](/docs/reference/plugin-config)的 codemode 段。
+启用后，模型可以编写 JS 程序，在 QuickJS 沙箱中组合调用业务工具。codemode 默认关闭，开关与配额见[插件与 profile 配置](/docs/reference/plugin-config)。
 
-- 程序内 `await tools.name(input)` / `await tools["server_tool"](input)` 返回工具的原始 JSON 安全值；中间数据不出上下文。
-- `direct` 名单内的工具只留模型目录（程序够不着），未列出的收进沙箱（目录里消失）；`send_message` 两处都可达，`finish`、`wait` 只留目录。
+- 程序内 `await tools.name(input)` / `await tools["server_tool"](input)` 返回工具的原始 JSON 安全值。中间数据由程序处理，最终返回值进入后续模型上下文。
+- `direct` 名单内的工具保留模型直接调用入口，其余业务工具由程序调用；`send_message` 同时支持直接与程序调用，`finish`、`wait` 保持直接调用。
 - 传媒体出沙箱的唯一方式：返回值顶层带 `attachments` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。
 - 每次调用是一个独立程序；需要分步传递的数据放进返回值，下一步以观察形式看到。
 
@@ -116,7 +114,9 @@ read({ url: "local://notes.txt?view=meta" })
 | `mcp` | `mcp://<服务器>/<资源URI>` | mcp-client 扩展注册；内部 URI 连同 query、冒号与 fragment 原样透传 |
 | `onebot` | `onebot://actions`、`onebot://actions/<动作名>` | onebot 扩展注册；前者是当前后端的分类索引，后者是单动作的参数与后端差异 |
 
-`asset` / `artifact` / `local` 是内置保留方案。FileScheme 自行解析行选择器、`?view=meta` 与续读 offset；资源中心只按 scheme 路由完整 URL。文件名中的字面冒号使用 `%3A`。native 后端的 workspace URL 使用实际宿主路径；Windows 可写为 `workspace:///d/work/report.txt`，盘符段的字面冒号也需编码为 `%3A`。
+每个 runtime 拥有独立资源中心，URL 在该中心已注册的 scheme 中解析。`asset` / `artifact` / `local` 是内置保留方案，表中其余方案由对应扩展提供。扩展可以注册 HTTP(S) 等新 handler，继续通过 `read` 访问资源。
+
+FileScheme 自行解析行选择器、`?view=meta` 与续读 offset；资源中心只按 scheme 路由完整 URL。文件名中的字面冒号使用 `%3A`。native 后端的 workspace URL 使用实际宿主路径；Windows 可写为 `workspace:///d/work/report.txt`，盘符段的字面冒号也需编码为 `%3A`。
 
 普通 URL 可以表示当前资源；`artifact` 表示已固化内容快照。原来源续读不承诺跨次读取一致性。
 
@@ -124,7 +124,7 @@ read({ url: "local://notes.txt?view=meta" })
 
 模型可见的文本共用 **2000 行 / 30,000 个 UTF-16 code unit** 的预算，正文与所有续读说明一起计入。截断不拆开 Unicode 代理对，不丢弃单行余文。
 
-Continue URL 中的 `offset` 是请求范围内已消费的 UTF-16 code unit 数；URL 保留原来的行范围和 view。应使用完整锚点，而不是自行递增行号。读到范围末尾后不再生成 Continue。
+Continue URL 中的 `offset` 是请求范围内已消费的 UTF-16 code unit 数；URL 保留原来的行范围和 view。继续读取时使用返回的完整 URL，以保留范围与精确续读位置。读到范围末尾后不再生成 Continue。
 
 read 返回请求范围内的完整内容，传输与执行仍受现有 SDK 限制约束。
 

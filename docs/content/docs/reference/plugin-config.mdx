@@ -34,7 +34,7 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
   }}
 />
 
-两个扩展插件各自的插件级配置只有一项：`logLevel`（同上，默认 2），作用于扩展自身的日志。
+扩展插件的配置见各包说明。profile 通过 `extends.<名称>.config` 传入实例配置。
 
 ## profile 级配置（profile.yml）
 
@@ -69,17 +69,17 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
     context: {
       type: 'ContextConfig',
       default: '{ engine: "standard" }',
-      description: '上下文引擎',
+      description: '组织模型上下文的引擎',
     },
     wakeup: {
       type: 'WakeupConfig',
       default: '{ engine: "standard" }',
-      description: '唤醒引擎',
+      description: '控制运行时机与调度的引擎',
     },
     toolcall: {
       type: 'ToolcallConfig',
       default: '{ engine: "native" }',
-      description: '工具调用引擎',
+      description: '定义模型交互与工具输出协议的引擎',
     },
     codemode: {
       type: 'CodemodeConfig',
@@ -87,7 +87,7 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
     },
     toolsearch: {
       type: 'ToolsearchConfig',
-      description: '工具渐进披露，见下',
+      description: '按需发现工具，见下',
     },
     typing: {
       type: 'TypingConfig',
@@ -117,7 +117,7 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 | `toolcall.narrative.decoderInstructions` | `string` | 无 | 追加行动解码指令 |
 | `toolcall.narrative.replyerInstructions` | `string` | 无 | 追加可见表达指令 |
 
-主 `model` 负责 Narrator 和历史压缩。每个内部阶段沿用取消信号、采样设置和输出 token 上限；停止序列、返回格式、请求头与 provider 私有选项不跨角色转发，角色使用自己的 JSON 或工具合同及模型网关配置。返回用量为各阶段用量之和，reasoning 只包含显式剧本，不包含底层模型的隐藏推理。
+主 `model` 负责 Narrator 和历史压缩。每个内部阶段沿用取消信号、采样设置和输出 token 上限；停止序列、返回格式、请求头与 provider 私有选项不跨角色转发，角色使用自己的 JSON 或工具约定及模型网关配置。返回用量为各阶段用量之和，reasoning 只包含显式剧本，不包含底层模型的隐藏推理。
 
 ### failover
 
@@ -146,6 +146,8 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 </Callout>
 
 ### codemode
+
+开启后，业务工具通过 QuickJS 程序组合调用。`direct` 可以保留额外的模型直接调用入口；`send_message` 同时支持直接与程序调用，`finish`、`wait` 保持直接调用。
 
 <TypeTable
   type={{
@@ -187,11 +189,9 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
   }}
 />
 
-<Callout>
-`send_message` 在目录与沙箱两处都可达；`finish`、`wait` 只留在模型目录。`direct` 只调整其余工具的归属。
-</Callout>
-
 ### toolsearch
+
+开启后，非常驻工具进入待发现的工具池。`search` 命中项从下一模型步骤可用；与 codemode 配合时，工具签名通过目录更新提供给程序。
 
 <TypeTable
   type={{
@@ -327,7 +327,7 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 
 ## 默认 profile 示例
 
-仓库 `packages/koishi-plugin-ishiki/resources/profile.example.yml` 是带逐段注释的官方示例，包含 channel/cross/v3/jev 四份完整配置，与本文档字段一一对应，是最权威的样例。
+仓库 `packages/koishi-plugin-ishiki/resources/profile.example.yml` 是带逐段注释的官方示例，提供 channel、cross、v3、jev 的配置示例。实际字段与默认值以各引擎和 profile 的 Schema 为准。
 
 ## 旧字段迁移
 

@@ -88,7 +88,7 @@ description: 模型网关配置的完整字段
 
 思考档位全集：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。
 
-模型目录还支持 `language/embedding/image/speech/transcription/reranking/decision` 等类型标记；Ishiki 对话主要消费语言模型，`decision` 类型供 jev 唤醒引擎使用。
+模型目录还支持 `language/embedding/image/speech/transcription/reranking/decision` 等类型标记；Ishiki 的对话调用使用语言模型。jev 唤醒引擎的判定请求按其 `endpoint` 独立配置，见[调整唤醒行为](/docs/guides/wakeup)。
 
 ## groups
 

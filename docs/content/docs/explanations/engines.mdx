@@ -1,98 +1,143 @@
 ---
 title: 引擎系统
-description: 三族引擎的分工、组合与扩展原理
+description: 上下文、工具调用与唤醒三族引擎的分工、组合与扩展
 ---
 
-Ishiki 把「一次对话中的模型侧行为」拆成三族正交的引擎：上下文（看什么）、唤醒（理不理）、工具调用（怎么做）。本文讲清这个拆分为什么成立、组合如何实现、以及自己写一个引擎意味着什么。
+Ishiki 的模型侧行为分成三族可替换的引擎。profile 的 `context`、`toolcall`、`wakeup` 三段各选一个变体，同一个 runtime 在每一族里只使用选中的那个实例。
 
-## 为什么是三族
+## 上下文：组装模型看到的 messages
 
-一次群聊交互里，模型侧要回答三个互相独立的问题：
+上下文引擎读取 runtime 的事实流，把每次请求要交给模型的内容整理成 messages。事实条目留在 `events.jsonl` 里，引擎给出的是读取时的投影：投影可以在每次请求前重新计算，也可以把结果作为新条目追加回去。
 
-1. **这条消息要不要理？** —— 唤醒引擎（wakeup）
-2. **这一轮给模型看什么？** —— 上下文引擎（context）
-3. **模型怎么表达「用工具」？** —— 工具调用引擎（toolcall）
+`ContextEngineInstance` 的方法都是可选的：
 
-这些选择大多可以独立组合：意愿唤醒配 WorldState 上下文、规则唤醒配线性历史、v3 上下文配原生工具调用。每一维都能替换，不必切换整套「预设方案」。
+- `prepareEntries(entries, request?)`：在请求前整理条目，返回本次请求使用的序列。
+- `renderMessages(messages, request?)`：把条目对应的消息渲染成模型输入，可以合并、改写或插入消息。
+- `instructions()`：追加本引擎需要的系统提示词。
+- `attach(agent)`：订阅轮次事件，返回释放函数。
 
-配置上，profile 的三个段（`wakeup`/`context`/`toolcall`）各自带 `engine` 字段与私有参数。`narrative` 是配套合同：它的上下文引擎提供剧本与输入位置标记，工具调用引擎消费这些标记；要用叙事工具调用就必须同时启用叙事上下文，唤醒选择仍独立。narrative 不在主插件里，由独立插件 `koishi-plugin-ishiki-narrative` 提供。
+`request` 携带 `turnId` 与 `signal`。内置 `standard` 保留线性历史，估算超出 `maxTokens` 时把较旧的一段摘要成新的 `ishiki.compact` 条目，下一次请求从摘要之后继续；`v3` 把窗口渲染成 `<world_state>`，并按配置注入 `memory/` 下的记忆块。standard 的压缩以追加条目表达，v3 的视窗在投影里完成，原始消息始终可以回放。
 
-## 组合机制：Koishi Service
+## 工具调用：包装 LanguageModelV4
 
-每个引擎是一个 Koishi Service，按约定名字注册：`ishiki.engine.context.standard`、`ishiki.engine.wakeup.jev`……主插件启动时注册全部内置引擎；第三方引擎作为普通 Koishi 插件安装即可。
+工具调用引擎接收 profile 的模型，交回一个实现同一接口的 `LanguageModelV4`。Agent 只通过这个接口生成内容；工具的执行仍然由宿主完成，引擎改变的是模型如何表达工具调用、以及一次调用内部经过哪些阶段。
 
-profile 激活时，主插件按名字取服务（`ContextEngine.GetService(fiber, "standard")` 等），调用它的 `[Service.invoke](配置, 上下文)` 产出实例。四个关键性质：
+- `middleware()` 返回 AI SDK 的 `LanguageModelV4Middleware`，基类的 `wrap(model)` 用它包装模型。
+- 覆盖 `wrap(model)` 可以返回自定义实现，把一次 `doGenerate` / `doStream` 展开成多阶段、多模型的编排。
 
-- **按名发现，缺了等待**。profile 写了不存在的引擎名，profile 停在等待态并报 `missing required service`；插件装好重载后自动装配。这让「先写 profile、后装引擎包」的工作流成立。
-- **profile fiber 带内核依赖**。引擎 provider 与扩展都在 profile 的 fiber 里取服务，所以 `ishiki` 也写进了这条 fiber 的依赖表——引擎实现里读 `ctx.ishiki`（如 `gateway`、`logger`）不会触发未声明依赖的警告。
-- **会话状态按 runtime 派生**。上下文、唤醒实例各自创建，所以剧情和 v3 唤醒意愿值按频道隔离（channel 模式下）。工具调用包装器与模型在 profile 级共享，不能把当前会话状态放在包装器中。
-- **扩展与引擎同机制**。扩展（`ishiki.ext.<名>`）也是同样的 Service 契约，只是贡献面被限定在工具与提示词。
+`native` 不提供 middleware，模型直接输出原生 function call。`v3`、`hermes`、`qwen3coder`、`morph-xml`、`yaml-xml` 在 middleware 里完成文本协议与标准工具调用之间的转换。`narrative` 覆盖 `wrap`：Narrator 推进剧情并选择走向，回话交给 Replyer，行动交给 Action Decoder，每一步只进入其中一个分支，最后由包装器组装成标准的 reasoning 与工具调用。
 
-## 三族引擎各自的设计约束
+包装后的模型在 profile 级创建，所有 runtime 共用，因此工具调用实例适合承载与具体会话无关的编排。会话状态放在 Context 或 Wakeup 实例里，它们按 runtime 创建。
 
-**唤醒引擎负责输入驱动的自动唤醒。** 它在 `attach(agent)` 里订阅 core 的 `message.appended` 通知，从已提交的消息中挑出自己关心的那些，自行判断、自行定时，认定该醒时直接调用 `agent.continue()`。它只管这一类自动响应：模型声明的 `wait` 条件与显式 `wake` 是另外两条独立来路，不经过它。事实流不归它管——runtime 早已把消息写完，引擎只是读者，所以换引擎不改变「收到过什么」，只改变「要不要理」。有状态的需求（v3 的意愿值、jev 的冷却期）在实例内部维护，状态粒度即实例粒度；忙碌时怎么处理（等待、重试、放弃）也由引擎自己定。
+## 唤醒：决定何时运行
 
-**上下文引擎只做投影。** 它在每轮请求前被调用（`prepareEntries`），把事实流投影成模型输入，可以追加系统提示词（如 v3 的 WorldState 说明、记忆块）。它不修改事实流本身——压缩类操作（standard 的摘要）以**追加新条目**的方式表达，历史永远可回放。
+唤醒引擎接收 runtime 的 `Agent`，自己决定什么时候开始下一轮。实例只有一个必选方法：`attach(agent: Agent): () => void`。
 
-**工具调用引擎包装模型的执行方式。** native 直接使用模型原生 function call；v3/hermes/qwen3coder/morph-xml/yaml-xml 处理文本工具协议，让不支持 function call 的模型也能使用工具。`narrative` 则在同一个 `LanguageModelV4` 调用内部协调 Narrator、Action Decoder 与 Replyer，再返回普通 reasoning 与工具调用。真正的工具执行仍由宿主 Agent 完成。
+`attach` 在 runtime 初始化时调用一次，返回的函数在 runtime 停止时执行。引擎可以订阅已提交的输入，也可以自己计时，或者把两者组合起来。接口没有输入前提：定时器到点后调用 `agent.continue()`，Agent 就会基于已有历史开始一轮；传入文本时，这段文本作为该轮开场的 user 消息写入事实流。
 
-## v3 引擎族：迁移通道
+订阅回调会被 core 等待，耗时的判断要另起任务并自行捕获错误。开启轮次前检查 `agent.isIdle()`；异步判断返回后再检查一次。忙碌时等待、跳过还是排队，由引擎按自己的策略决定。
 
-三族里都有 `v3` 变体不是巧合——它们是从 YesImBot v3 迁移的行为：
+内置的 `standard`、`v3`、`jev` 都在消息提交后判定，是三种具体的消息判定策略：私聊、@、引用与关键词命中；响应意愿累计后按概率开口；调用轻量模型判断是否值得接话。接口本身不限定触发来源。模型声明的 `wait` 条件与扩展或宿主调用的 `runtime.wake()` 是独立触发路径，直接调用 core 的 `continue`，不经过唤醒引擎。
 
-- `context: v3`：WorldState 视窗（`<working_memory>` 分已处理/新事件）+ 核心记忆块（`memory/*.md` 注入 system）。
-- `wakeup: v3`：响应意愿模型（base/atMention/衰减半衰期/回复成本……意愿超阈值按概率开口）。
-- `toolcall: v3`：JSON OUTPUT 协议，每步强制输出 `thoughts`（observe/analyze_infer/plan 三段）+ `actions`。
+## 组合：同族互斥，跨族独立
 
-三者可以独立启用——v3 上下文配 native 工具调用完全合法。它们是「老体验」的完整还原，但不再绑定：想混搭新引擎，随意。
+- 每一族选一个变体：同一族里没有叠加或链式组合，profile 里写出的那个变体就是该 runtime 在该族使用的实现。
+- 三族分别选择：`wakeup.engine: v3` 可以搭配 `context.engine: standard` 和 `toolcall.engine: native`，每一族的参数只作用于自己。
+- `narrative` 的两个变体由独立插件 `koishi-plugin-ishiki-narrative` 提供，并按约定配套：叙事上下文在输入前放入带标记的消息，叙事工具调用读取该标记来划分历史与本轮证据。只启用 `toolcall.engine: narrative` 时，包装器找不到标记并在该轮报错；只启用 `context.engine: narrative` 可以运行，但模型拿不到叙事约定，流程不会按叙事方式推进。
+- 唤醒引擎可以独立选择，根据自己的策略安排 Agent 的运行时机。
 
-## narrative：叙事会话与模型编排
+## 发现与装配
 
-narrative 的两个引擎由 `koishi-plugin-ishiki-narrative` 提供：构建并链接 `packages/narrative`，在 `koishi.yml` 启用 `ishiki-narrative: {}`，profile 里按名字选中即可。插件缺席时 profile 停在等待态，装好重载后自动装配。
+引擎是 Koishi Service，服务名由基类的 `GetName` 生成，形如 `ishiki.engine.context.standard`、`ishiki.engine.wakeup.jev`。主插件在构造时注册内置变体；第三方变体作为普通 Koishi 插件安装，并由它自己的 `ctx.plugin` 注册。
 
-ContextEngine 维护的是可恢复的叙事会话，不是另一个常驻 Agent：它把新增事件投影成输入，在已完成步骤的 `turn.step` 订阅中追加剧情条目。包装器没有自己的历史，只从当前输入运行角色阶段。旧剧本保留为稳定前缀，当前原始证据另列，模型输出的剧本不再当新消息重译。
+profile 激活时，内核按三段配置里的名字取服务并调用 `[Service.invoke]`。Context 与 Wakeup 的 `[Service.invoke]` 接收变体配置和该 runtime 的 `ExtensionContext`；Toolcall 只接收变体配置，因为包装后的模型在 profile 级共享。缺少服务时，该 profile 记录一条错误并停在等待状态，服务可用后继续装配。
 
-`turn.step` 订阅会被 core 等待，但此时可能已有新消息合入台账。剧本条目因此只认领本次请求带入的源 ID，不能把步骤结束时的整个尾部标成已处理。带标记的 assistant 输出与它的剧情投影通过来源 ID 对齐，恢复时可补投影，无需重做外部动作。配置见[管理上下文窗口](/docs/guides/context)。
+## 内置变体
 
-## 自己写一个引擎
+| 族 | 变体 | 行为 |
+| --- | --- | --- |
+| context | `standard` | 线性历史，超预算后把旧段摘要成 `ishiki.compact` 条目 |
+| context | `v3` | `<world_state>` 视窗，注入 `memory/` 记忆块 |
+| wakeup | `standard` | 私聊、@、引用与关键词四条规则 |
+| wakeup | `v3` | 响应意愿累计、衰减与概率开口 |
+| wakeup | `jev` | 调用轻量模型判断是否值得接话 |
+| toolcall | `native` | 原生 function call |
+| toolcall | `v3`、`hermes`、`qwen3coder`、`morph-xml`、`yaml-xml` | 文本工具协议的解析与生成 |
+| toolcall | `narrative` | Narrator 推进剧情，按意图分支到 Action Decoder 或 Replyer |
 
-最小代价的入口是唤醒引擎（一个只订阅、只开轮的实例）：
+三族的 `v3` 变体可以分别选择，例如 v3 上下文可以搭配 `native` 工具调用。
+
+## 写一个自主调度的唤醒引擎
+
+这个引擎按固定间隔检查 Agent 的运行状态，空闲时开启下一轮。实例创建后，调度便可以独立于外部输入持续进行。
 
 ```ts
-import { WakeupEngine, type Agent, type WakeupEngineInstance } from "koishi-plugin-ishiki";
-import { Service, type Context } from "koishi";
+import { Schema, Service } from "koishi";
+import type { Context } from "koishi";
+import { WakeupEngine } from "koishi-plugin-ishiki";
+import type { EngineConfig, ExtensionContext, WakeupEngineInstance, WakeupEngines } from "koishi-plugin-ishiki";
 
-class MyWakeupInstance implements WakeupEngineInstance {
-  attach(agent: Agent): () => void {
-    return agent.channel.subscribe("agent", (event) => {
-      if (event.type !== "message.appended") return;
-      const message = event.message;
-      if (message.role !== "custom" || message.type !== "ishiki.message.created") return;
-      if (agent.isIdle() && Math.random() < 0.1) agent.continue();
-    });
+interface RhythmConfig {
+  everySeconds: number;
+}
+
+const RhythmConfig: Schema<RhythmConfig> = Schema.object({
+  everySeconds: Schema.number().min(1),
+});
+
+declare module "koishi-plugin-ishiki" {
+  interface WakeupEngines {
+    rhythm: RhythmConfig;
   }
 }
 
-export class MyWakeupEngine extends WakeupEngine<"my-wakeup"> {
-  constructor(ctx: Context) { super(ctx, "my-wakeup"); }
-  public [Service.invoke](config, context) { return new MyWakeupInstance(); }
+export class RhythmWakeupEngine extends WakeupEngine<"rhythm"> {
+  public constructor(ctx: Context) {
+    super(ctx, "rhythm");
+  }
+
+  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "rhythm">>, _context: ExtensionContext): WakeupEngineInstance {
+    const settings = RhythmConfig({ everySeconds: config.rhythm?.everySeconds ?? 60 });
+    return {
+      attach(agent) {
+        const timer = setInterval(() => {
+          if (agent.isIdle()) agent.continue();
+        }, settings.everySeconds * 1000);
+        timer.unref();
+        return () => clearInterval(timer);
+      },
+    };
+  }
 }
+
+export default RhythmWakeupEngine;
 ```
 
-`attach` 要做三件事：订阅 `agent` 频道的 `message.appended`、从中挑出关心的消息、判定成立就 `agent.continue()`。两个约束值得记住：订阅回调被 core 等待，耗时的判定（如 jev 的模型调用）要另起任务并自行捕获错误；开轮前要确认 `agent.isIdle()`，异步判定在结果回来后再确认一次——上面例子里判定与检查都是同步的，所以天然安全。
+将该模块作为 Koishi 插件加载，再在 profile 中选择：
 
-作为 Koishi 插件发布后，用户在 profile 写 `wakeup: { engine: my-wakeup }` 即用。上下文与工具调用引擎同理（基类分别为 `ContextEngine`、`ToolcallEngine`），接口细节见[扩展 API 参考](/docs/reference/api)。
+```yaml
+wakeup:
+  engine: rhythm
+  rhythm:
+    everySeconds: 60
+```
 
-<Callout title="引擎改变行为，扩展增加能力">
-如果你在写「给模型加几个工具」，那是扩展；如果你在写「换一种决定历史的方式」，才是引擎。
-</Callout>
+几点约定：
+
+- `attach` 返回的函数在 runtime 停止时执行。清除定时器、取消订阅、放弃未完成的判断都在这里完成。
+- runtime 按需创建；当前平台接入会在首次输入路由到该频道时创建实例。计时器从 `attach` 开始，随该 runtime 的停止结束。
+- 每次触发前检查 `agent.isIdle()`。忙碌时跳过当前检查，在下一个间隔继续。
+- `agent.continue()` 不带参数时，这一轮基于已有历史开始，不写占位消息。希望这一轮带上说明时，把说明写进 `persona.md` 或扩展的 `extendInstructions`；模型的系统提示词每轮都会读到。也可以调用 `agent.continue("...")`，这段文本会作为该轮开场的一条 user 消息写入事实流。
+- 一个 runtime 在唤醒族只有一个实例，与其他唤醒变体互斥。需要同时响应输入和定时任务时，在同一个实例里组合订阅与计时器。
+
+上下文与工具调用引擎同样继承各自的基类并实现 `[Service.invoke]`，接口细节见[扩展 API 参考](/docs/reference/api)。
 
 ## 继续阅读
 
 <Cards>
   <Card
     title="调整唤醒行为"
-    description="standard、v3、jev 三种引擎的配置与调参"
+    description="standard、v3、jev 三种变体的配置与调参"
     href="/docs/guides/wakeup"
   />
   <Card
