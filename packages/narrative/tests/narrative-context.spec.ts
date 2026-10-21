@@ -282,6 +282,58 @@ describe("narrative context", () => {
     ).toEqual(["summary", "delta"]);
   });
 
+  it("renders tool calls and results as action and observation blocks", async () => {
+    const agent = agentWith([
+      messageEntry("event-1", "hello"),
+      createEntry(
+        "message",
+        createAssistantMessage([
+          { type: "tool-call", toolCallId: "call-1", toolName: "probe", input: { nested: { a: 1 }, text: "value" } },
+          { type: "tool-result", toolCallId: "call-1", toolName: "probe", output: { type: "json", value: { ok: true } } },
+        ]),
+        { id: "assistant-entry" },
+      ),
+    ]);
+    const instance = new NarrativeContextInstance({}, fixture);
+    instance.attach(agent);
+    const prepared = await instance.prepareEntries(await agent.storage.read());
+    const rendered = instance.renderMessages(prepared.flatMap((entry) => (entry.type === "message" ? [entry.data] : [])));
+    const text = JSON.stringify(rendered);
+
+    expect(text).toContain("<action>");
+    expect(text).toContain("<function>probe</function>");
+    expect(text).toContain('<nested>{\\"a\\":1}</nested>');
+    expect(text).toContain("<text>value</text>");
+    expect(text).toContain("<observation>");
+    expect(text).toContain("<status>success</status>");
+    expect(text).toContain('{\\"ok\\":true}');
+  });
+
+  it("names file parts by media type and size instead of copying their bytes", async () => {
+    const agent = agentWith([
+      messageEntry("event-1", "hello"),
+      createEntry(
+        "message",
+        createAssistantMessage([
+          {
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "probe",
+            output: { type: "content", value: [{ type: "file", mediaType: "image/png", data: { type: "data", data: "AAAA" } }] },
+          },
+        ]),
+        { id: "assistant-entry" },
+      ),
+    ]);
+    const instance = new NarrativeContextInstance({}, fixture);
+    instance.attach(agent);
+    const prepared = await instance.prepareEntries(await agent.storage.read());
+    const text = JSON.stringify(instance.renderMessages(prepared.flatMap((entry) => (entry.type === "message" ? [entry.data] : []))));
+
+    expect(text).toContain("[image/png 3 B]");
+    expect(text).not.toContain("AAAA");
+  });
+
   it("keeps sessions isolated between context instances", async () => {
     const left = agentWith();
     const right = agentWith();

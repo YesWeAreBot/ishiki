@@ -6,13 +6,13 @@ import {
   type AgentEntry,
   type AgentMessage,
   type AgentToolMessage,
+  type FileData,
+  type ToolResultPart,
   type UserContent,
 } from "@yesimagent/core";
 import { Service, type Context, type Logger } from "koishi";
 import {
   ContextEngine,
-  actionBlock,
-  observationBlock,
   renderLine,
   type ContextEngineInstance,
   type ContextEngines,
@@ -154,6 +154,73 @@ function assistantScripts(message: AgentAssistantMessage): ScriptHit[] {
     hits.push({ marker, script });
   }
   return hits;
+}
+
+/** `<name>text</name>`。 */
+function tag(name: string, text: string): string {
+  return `<${name}>${text}</${name}>`;
+}
+
+/** A tool call as the narrative records it: the function and its resolved params. */
+function actionBlock(toolName: string, input: unknown): string {
+  let params: unknown;
+  if (typeof input !== "string") {
+    params = input;
+  } else {
+    try {
+      params = JSON.parse(input);
+    } catch {
+      params = input;
+    }
+  }
+
+  const rendered =
+    typeof params === "object" && params !== null
+      ? Object.entries(params as Record<string, unknown>)
+          .map(([key, value]) => tag(key, typeof value === "string" ? value : JSON.stringify(value ?? "")))
+          .join("")
+      : tag("input", typeof params === "string" ? params : JSON.stringify(params ?? ""));
+  return `<action>\n  ${tag("function", toolName)}\n  <params>${rendered}</params>\n</action>`;
+}
+
+/** File parts are named by encoding and size; the narrative never carries their bytes. */
+function mediaNote(part: { mediaType: string; data: FileData }): string {
+  if (part.data.type !== "data") return `[${part.mediaType}]`;
+  const raw = part.data.data;
+  const bytes = typeof raw === "string" ? Buffer.from(raw, "base64").byteLength : raw.byteLength;
+  return `[${part.mediaType} ${bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${bytes} B`}]`;
+}
+
+/** A tool result as the narrative records it: status plus the delivered value. */
+function observationBlock(toolName: string, output: ToolResultPart["output"]): string {
+  let status = "success";
+  let result: string;
+
+  switch (output.type) {
+    case "text":
+      result = output.value;
+      break;
+    case "json":
+      result = JSON.stringify(output.value);
+      break;
+    case "error-text":
+      status = "error";
+      result = output.value;
+      break;
+    case "error-json":
+      status = "error";
+      result = JSON.stringify(output.value);
+      break;
+    case "execution-denied":
+      status = "error";
+      result = `(denied)${output.reason === undefined ? "" : ` ${output.reason}`}`;
+      break;
+    default:
+      result = output.value.map((part) => (part.type === "text" ? part.text : part.type === "file" ? mediaNote(part) : `[${part.type}]`)).join("\n");
+      break;
+  }
+
+  return `<observation>\n  ${tag("function", toolName)}\n  ${tag("status", status)}\n  <result>${result}</result>\n</observation>`;
 }
 
 function assistantText(message: AgentAssistantMessage): string {
