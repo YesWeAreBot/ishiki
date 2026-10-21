@@ -1,29 +1,29 @@
 # Ishiki OneBot
 
-`koishi-plugin-ishiki-onebot` gives an Ishiki agent the OneBot v11 actions that core tools do not cover: group administration, group files and albums, message history, reactions, friend management, and profile edits.
+`koishi-plugin-ishiki-onebot` 把核心工具没有覆盖的 OneBot v11 动作交给 Ishiki Agent：群管理、群文件与群相册、历史消息、表情回应、好友管理、资料修改。
 
-It supports two protocol backends, NapCat and SnowLuma. Ordinary conversation still goes through `send_message`; this pack only fills in protocol-specific operations.
+它支持 NapCat 与 SnowLuma 两种协议后端。普通对话仍走 `send_message`；这个插件只补足协议特有的操作。
 
-## How it works
+## 工作机制
 
-A catalog generated at build time from both projects' OpenAPI documents drives everything: the tools, the `onebot://actions` resource, backend-specific parameters, and the read-only classification. Nothing is fetched at runtime.
+构建期从两边的 OpenAPI 文档生成的目录是唯一数据来源：工具、`onebot://actions` 资源、后端差异参数、只读判定都由它派生。运行时不访问任何文档仓库。
 
 ```mermaid
 flowchart LR
-    A["OpenAPI documents"] --> G["generate-catalog.mjs"]
+    A["OpenAPI 文档"] --> G["generate-catalog.mjs"]
     G --> C["src/catalog/generated.ts"]
     C --> T["list_actions / get_action / search_actions / list_categories"]
     C --> R["onebot://actions"]
     C --> E["query_action / invoke_action"]
     E --> P["bot.internal._request"]
-    E --> M["resource URL → base64:// or published HTTP URL"]
+    E --> M["资源 URL → base64:// 或发布的 HTTP URL"]
 ```
 
-The two backends differ in more than naming. Of 205 canonical actions, 160 exist on both, 174 on NapCat, and 191 on SnowLuma; 68 shared actions have different parameter shapes. The catalog keeps those differences instead of averaging them away, and it records each backend's wire name, because a folded alias can map to different action names (`share_peer` is `ArkSharePeer` on NapCat).
+两个后端的差异不止命名。205 个规范动作中，160 个两边都有，NapCat 有 174 个，SnowLuma 有 191 个；68 个共有动作的参数形状不同。目录保留这些差异，并记录每个后端各自的线上动作名，因为折叠后的别名可能对应不同名字（`share_peer` 在 NapCat 上是 `ArkSharePeer`）。
 
-## Install and enable
+## 安装与启用
 
-Build and link `packages/onebot` (`koishi-plugin-ishiki-onebot`) the same way as the other extension packs, enable it in `koishi.yml`, then declare it in a profile:
+按其他扩展包同样的方式构建并链接 `packages/onebot`（包名 `koishi-plugin-ishiki-onebot`），在 `koishi.yml` 启用，然后在 profile 中声明：
 
 ```yaml
 plugins:
@@ -34,44 +34,44 @@ plugins:
 extends:
   onebot:
     config:
-      backend: napcat # required: napcat | snowluma
-      mode: read # docs | read | write, default read
+      backend: napcat # 必填：napcat | snowluma
+      mode: read # docs | read | write，默认 read
 ```
 
-| Field             | Default          | Meaning                                                                                        |
-| ----------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
-| `backend`         | required         | Selects the action set, parameter shape, and read-only classification.                         |
-| `mode`            | `read`           | `docs` only answers catalog questions; `read` adds read-only execution; `write` adds all.      |
-| `maxInlineBytes`  | 8 MiB            | Limit for converting a resource URL into `base64://`; larger bytes fail instead of truncating. |
-| `resourceBaseUrl` | Koishi `selfUrl` | Origin the protocol backend uses to reach Koishi's HTTP service.                               |
-| `denyActions`     | `[]`             | Extra action names or aliases to refuse.                                                       |
-| `logLevel`        | `INFO`           | Plugin log level.                                                                              |
+| 字段              | 默认                | 说明                                                           |
+| ----------------- | ------------------- | -------------------------------------------------------------- |
+| `backend`         | 必填                | 选择动作集合、参数形状与只读判定                               |
+| `mode`            | `read`              | `docs` 只答目录问题；`read` 增加只读执行；`write` 增加全部执行 |
+| `maxInlineBytes`  | 8 MiB               | 资源转 `base64://` 的字节上限，超限报错而不截断                |
+| `resourceBaseUrl` | Koishi 的 `selfUrl` | 协议端访问 Koishi HTTP 服务用的 origin                         |
+| `denyActions`     | `[]`                | 额外禁用的动作名或别名                                         |
+| `logLevel`        | `INFO`              | 插件日志级别                                                   |
 
-## Tools
+## 工具
 
-| Tool              | Mode        | Purpose                                                                 |
-| ----------------- | ----------- | ----------------------------------------------------------------------- |
-| `list_actions`    | all         | Lightweight index, optionally filtered by category.                     |
-| `get_action`      | all         | One action's parameters, required fields, backend differences, aliases. |
-| `search_actions`  | all         | Matches names, summaries, aliases, categories, and parameter names.     |
-| `list_categories` | all         | Categories with action counts.                                          |
-| `query_action`    | read, write | Executes read-only actions only.                                        |
-| `invoke_action`   | write       | Executes any known action, including ones with side effects.            |
+| 工具              | 模式            | 用途                                 |
+| ----------------- | --------------- | ------------------------------------ |
+| `list_actions`    | 全部            | 轻量索引，可按分类过滤               |
+| `get_action`      | 全部            | 单动作的参数、必填项、后端差异、别名 |
+| `search_actions`  | 全部            | 匹配名称、摘要、别名、分类与参数名   |
+| `list_categories` | 全部            | 分类与动作数量                       |
+| `query_action`    | `read`、`write` | 只执行只读动作                       |
+| `invoke_action`   | `write`         | 执行任意已知动作，包含有副作用的     |
 
-Mode alone is not the permission boundary: `query_action` always refuses actions the current backend does not mark read-only, `invoke_action` refuses to run outside `write`, and `denyActions` applies on both paths.
+模式不是唯一的权限边界：`query_action` 永远拒绝当前后端未标记为只读的动作，`invoke_action` 在非 `write` 模式直接报错，`denyActions` 在两条路径上都生效。
 
-The same data is a resource: `onebot://actions` is the categorized index, and `onebot://actions/<name>` is one action's page. Both are readable with the `read` tool.
+同一份数据也是资源：`onebot://actions` 是分类索引，`onebot://actions/<name>` 是单动作页面，都可以用 `read` 工具翻阅。
 
-## Media parameters
+## 媒体参数
 
-Parameters that carry media accept any registered resource URL (`asset://`, `artifact://`, `local://`, `workspace://`, `skill://`, `mcp://`):
+带媒体的参数接受任何已注册的资源 URL（`asset://`、`artifact://`、`local://`、`workspace://`、`skill://`、`mcp://`）：
 
-- By default the bytes become `base64://`, which both backends accept.
-- Parameters that require a URL instead (SnowLuma's `ocr_image.image`, `send_tuwen_ark.preview_url`, the image fields of `get_mini_app_ark`, and `download_file.url`) are published through Koishi's HTTP service as a temporary URL.
-- `http(s)://`, `base64://`, `data:`, `file://`, and host paths pass through untouched.
-- Text resources and bytes above `maxInlineBytes` fail with a message; nothing is truncated.
+- 默认把字节转成 `base64://`，两个后端都接受。
+- 需要 URL 的参数（SnowLuma 的 `ocr_image.image`、`send_tuwen_ark.preview_url`、`get_mini_app_ark` 的图片字段、`download_file.url`）改为发布到 Koishi 的 HTTP 服务，返回临时 URL。
+- `http(s)://`、`base64://`、`data:`、`file://` 与宿主路径原样透传。
+- 文本资源与超过 `maxInlineBytes` 的字节直接报错，不做截断。
 
-Published URLs live under `/ishiki-onebot/<profile token>/resources/<id>`, one route per profile. Entries expire after ten minutes; a profile keeps at most eight, 32 MiB total. When the protocol backend cannot reach Koishi at its own address, point `resourceBaseUrl` at an origin it can reach:
+发布出来的 URL 位于 `/ishiki-onebot/<profile token>/resources/<id>`，每个 profile 一条路由。条目十分钟过期，一个 profile 最多保留 8 条、总计 32 MiB。协议端无法用 Koishi 自己的地址访问时，把 `resourceBaseUrl` 指向它能到达的 origin：
 
 ```yaml
 extends:
@@ -82,35 +82,35 @@ extends:
       resourceBaseUrl: http://host.docker.internal:5140
 ```
 
-This needs Koishi's HTTP service (`@koishijs/plugin-server`). Without it, only URL-only media parameters fail; documentation, execution, and `base64://` conversion keep working.
+这需要 Koishi 的 HTTP 服务（`@koishijs/plugin-server`）。缺少它时只有需要 URL 的媒体参数会失败；目录查询、动作执行与 `base64://` 转换照常工作。
 
-## Catalog generation
+## 目录生成
 
-`src/catalog/generated.ts` is committed, so neither building nor running needs the reference repositories. Regenerate it after updating either documentation checkout:
+`src/catalog/generated.ts` 已提交进仓库，构建与运行都不需要参考仓库。更新任何一边的文档后重新生成：
 
 ```bash
 node packages/onebot/scripts/generate-catalog.mjs
-node packages/onebot/scripts/generate-catalog.mjs --check   # exits non-zero when stale
+node packages/onebot/scripts/generate-catalog.mjs --check   # 过期时退出非零
 ```
 
-The script reads `NAPCAT_DOCS` and `SNOWLUMA_DOCS`, defaulting to `D:/Codespace/references/NapCatDocs` and `D:/Codespace/references/SnowLumaDocs`. It uses the newest NapCat OpenAPI document for parameters and scans every version to record when an action first appeared; SnowLuma's `catalog.json` supplies its read-only flags and aliases, since its OpenAPI does not carry them.
+脚本读取 `NAPCAT_DOCS` 与 `SNOWLUMA_DOCS`，默认是 `D:/Codespace/references/NapCatDocs` 与 `D:/Codespace/references/SnowLumaDocs`。参数取自最新的 NapCat OpenAPI 文档；脚本会扫描全部版本，记录每个动作首次出现的版本。SnowLuma 的只读标记与别名取自它的 `catalog.json`，因为它的 OpenAPI 没有这两项。
 
-Two generation rules are worth knowing:
+有两条生成规则值得知道：
 
-- NapCat has no read-only flag. Actions are classified by name prefix, then corrected by an override table for the cases the prefix gets wrong (`get_ai_record`, `_mark_all_as_read`, `ocr_image`, and others).
-- OpenAPI lists some parameters with a `default` as required. Those are treated as optional, because the backend fills them in.
+- NapCat 没有只读标记。动作按名称前缀分类，再用覆盖表修正前缀判断错误的几个（`get_ai_record`、`_mark_all_as_read`、`ocr_image` 等）。
+- OpenAPI 把一部分带 `default` 的参数列为必填。这些按可选处理，因为后端会补上默认值。
 
-## Safety
+## 安全边界
 
-- `bot_exit`, `set_restart`, `send_packet`, `get_cookies`, `get_credentials`, and `get_csrf_token` are always disabled, with the reason recorded in the catalog.
-- `denyActions` accepts either the canonical name or an alias.
-- Cross-channel profiles must pass `account`, and it must be one of the profile's claimed accounts; channel profiles always use their own account.
-- A non-zero `retcode` is returned as an ordinary result for the model to read; only transport failures raise.
+- `bot_exit`、`set_restart`、`send_packet`、`get_cookies`、`get_credentials`、`get_csrf_token` 始终禁用，原因记录在目录里。
+- `denyActions` 接受规范名或别名。
+- 跨频道 profile 必须传 `account`，且必须是该 profile 已认领的账号；频道 profile 固定使用自己的账号。
+- `retcode` 非零作为普通结果交给模型阅读；只有传输失败才抛错。
 
-## Current limits
+## 当前限制
 
-- The catalog is a snapshot of the NapCat 4.18.38 and current SnowLuma documentation. An older NapCat returns an unknown-action error for newer actions; the error is passed back unchanged.
-- SnowLuma's `ocr_image` accepts an HTTP(S) URL or a cached `file_id` only. The extension publishes resource bytes as a URL so the first form works; base64 and local paths remain rejected by that backend.
-- Read-only classification is documentation metadata, not a guarantee about side effects. An action the backend marks read-only can still change state if its implementation does.
-- Published media URLs are unauthenticated by design: the random path is the only secret, and entries expire quickly. Do not point `resourceBaseUrl` at a public origin unless that tradeoff is acceptable.
-- This pack does not replace `send_message`. It has no typing pacing, no message assembly, and no cross-channel routing rules; those stay in the core tool.
+- 目录是 NapCat 4.18.38 与当前 SnowLuma 文档的快照。较旧的 NapCat 对新动作返回未知动作错误，该错误原样传回。
+- SnowLuma 的 `ocr_image` 只接受 HTTP(S) URL 或已缓存的 `file_id`。扩展把资源字节发布成 URL 让第一种写法可用；base64 与本地路径仍会被该后端拒绝。
+- 只读分类是文档元数据，不保证没有副作用。后端标记为只读的动作，其实现仍可能改变状态。
+- 发布出来的媒体 URL 不设鉴权：随机路径是唯一的秘密，条目很快过期。除非能接受这个取舍，不要把 `resourceBaseUrl` 指向公网 origin。
+- 这个插件不替代 `send_message`：没有打字节奏、没有消息组装、没有跨频道路由规则，那些仍留在核心工具里。

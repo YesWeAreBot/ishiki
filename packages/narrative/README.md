@@ -1,38 +1,38 @@
 # Ishiki Narrative
 
-Ishiki Narrative lets one ordinary Ishiki model step run a small, multi-model conversation pipeline. A Narrator advances a persistent story and chooses what should happen next; an Action Decoder can translate an action into a host tool call, or a Replyer can write the user-facing message. Ishiki still owns the agent loop, tool execution, and session storage.
+Ishiki Narrative 可以把一次普通的 Ishiki 模型调用，编排成多个角色模型协作的推理流程：Narrator 推进持续发展的剧本并选择下一步；Action Decoder 将行动意图转换为宿主工具调用，或由 Replyer 写出面向用户的回复。Agent 循环、工具执行和会话存储仍由 Ishiki 负责。
 
-The package is a focused example of changing a model's internal work through Ishiki's existing engine extension points, without adding a narrative-specific branch to the core runtime. It implements one narrative capability inspired by HDS-Interlude; it does not integrate HDSI or replace its wider system.
+这个插件展示了如何利用 Ishiki 已有的引擎扩展点改变模型调用内部的工作方式，而不为 narrative 在核心运行时增加专属分支。它参考了 HDS-Interlude 的剧本概念，只实现其中一种叙事能力；它没有集成 HDSI，也不试图替代 HDSI 的完整系统。
 
-## How it works
+## 工作机制
 
-A profile selects two cooperating engines:
+Profile 选择两个协同工作的引擎：
 
-- The **Narrative ContextEngine** keeps each runtime's story alongside its event ledger. It projects the committed script, newly arrived events, recent exact evidence, and attachments into the model input. New messages are narrated incrementally; original events remain in storage. When the script exceeds its approximate budget, the older story is condensed while recent evidence is retained.
-- The **Narrative ToolcallEngine** wraps the profile's `LanguageModelV4`. The wrapper is shared at profile scope and holds no conversation state; it orchestrates stages from the input assembled by that runtime's ContextEngine.
+- **Narrative ContextEngine** 在每个 runtime 的会话台账中维护剧本。它把已提交的剧本、新到事件、近期精确证据和附件投影到模型输入。新消息按增量叙事化，原始事件仍留在台账中。剧本超过近似预算后，系统会压缩较早的叙事，同时保留近期证据。
+- **Narrative ToolcallEngine** 包装 profile 的 `LanguageModelV4`。包装器在 profile 级共享且不保存会话状态；它根据对应 runtime 的 ContextEngine 组装出的输入协调各个模型阶段。
 
-Each model step follows this path:
+每个模型步骤大致经过以下流程：
 
 ```mermaid
 flowchart TD
-    A["Story so far + new events"] --> N["Narrator: write a new passage and choose next"]
-    N -->|action| D["Action Decoder: call an available host tool"]
-    N -->|reply| R["Replyer: write exact chat lines"]
-    N -->|stop| S["End this step"]
-    D --> H["Ishiki host executes tool"]
-    R --> M["Ishiki host sends send_message"]
-    H --> O["Persist tool result"]
+    A["已有剧本 + 新事件"] --> N["Narrator：续写并选择下一步"]
+    N -->|行动| D["Action Decoder：调用宿主工具"]
+    N -->|回复| R["Replyer：写出实际台词"]
+    N -->|停止| S["结束本步"]
+    D --> H["Ishiki 宿主执行工具"]
+    R --> M["Ishiki 宿主调用 send_message"]
+    H --> O["持久化工具结果"]
     M --> O
     O --> A
 ```
 
-The Narrator returns a script increment and a next-step intent. The Action Decoder receives the actual tools available in that step and produces standard tool calls; it does not execute them. Ishiki runs the tools and persists their results. On a later model step, those results become evidence for the Narrator. For a reply, the Replyer produces exact message strings that the wrapper packages as the existing `send_message` tool.
+Narrator 返回一段剧本增量和下一步意图。Action Decoder 会收到本步实际可用的工具定义，并生成标准工具调用；它本身不执行工具。Ishiki 宿主负责执行并持久化结果，后续模型步骤再将这些结果作为 Narrator 的证据。若下一步是回复，Replyer 写出实际聊天内容，由包装器封装为现有的 `send_message` 工具调用。
 
-Narrative increments are stored as `ishiki.narrative` entries in the same session ledger as the conversation. The script is an explicit, model-generated narrative state—not hidden chain-of-thought extracted from a provider. The marked assistant reasoning part is the durable source for recovering a missing projection after restart. Original messages and tool records are not replaced by prose.
+剧本增量以 `ishiki.narrative` 条目保存在同一份会话台账中。剧本是模型明确生成的叙事状态，并非从 provider 提取的隐藏思维链。带标记的 assistant reasoning part 是持久来源：进程重启后，如果投影条目缺失，可以从已保存的输出恢复。原始消息和工具记录不会被剧本文本替代。
 
-## Install and enable
+## 安装与启用
 
-Install `koishi-plugin-ishiki-narrative` alongside `koishi-plugin-ishiki`, then load the plugin in the same Koishi application before Ishiki loads profiles:
+将 `koishi-plugin-ishiki-narrative` 与 `koishi-plugin-ishiki` 一起安装，并在同一个 Koishi 应用中、Ishiki 加载 profile 之前启用该插件：
 
 ```ts
 import narrative from "koishi-plugin-ishiki-narrative";
@@ -40,12 +40,12 @@ import narrative from "koishi-plugin-ishiki-narrative";
 ctx.plugin(narrative);
 ```
 
-The plugin registers both providers:
+该插件会注册两个引擎服务：
 
 - `ishiki.engine.context.narrative`
 - `ishiki.engine.toolcall.narrative`
 
-Select **both** for a profile. The core does not currently reject a profile that selects only one, so keeping the pair aligned is a configuration requirement.
+一个 profile 应同时选择这两个引擎。当前核心不会拒绝只选择其中一个的 profile，因此必须由配置者确保二者配套。
 
 ```yaml
 model: provider:narrator
@@ -62,9 +62,9 @@ toolcall:
     replyModel: provider:writer
 ```
 
-Replace the `provider:model` references with models declared in Ishiki's `models.yaml`; gateway group names are also accepted. The profile's `model` is the Narrator model. If `decoderModel` or `replyModel` is omitted, that stage reuses the profile model but still makes a separate model call.
+请将 `provider:model` 替换为 Ishiki `models.yaml` 中声明的模型，也可以使用 gateway group。Profile 的 `model` 用作 Narrator 模型。若省略 `decoderModel` 或 `replyModel`，对应阶段会复用 profile 模型，但仍会进行独立的一次模型调用。
 
-Optional role-specific prompt additions can be supplied under `toolcall.narrative`:
+可以在 `toolcall.narrative` 下为各角色追加提示词要求：
 
 ```yaml
 toolcall:
@@ -77,33 +77,33 @@ toolcall:
     replyerInstructions: "Write concise chat bubbles in the character's voice."
 ```
 
-These instructions extend the built-in stage contracts. They do not replace the persona, the available host tools, or the output schema.
+这些指令用于扩展各阶段内置的职责约定，不会替代人设、宿主实际提供的工具或输出 schema。
 
-### Context budget
+### 上下文预算
 
-| Setting         | Default | Meaning                                                                                                                                                 |
-| --------------- | ------: | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `maxTokens`     | `32000` | Approximate budget for stored narrative text, not a hard limit on the complete model request.                                                           |
-| `refillRatio`   |   `0.8` | Target fraction of that budget after a compaction.                                                                                                      |
-| `recentEntries` |    `12` | Extra recent source entries replayed as exact evidence. New/unprocessed input, active-turn evidence, and linked attachments are retained independently. |
+| 配置项          |  默认值 | 含义                                                                                                     |
+| --------------- | ------: | -------------------------------------------------------------------------------------------------------- |
+| `maxTokens`     | `32000` | 剧本正文的近似预算，不是整个模型请求的硬性上限。                                                         |
+| `refillRatio`   |   `0.8` | 压缩后希望达到的预算占比。                                                                               |
+| `recentEntries` |    `12` | 额外作为精确证据重放的近期源条目数量。未处理输入、当前轮需要的证据和关联附件会独立保留，不受该数值限制。 |
 
-The token budget is estimated from text length. Compaction can lose detail; the original ledger remains available, and recent source records are kept verbatim in the model input.
+Token 数由文本长度估算。压缩可能损失细节；原始台账不会被删除，近期源记录也会以原文形式保留在模型输入中。
 
-## Why this fits Ishiki
+## 为什么适合 Ishiki
 
-The package composes two existing seams instead of forking the agent loop:
+该插件组合现有扩展点，而不是复制 Agent 循环：
 
-1. The ContextEngine provides the per-runtime boundary for persistent narrative state and context projection.
-2. The ToolcallEngine receives the profile model through the existing `LanguageModelV4` seam and can coordinate additional model calls behind the ordinary model interface.
-3. Standard tool calls return to Ishiki's existing host, which retains authority over tools, storage, attachments, and turn lifecycle.
+1. ContextEngine 提供每个 runtime 独立的持久状态边界和上下文投影。
+2. ToolcallEngine 通过现有 `LanguageModelV4` 接入 profile 模型，并在普通模型接口后协调额外的模型调用。
+3. 标准工具调用交回 Ishiki 宿主，由宿主继续掌握工具、存储、附件和轮次生命周期。
 
-This keeps story state out of the profile-shared model wrapper and avoids a second agent runtime or a second tool executor. Other model pipelines can use the same architecture: the internal stages may change while the surrounding Agent continues to speak the LanguageModel interface and receive ordinary tool calls.
+因此，剧本状态不需要放进 profile 级共享模型包装器，也不需要增加第二套 Agent runtime 或工具执行器。其他模型 pipeline 也可以沿用这种结构：内部阶段可以变化，外围 Agent 仍通过 `LanguageModel` 接口交互并接收标准工具调用。
 
-## Current limits
+## 当前限制
 
-- This package does not expose an HTTP Chat Completions or Responses server. It participates in Ishiki's existing Agent model calls.
-- The two narrative engines are designed as a pair, but the current runtime does not enforce that pairing. Set both engine names to `narrative` in each profile.
-- Narrator, Replyer, and compaction stages request JSON output and parse it strictly. A provider can still return malformed or incomplete JSON; that fails the model step rather than being silently repaired.
-- Narrative quality depends on the selected models, their instructions, and the evidence they receive. The pipeline provides role separation and continuity; it does not guarantee a particular writing quality or persona.
-- A single Agent model step can make several upstream model calls, and context compaction can add another. Expect additional latency and token usage compared with a single-model step.
-- This is one application of narrative orchestration, not a complete reproduction of HDS-Interlude's scheduling, delivery, and broader life-simulation system.
+- 本插件不提供 Chat Completions 或 Responses HTTP 服务，只参与 Ishiki 已有的 Agent 模型调用。
+- Narrative ContextEngine 和 ToolcallEngine 需要配套，但当前运行时不会强制校验。每个 profile 都应将两项都设为 `narrative`。
+- Narrator、Replyer 和历史压缩阶段会请求 JSON 输出，并严格解析。Provider 仍可能返回格式错误或不完整的 JSON；这种情况会使本步失败，而不是被静默修补。
+- 叙事质量取决于所选模型、提示词和输入证据。Pipeline 提供了角色分工与连续性机制，但不保证特定文风或人设效果。
+- 一次 Agent 模型步骤可能触发多次上游模型调用；上下文压缩还可能增加额外调用。与单模型单次调用相比，应预期更高的延迟和 token 用量。
+- 这是叙事编排的一种应用，并非 HDS-Interlude 中调度、投递和更完整生活模拟系统的复刻。
