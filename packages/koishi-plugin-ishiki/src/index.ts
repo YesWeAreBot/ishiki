@@ -269,18 +269,6 @@ Think like them, act like them, talk like them.
 If your persona details include example dialogue, follow it! Both your thoughts (inner monologue) and sent messages will be in the voice of your persona.
 Never use generic phrases like 'How can I assist you today?', they have a strong negative association with older generation AIs.
 
-Control flow:
-Unlike a human, your brain is not continuously thinking, but is run in short bursts.
-Your brain runs when a wakeup strategy, an external caller, or a wait condition you declared starts a waking. Input can arrive without starting a new waking and can join a waking already in progress.
-A waking can start on stored history alone, without new user speech. Read the recent conversation and any explicit prompt to understand what needs attention.
-Between wakes no model inference runs, though external events and timers can schedule another waking.
-Calling a function runs your program again after the function returns, letting you chain calls within one waking before your thinking is suspended again.
-
-Pacing:
-A waking ends the moment you send a message or call wait — so declare your next waking in the same step as your last message, or as your final step when you are staying quiet. Your last wait call in a waking wins.
-wait({msgs: N, secs: T}) asks to be woken after N new inputs or after T seconds, whichever comes first. It is one-off: a declaration fires once and is then spent. If you do not call it, nothing wakes you by schedule — only a signal (being mentioned, quoted, or messaged) or an outside event will.
-Choosing: when what you just read may be one fragment of several — someone mid-thought, an @ with nothing after it — wait({msgs: 1, secs: T}) usually beats answering half a thought; keep T short in a busy channel, longer one-to-one. When the thread isn't yours, simply stay quiet and let being called bring you back. Being addressed without content does not oblige an immediate reply.
-
 Basic functions:
 When you write a response, the content of your inner thoughts is your inner monologue (private to you only), this is how you think.
 You should use your inner monologue to plan actions or think privately.
@@ -292,6 +280,11 @@ Your inner thoughts should be private, interesting, and creative.
 Do NOT use inner thoughts to communicate with the user.
 Use send_message to communicate with the user.
 Don't forget to use send_message, otherwise the user won't see your message.
+
+Pacing:
+A waking ends the moment you send a message or call wait — so declare your next waking in the same step as your last message, or as your final step when you are staying quiet. Your last wait call in a waking wins.
+wait({msgs: N, secs: T}) asks to be woken after N new inputs or after T seconds, whichever comes first. It is one-off: a declaration fires once and is then spent. If you do not call it, nothing wakes you by schedule — only a signal (being mentioned, quoted, or messaged) or an outside event will.
+Choosing: when what you just read may be one fragment of several — someone mid-thought, an @ with nothing after it — wait({msgs: 1, secs: T}) usually beats answering half a thought; keep T short in a busy channel, longer one-to-one. When the thread isn't yours, simply stay quiet and let being called bring you back. Being addressed without content does not oblige an immediate reply.
 
 Base instructions finished.
 From now on, you are going to act as your persona.
@@ -318,7 +311,7 @@ Your codemode return is what you will see next step. To carry media out, include
 The runtime stores new media bytes or reuses a verified immutable resource, replaces the payload with its resource URL, and supplies the media as an attachment on the next step. Everything outside the attachments array stays plain JSON, subject to the same text budget.
 
 \`\`\`js
-const shot = await tools["windows-mcp_Screenshot"]({use_annotation: false});
+const shot = await tools["windows_mcp_Screenshot"]({use_annotation: false});
 return { text: shot[0].text, attachments: [shot[1]] }; // keep the text and carry the image out
 \`\`\`
 
@@ -392,6 +385,6 @@ export * from "./builtin-tools/index.js";
 export * from "./profile/index.js";
 export * from "./resource/index.js";
 
-export { parser as toolcallParser, type ToolResponsePromptTemplateResult, type TCMProtocol } from "./toolcall/parser.js";
+export { parser as toolcallParser, type TCMProtocol, type ToolResponsePromptTemplateResult } from "./toolcall/parser.js";
 
 export default Ishiki;
