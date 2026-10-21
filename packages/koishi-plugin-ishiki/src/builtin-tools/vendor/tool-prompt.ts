@@ -55,7 +55,7 @@ export function buildCodeModeToolDescription(tools: CodeModeToolSet, toolDiscove
     "",
     "Put the full program in `js`; top-level `await`/`return` work. Return a JSON-serializable result.",
     "Call host tools only as async `tools.name(input)`; await each or use `Promise.all` for independent calls.",
-    "Host tools return raw JSON-safe values inside this program. Return complete structured results to retain media and read provenance; the runtime supplies text previews and separate attachments on the next step. See the system instructions for the attachment workflow.",
+    "Host tools return raw JSON-safe values inside this program. Pass intermediate values directly between tools using local variables. For temporary download URLs, discover all required tools first, then retrieve and consume the URL in the same execution; never return or print it for the model to copy into a later call. Return the final operation's structured result to retain media and read provenance; the runtime supplies text previews and separate attachments on the next step. See the system instructions for the attachment workflow.",
     toolDiscovery === "description"
       ? "Use exact names/types below. `JSON.parse`/`JSON.stringify` are available."
       : "Use exact names/types from the capability updates. `JSON.parse`/`JSON.stringify` are available.",
@@ -99,7 +99,7 @@ function buildCatalogMessage(kind: "codemode" | "direct", tools: CodeModeToolSet
     );
     if (kind === "codemode") {
       lines.push(
-        "These return types describe raw values inside codemode. Return complete structured results to retain media and read provenance; follow the system instructions for final previews and attachments.",
+        "These return types describe raw values inside codemode. Return the final tool's complete structured result to retain media and read provenance; follow the system instructions for final previews and attachments.",
       );
     }
   } else {

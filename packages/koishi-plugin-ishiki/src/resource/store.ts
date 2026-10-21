@@ -196,7 +196,7 @@ export class ResourceStore {
       await this.ensureMetadata(meta, disk);
       return disk;
     }
-    if (kind === "artifact" || meta.fetchedAt !== undefined || !meta.src) {
+    if (kind === "artifact" || meta.fetchedAt !== undefined) {
       throw new ResourceError("resource_not_found", `resource bytes missing: ${kind}/${namespace}/${name}`);
     }
     const inflight = this.inflight.get(meta.name);
@@ -209,7 +209,14 @@ export class ResourceStore {
   }
 
   private async fetchAndCache(meta: ResourceMeta, signal?: AbortSignal): Promise<Uint8Array> {
-    const bytes = meta.src!.startsWith("data:") ? decodeDataUrl(meta.src!) : await fetchBytes(meta.src!, signal);
+    const src = meta.src;
+    if (src === undefined || (!src.startsWith("data:") && (!/^https?:/i.test(src) || !URL.canParse(src)))) {
+      throw new ResourceError(
+        "resource_unavailable",
+        `asset has no directly downloadable source. Read asset://${meta.name}?view=meta for sourceInfo, then use a platform-specific file retrieval tool. In codemode, keep the returned URL in a local variable and pass it directly to the next tool in the same execution; do not return it to the model or copy it into a later call.`,
+      );
+    }
+    const bytes = src.startsWith("data:") ? decodeDataUrl(src) : await fetchBytes(src, signal);
     await this.putInHand("asset", meta.namespace, meta.name, bytes, {
       src: meta.src,
       mediaType: meta.mediaType,
@@ -358,20 +365,23 @@ export async function fetchBytes(src: string, signal?: AbortSignal): Promise<Uin
   } catch (error) {
     if (signal?.aborted) throw error;
     if (timeout.aborted) {
-      throw new ResourceError("resource_read_failed", `asset source timed out after ${FETCH_TIMEOUT_MS}ms: ${src}`);
+      throw new ResourceError("resource_read_failed", `asset source timed out after ${FETCH_TIMEOUT_MS}ms`);
     }
-    throw new ResourceError("resource_read_failed", `asset source unreachable: ${error instanceof Error ? error.message : String(error)}`);
+    const cause = error instanceof Error ? error.cause : undefined;
+    const code = cause instanceof Error && "code" in cause ? cause.code : undefined;
+    const detail = typeof code === "string" ? code : error instanceof Error ? error.name : "fetch failed";
+    throw new ResourceError("resource_read_failed", `asset source is unreachable: ${detail}`);
   }
   if (!response.ok) {
-    throw new ResourceError("resource_read_failed", `asset source returned ${response.status} for ${src}`);
+    throw new ResourceError("resource_read_failed", `asset source returned ${response.status}`);
   }
   const declared = response.headers.get("content-length");
   if (declared && Number(declared) > MAX_FETCH_BYTES) {
-    throw new ResourceError("resource_too_large", `asset exceeds ${MAX_FETCH_BYTES} bytes: ${src}`);
+    throw new ResourceError("resource_too_large", `asset exceeds ${MAX_FETCH_BYTES} bytes`);
   }
   const buffer = await response.arrayBuffer();
   if (buffer.byteLength > MAX_FETCH_BYTES) {
-    throw new ResourceError("resource_too_large", `asset exceeds ${MAX_FETCH_BYTES} bytes: ${src}`);
+    throw new ResourceError("resource_too_large", `asset exceeds ${MAX_FETCH_BYTES} bytes`);
   }
   return new Uint8Array(buffer);
 }

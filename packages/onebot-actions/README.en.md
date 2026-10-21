@@ -62,6 +62,12 @@ Mode alone is not the permission boundary: `query_action` always refuses actions
 
 The same data is a resource: `onebot://actions` is the categorized index, and `onebot://actions/<name>` is one action's page. Both are readable with the `read` tool.
 
+## Reading received files
+
+Some OneBot backends supply only a filename in a file's `src`. If reading an `asset://...` resource reports no downloadable source, read the `?view=meta` URL from the error and take `file_id` from `sourceInfo.fileId`. Use `get_private_file_url` for private files, or `get_group_file_url` with `group_id` for group files. Look up the current backend's full parameters with `get_action`.
+
+In `read` or `write` mode, discover both `query_action` and the download tool first. Within one codemode execution, retrieve the URL, check `retcode`, and pass `data.url` directly to the download tool using a local variable. When using `bash`, quote the value for the current shell. Return only the download result or subsequent processing result; keep the temporary URL out of returned output, later model-authored calls, and replies. The core `read` tool reads registered resource URLs; HTTP(S) URLs need a download tool.
+
 ## Media parameters
 
 Parameters that carry media accept any registered resource URL (`asset://`, `artifact://`, `local://`, `workspace://`, `skill://`, `mcp://`):

@@ -60,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types
 
 ### Fixed
+- Assets without a directly downloadable source return `resource_unavailable` with their metadata URL and platform-neutral recovery guidance. HTTP fetch errors retain status or network error codes without exposing source URLs.
+- Codemode instructions keep temporary download URLs in local variables across tool calls within one execution and return only the final operation's result.
 - Declared `msgs` wake windows count committed inbound input again: the wait machine subscribes to `message.appended` and `turn.start` to arm, count, and fire them.
 - Platform attachments preserve document order when asynchronous registrations complete out of order.
 - Live media references are snapshotted before attachment submission, and unresolved declared media reports its read error without a fabricated reference.
@@ -70,3 +72,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Platform attachments preserve document order when asynchronous registrations complete out of order
 - Live media references are snapshotted before attachment submission, and unresolved declared media reports its read error without a fabricated reference
 - Declared `msgs` wake windows count committed inbound input again: the wait machine subscribes to `message.appended` and `turn.start` to arm, count, and fire them
+- Assets without a directly downloadable source return `resource_unavailable` with their metadata URL and platform-neutral recovery guidance. HTTP fetch errors retain status or network error codes without exposing source URLs
+- Codemode instructions keep temporary download URLs in local variables across tool calls within one execution and return only the final operation's result

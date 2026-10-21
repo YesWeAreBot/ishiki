@@ -210,6 +210,12 @@ export function instructions(options: ToolOptions): string {
       "query_action is for read-only actions; invoke_action can run any action, including ones with side effects. Look an action up with get_action before calling it.",
     );
   }
+  if (options.mode !== "docs") {
+    lines.push(
+      "Some OneBot backends put only a filename in an inbound file's src. If the asset has no downloadable source, read its ?view=meta and take file_id from sourceInfo.fileId. Use get_private_file_url for private files or get_group_file_url with group_id for group files; check get_action for the current backend's parameters.",
+      "Discover query_action and the download tool before retrieving a temporary file URL. In one codemode execution, call the action, check retcode and data.url, and pass the returned URL by local variable directly to the download tool. When using bash, construct the command from that variable with shell-safe quoting. Return only the download result or subsequent processing result; do not return or print the URL, copy it into a later call, or include it in a reply. The core read tool reads registered resource URLs; use a download tool for the HTTP(S) URL.",
+    );
+  }
   lines.push(
     "Use send_message for ordinary conversation — it carries typing pacing and cross-channel routing. Reach for these tools only when the agent needs an OneBot capability the core tools do not cover, such as group administration, files, reactions, or history.",
   );

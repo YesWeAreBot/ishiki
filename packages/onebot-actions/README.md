@@ -62,6 +62,12 @@ extends:
 
 同一份数据也是资源：`onebot://actions` 是分类索引，`onebot://actions/<name>` 是单动作页面，都可以用 `read` 工具翻阅。
 
+## 读取收到的文件
+
+部分 OneBot 后端提供的文件 `src` 只有文件名。如果读取 `asset://...` 时收到没有可下载来源的提示，读取错误中给出的 `?view=meta` 地址，从 `sourceInfo.fileId` 获取 `file_id`。私聊文件使用 `get_private_file_url`；群文件使用 `get_group_file_url`，同时提供 `group_id`。通过 `get_action` 查看当前后端的完整参数。
+
+在 `read` 或 `write` 模式下，先发现 `query_action` 和实际下载工具，再在同一次 codemode 执行中获取地址、检查 `retcode`、将 `data.url` 保存为局部变量并传给下载工具。使用 `bash` 时，根据当前 shell 正确引用变量值。最终只返回下载结果或后续处理结果，不输出临时地址，也不将地址复制到下一轮调用或普通回复中。核心 `read` 工具读取已注册的资源 URL，HTTP(S) 地址需要交给下载工具。
+
 ## 媒体参数
 
 带媒体的参数接受任何已注册的资源 URL（`asset://`、`artifact://`、`local://`、`workspace://`、`skill://`、`mcp://`）：

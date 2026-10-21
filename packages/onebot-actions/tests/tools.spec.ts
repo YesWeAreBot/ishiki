@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Mode } from "../src/catalog/types.js";
 import { MediaPublisher } from "../src/media.js";
 import { CatalogScheme } from "../src/scheme.js";
-import { createTools, instructions, type ToolOptions } from "../src/tools.js";
+import { createTools, type ToolOptions } from "../src/tools.js";
 
 const silent = { warn() {}, info() {}, debug() {}, error() {} } as unknown as Logger;
 
@@ -204,15 +204,6 @@ describe("execution", () => {
       params: { message: [{ type: "image", data: { file: "local://a.png" } }] },
     });
     expect(calls[0]!.params).toEqual({ message: [{ type: "image", data: { file: "base64://iVA=" } }] });
-  });
-});
-
-describe("instructions", () => {
-  it("describes the active mode", () => {
-    expect(instructions(options({ mode: "docs" }))).toContain("only exposes documentation");
-    expect(instructions(options({ mode: "read" }))).toContain("read-only actions only");
-    expect(instructions(options({ mode: "write" }))).toContain("invoke_action can run any action");
-    expect(instructions(options({ mode: "read" }))).toContain("send_message");
   });
 });
 

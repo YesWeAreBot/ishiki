@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { createServer } from "node:http";
 import * as os from "node:os";
 import path from "node:path";
 
@@ -45,6 +46,62 @@ describe("resource registration and isolation", () => {
     expect(metadata.src).toBeUndefined();
     expect((await store.getMeta("asset", "", url.slice(8)))?.fetchedAt).toBeUndefined();
     await expect(fs.access(path.join(home, "resources", "assets", url.slice(8)))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["report.pdf", "", "https://[invalid", "ftp://files.example/report.pdf?rkey=private-file-token"])(
+    "links an unavailable source to its readable metadata: %s",
+    async (src) => {
+      const { store, center } = assemble();
+      const sourceInfo = { fileId: "30d11e4df95b09df4de35ea1c783c368", fileSize: "406216" };
+      const url = await store.registerAsset(src, { filename: "report.pdf", sourceInfo });
+      const failure = center.resolve(url);
+      await expect(failure).rejects.toMatchObject({
+        code: "resource_unavailable",
+        message: expect.stringContaining(`${url}?view=meta`),
+      });
+      await expect(failure).rejects.toHaveProperty("message", expect.not.stringContaining("private-file-token"));
+      const view = await center.resolve(`${url}?view=meta`);
+      if (view.type !== "text") throw new Error("expected metadata text");
+      expect(JSON.parse(view.text)).toMatchObject({ sourceInfo, fetched: false });
+    },
+  );
+
+  it("downloads signed sources and keeps their URLs out of HTTP and size errors", async () => {
+    const { store, center } = assemble();
+    const limit = 20 * 1024 * 1024;
+    const server = createServer((request, response) => {
+      if (request.url?.startsWith("/denied")) response.writeHead(403).end();
+      else if (request.url?.startsWith("/oversized")) response.writeHead(200, { "content-length": limit + 1 }).end();
+      else if (request.url?.startsWith("/streamed")) response.writeHead(200).end(Buffer.alloc(limit + 1));
+      else response.writeHead(200, { "content-type": "text/plain" }).end("downloaded report");
+    });
+    const listening = Promise.withResolvers<void>();
+    server.once("error", listening.reject);
+    server.listen(0, "127.0.0.1", listening.resolve);
+    await listening.promise;
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a TCP address");
+      const origin = `http://127.0.0.1:${address.port}`;
+      const src = `${origin}/report?rkey=private-file-token`;
+      const url = await store.registerAsset(src);
+      expect(await center.resolve(url)).toMatchObject({ type: "text", text: "downloaded report" });
+      for (const [route, code, detail] of [
+        ["denied", "resource_read_failed", "403"],
+        ["oversized", "resource_too_large", String(limit)],
+        ["streamed", "resource_too_large", String(limit)],
+      ] as const) {
+        const target = await store.registerAsset(`${origin}/${route}?rkey=private-file-token`);
+        const failure = center.resolve(target);
+        await expect(failure).rejects.toMatchObject({ code, message: expect.stringContaining(detail) });
+        await expect(failure).rejects.toHaveProperty("message", expect.not.stringContaining("private-file-token"));
+        await expect(failure).rejects.toHaveProperty("message", expect.not.stringContaining(origin));
+      }
+    } finally {
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    }
   });
 
   it("passes full URLs unchanged to their registered handler", async () => {
