@@ -1,5 +1,5 @@
 {
-  "name": "koishi-plugin-ishiki-onebot",
+  "name": "koishi-plugin-ishiki-onebot-actions",
   "version": "0.0.1",
   "files": [
     "lib"

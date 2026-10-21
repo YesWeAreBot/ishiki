@@ -39,7 +39,7 @@ class OneBotExtension extends Extension<OneBotConfig> {
   private readonly publishers = new Map<string, MediaPublisher>();
 
   constructor(ctx: Context, config: OneBotConfig) {
-    super(ctx, "onebot");
+    super(ctx, "onebot-actions");
     this.logger.level = config.logLevel;
   }
 
@@ -60,7 +60,7 @@ class OneBotExtension extends Extension<OneBotConfig> {
 
     const dispose = context.resources.attach(new CatalogScheme(config.backend));
     return {
-      name: "ishiki.onebot",
+      name: "ishiki.onebot-actions",
       extendTools: async () => createTools(options),
       extendInstructions: async () => instructions(options),
       stop: async () => {
