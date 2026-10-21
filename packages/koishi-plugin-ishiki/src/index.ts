@@ -10,7 +10,7 @@ import { loadCodemode } from "./builtin-tools/codemode.js";
 import { createFinish } from "./builtin-tools/finish.js";
 import { createReadTool } from "./builtin-tools/read.js";
 import { createSendMessage } from "./builtin-tools/send-message.js";
-import { ContextEngine, StandardContextEngine, V3ContextEngine } from "./context/index.js";
+import { ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
@@ -25,11 +25,10 @@ import {
   NativeToolcallEngine,
   Qwen3CoderToolcallEngine,
   ToolcallEngine,
-  V3ToolcallEngine,
   YamlXmlToolcallEngine,
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
-import { JevWakeupEngine, StandardWakeupEngine, V3WakeupEngine, WakeupEngine } from "./wakeup/index.js";
+import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine } from "./wakeup/index.js";
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
 interface Route {
@@ -76,14 +75,11 @@ class Ishiki extends Service<Ishiki.Config> {
     });
 
     ctx.plugin(StandardContextEngine);
-    ctx.plugin(V3ContextEngine);
 
     ctx.plugin(StandardWakeupEngine);
-    ctx.plugin(V3WakeupEngine);
     ctx.plugin(JevWakeupEngine);
 
     ctx.plugin(NativeToolcallEngine);
-    ctx.plugin(V3ToolcallEngine);
     ctx.plugin(HermesToolcallEngine);
     ctx.plugin(Qwen3CoderToolcallEngine);
     ctx.plugin(MorphXmlToolcallEngine);
@@ -386,6 +382,7 @@ export * from "@yesimagent/core";
 export * from "./extension.js";
 export * from "./failover.js";
 export * from "./runtime.js";
+export * from "./types.js";
 
 export * from "./context/index.js";
 export * from "./toolcall/index.js";
@@ -394,5 +391,7 @@ export * from "./wakeup/index.js";
 export * from "./builtin-tools/index.js";
 export * from "./profile/index.js";
 export * from "./resource/index.js";
+
+export { parser as toolcallParser, type ToolResponsePromptTemplateResult, type TCMProtocol } from "./toolcall/parser.js";
 
 export default Ishiki;

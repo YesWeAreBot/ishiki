@@ -1,23 +1,31 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Template } from "@huggingface/jinja";
-import { type AgentEntry, type AgentMessage, createUserMessage } from "@yesimagent/core";
 import { Service, type Context, type Logger } from "koishi";
+import {
+  ContextEngine,
+  createUserMessage,
+  type AgentEntry,
+  type AgentMessage,
+  type ContextEngineInstance,
+  type ContextEngines,
+  type EngineConfig,
+  type ExtensionContext,
+  type IshikiMessageCreated,
+  type IshikiMessageDeleted,
+} from "koishi-plugin-ishiki";
 import { parse } from "yaml";
 
-import type { ExtensionContext } from "../extension.js";
-import type { EngineConfig } from "../profile/index.js";
-import { actionBlock, observationBlock } from "../toolcall/v3.engine.js";
-import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
-import { ContextEngine, type ContextEngineInstance, type ContextEngines } from "./engine.js";
+import { actionBlock, observationBlock } from "./toolcall-engine.js";
 
-// 内联自 resource.ts：包内 resources 目录的绝对路径。
-// 从当前文件向上找到包根（含 package.json 的目录），兼容源码布局与打包后的单文件布局。
-let here = import.meta.url ? path.dirname(new URL(import.meta.url).pathname) : __dirname;
-if (process.platform === "win32" && here.startsWith("/")) here = here.slice(1);
-while (!existsSync(path.join(here, "package.json"))) here = path.dirname(here);
-const RESOURCES_DIR = path.join(here, "resources");
+// 包内 resources 目录的绝对路径。ESM 由模块 URL 定位，CJS 没有 import.meta，退回 __dirname；
+// 两者都从当前文件向上找到包根（含 package.json 的目录）。
+const moduleFile = typeof __dirname === "string" ? path.join(__dirname, "index.js") : fileURLToPath(import.meta.url);
+let packageRoot = path.dirname(moduleFile);
+while (!existsSync(path.join(packageRoot, "package.json"))) packageRoot = path.dirname(packageRoot);
+const RESOURCES_DIR = path.join(packageRoot, "resources");
 
 const DEFAULT_MAX_MESSAGES = 50;
 const DEFAULT_KEEP_FULL_TURNS = 2;
@@ -290,7 +298,7 @@ export class V3ContextInstance implements ContextEngineInstance {
   }
 }
 
-declare module "./engine.js" {
+declare module "koishi-plugin-ishiki" {
   interface ContextEngines {
     v3: V3ContextConfig;
   }

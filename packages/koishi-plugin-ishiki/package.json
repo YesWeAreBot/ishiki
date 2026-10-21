@@ -28,7 +28,6 @@
     "@huggingface/jinja": "^0.5.10",
     "@yesimagent/core": "0.0.9",
     "@yesimagent/gateway": "0.0.9",
-    "jsonrepair": "^3.15.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

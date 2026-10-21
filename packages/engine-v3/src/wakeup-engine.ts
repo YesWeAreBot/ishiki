@@ -1,10 +1,6 @@
-import type { Agent, AgentMessage } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
-
-import type { ExtensionContext } from "../extension.js";
-import type { EngineConfig } from "../profile/index.js";
-import type { IshikiMessageCreated } from "../types.js";
-import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
+import type { Agent, AgentMessage, ExtensionContext, WakeupEngines, IshikiMessageCreated, EngineConfig } from "koishi-plugin-ishiki";
+import { atSelf, WakeupEngine, WakeupEngineInstance } from "koishi-plugin-ishiki";
 
 const DEFAULT_V3_WAKEUP: V3WakeupConfig = {
   base: 12,
@@ -170,7 +166,7 @@ export class V3WakeupInstance implements WakeupEngineInstance {
   }
 }
 
-declare module "./engine.js" {
+declare module "koishi-plugin-ishiki" {
   interface WakeupEngines {
     v3: V3WakeupConfig;
   }

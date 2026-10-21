@@ -14,7 +14,6 @@ import { AgentRuntime } from "../src/runtime.js";
 import type { IshikiMessageCreated } from "../src/types.js";
 import { StandardWakeupInstance, type WakeupEngineInstance } from "../src/wakeup/index.js";
 import { JevWakeupInstance } from "../src/wakeup/jev.engine.js";
-import { V3WakeupInstance } from "../src/wakeup/v3.engine.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY7sAAAAASUVORK5CYII=";
 
@@ -302,30 +301,6 @@ describe("AgentRuntime wakeup subscription", () => {
     expect(promptOf(bodies[0])).toContain("third part");
     expect(promptOf(bodies[0])).not.toContain("Continue.");
     expect((await storedMessages(runtime)).filter((message) => message.role === "user")).toEqual([]);
-  });
-
-  it("joins a message mid-turn without a second wake from the v3 engine", async () => {
-    const release = Promise.withResolvers<void>();
-    const { runtime, bodies } = await makeRuntime({
-      wakeup: new V3WakeupInstance({ probabilityThreshold: 0, probabilityAmplifier: 1 }),
-      gate: async (call) => {
-        if (call === 0) await release.promise;
-      },
-      steps: (index) => (index === 0 ? [{ name: "speak", input: { text: "one moment" } }] : [{ name: "finish", input: {} }]),
-    });
-
-    await runtime.deliver(created("m1", "opening line"));
-    await until(async () => bodies.length >= 1);
-    await runtime.deliver(created("m2", "arrived while responding"));
-    release.resolve();
-    await waitForTurns(runtime, 1);
-
-    // 本轮开场时 m2 还没到；同轮下一步已经能看到 join 进来的 m2。
-    expect(promptOf(bodies[0])).not.toContain("arrived while responding");
-    expect(promptOf(bodies[1])).toContain("arrived while responding");
-    // 输入没有被扣到另一轮：m2 已入事实流，且整段过程只有这一轮。
-    expect(createdIds(await storedMessages(runtime))).toEqual(["m1", "m2"]);
-    expect(await terminalTurns(runtime)).toBe(1);
   });
 
   it("ignores internal appends and wakes on a matching message through the real standard engine", async () => {

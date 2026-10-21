@@ -164,7 +164,7 @@ extends:
 
 workspace 提供文件与命令工具。MCP 接入、OneBot 协议操作等能力也有独立扩展，见[项目生态](../../README.md#生态与参与)。
 
-引擎变体通过 `context.engine`、`toolcall.engine`、`wakeup.engine` 选择。安装并启用提供对应引擎服务的 Koishi 插件后，即可按名字使用；例如 narrative 提供配套的上下文与工具调用引擎。
+引擎变体通过 `context.engine`、`toolcall.engine`、`wakeup.engine` 选择。安装并启用提供对应引擎服务的 Koishi 插件后，即可按名字使用；例如 narrative 提供配套的上下文与工具调用引擎，engine-v3 提供 `v3` 的上下文、工具调用与唤醒引擎。
 
 开发者可以通过三个入口增加能力：
 

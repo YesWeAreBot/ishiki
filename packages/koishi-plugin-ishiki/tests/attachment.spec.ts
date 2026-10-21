@@ -21,7 +21,6 @@ import { createFinish } from "../src/builtin-tools/finish.js";
 import { createReadTool } from "../src/builtin-tools/read.js";
 import { createSendMessage } from "../src/builtin-tools/send-message.js";
 import { collapse } from "../src/context/standard.engine.js";
-import { V3ContextInstance } from "../src/context/v3.engine.js";
 import { FailoverModel } from "../src/failover.js";
 import { CodemodeConfig, ToolsearchConfig, TypingConfig } from "../src/profile/config.js";
 import { supportsImageInput } from "../src/resource/capabilities.js";
@@ -461,11 +460,9 @@ describe("request projection", () => {
     expect(JSON.stringify(await projectAttachments([missing], center, { imageInput: true }, ledger))).toContain("resource unavailable");
   });
 
-  it("keeps attachments in standard and v3 context engines", async () => {
+  it("keeps attachments in the standard context engine", async () => {
     const message = createCustomMessage("ishiki.attachment", { source: "tool", toolName: "probe", toolCallId: "call-1", items: [] });
     expect(collapse([toolMessage(), message])).toContain(message);
-    const v3 = new V3ContextInstance({}, { root: home, logger: { error() {} } } as never);
-    expect(v3.renderMessages([toolMessage(), message])).toContain(message);
   });
 
   it("requires image capability on every failover member, including unavailable members", () => {
@@ -564,7 +561,6 @@ function imageUrls(body: ProviderBody): string[] {
 async function scenario(options: {
   codemode?: boolean;
   visual?: boolean;
-  v3?: boolean;
   search?: boolean;
   failover?: boolean;
   maxImageBytes?: number;
@@ -598,7 +594,6 @@ async function scenario(options: {
     },
   });
   const attached = Promise.withResolvers<Agent>();
-  const v3 = new V3ContextInstance({}, { root: home, logger } as never);
   const runtime = new AgentRuntime({
     id: "smoke",
     home,
@@ -612,7 +607,7 @@ async function scenario(options: {
         attached.resolve(agent);
         return () => {};
       },
-      renderMessages: options.v3 ? v3.renderMessages : (messages) => collapse(messages),
+      renderMessages: (messages) => collapse(messages),
     },
     // 真实 standard 引擎：run() 投递的 created 事实都是私聊，逐条开轮。
     wakeup: new StandardWakeupInstance(),
@@ -808,28 +803,25 @@ describe("real Agent / codemode / provider smoke", () => {
     expect(imageUrls(probe.bodies[1]!)).toHaveLength(0);
   });
 
-  it.each([{ visual: false }, { maxImageBytes: 1 }, { v3: true }, { failover: true }])(
-    "projects direct MCP-style calls through a real provider with %j",
-    async (options) => {
-      const probe = await scenario({
-        ...options,
-        codemode: false,
-        tools: {
-          Screenshot: screenshotTool(() => [
-            { type: "text", text: "fixture" },
-            { type: "image", mimeType: "image/png", data: PNG },
-          ]),
-        },
-        steps: (index) => (index === 0 ? [{ name: "Screenshot", id: "direct", input: {} }] : [{ name: "finish", input: {} }]),
-      });
-      const messages = await probe.run();
-      expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toHaveLength(1);
-      expect(imageUrls(probe.bodies[1]!)).toHaveLength(options.visual === false || options.maxImageBytes === 1 ? 0 : 1);
-      expect(JSON.stringify(probe.bodies[1])).toContain("artifact://Screenshot/");
-      const denied = options.visual === false || options.maxImageBytes === 1;
-      expect(denied && JSON.stringify(probe.bodies[1]).includes(PNG)).toBe(false);
-    },
-  );
+  it.each([{ visual: false }, { maxImageBytes: 1 }, { failover: true }])("projects direct MCP-style calls through a real provider with %j", async (options) => {
+    const probe = await scenario({
+      ...options,
+      codemode: false,
+      tools: {
+        Screenshot: screenshotTool(() => [
+          { type: "text", text: "fixture" },
+          { type: "image", mimeType: "image/png", data: PNG },
+        ]),
+      },
+      steps: (index) => (index === 0 ? [{ name: "Screenshot", id: "direct", input: {} }] : [{ name: "finish", input: {} }]),
+    });
+    const messages = await probe.run();
+    expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toHaveLength(1);
+    expect(imageUrls(probe.bodies[1]!)).toHaveLength(options.visual === false || options.maxImageBytes === 1 ? 0 : 1);
+    expect(JSON.stringify(probe.bodies[1])).toContain("artifact://Screenshot/");
+    const denied = options.visual === false || options.maxImageBytes === 1;
+    expect(denied && JSON.stringify(probe.bodies[1]).includes(PNG)).toBe(false);
+  });
 
   it("associates concurrent native outputs with their outer call ids and stable item order", async () => {
     const probe = await scenario({

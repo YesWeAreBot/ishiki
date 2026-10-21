@@ -1,18 +1,20 @@
+import { type Context, Service } from "koishi";
 import type {
+  EngineConfig,
   FileData,
   LanguageModelV4Content,
   LanguageModelV4FilePart,
   LanguageModelV4FunctionTool,
   LanguageModelV4StreamPart,
   LanguageModelV4ToolCall,
+  TCMProtocol,
+  ToolcallEngines,
+  ToolResponsePromptTemplateResult,
   ToolResultPart,
-} from "@yesimagent/core";
-import { Service, type Context } from "koishi";
+} from "koishi-plugin-ishiki";
+import { ToolcallEngine, ToolcallEngineInstance, toolcallParser } from "koishi-plugin-ishiki";
 
-import type { EngineConfig } from "../profile/index.js";
-import { ToolcallEngine, ToolcallEngineInstance, type ToolcallEngines } from "./engine.js";
-import { JsonParser } from "./json-parser.js";
-import { parser, type TCMProtocol, type ToolResponsePromptTemplateResult } from "./parser.js";
+import { JsonParser } from "./json-parser";
 
 const V3_CONTRACT = `# Reasoning: think–act cycle
 
@@ -272,7 +274,7 @@ export function v3SystemPromptTemplate(tools: LanguageModelV4FunctionTool[]): st
   return renderCatalog(tools);
 }
 
-declare module "./engine.js" {
+declare module "koishi-plugin-ishiki" {
   interface ToolcallEngines {
     v3: Record<never, never>;
   }
@@ -280,7 +282,7 @@ declare module "./engine.js" {
 
 export class V3ToolcallInstance extends ToolcallEngineInstance {
   protected middleware = () => {
-    const { createToolMiddleware } = parser();
+    const { createToolMiddleware } = toolcallParser();
     return createToolMiddleware({
       protocol: v3Protocol(),
       toolSystemPromptTemplate: v3SystemPromptTemplate,
