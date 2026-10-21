@@ -370,6 +370,7 @@ declare module "koishi" {
   }
 }
 
+export * from "@huggingface/jinja";
 export * from "@yesimagent/core";
 
 export * from "./extension.js";

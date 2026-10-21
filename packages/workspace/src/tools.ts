@@ -1,4 +1,4 @@
-import { jsonSchema, tool, type ToolSet } from "koishi-plugin-ishiki";
+import { jsonSchema, Template, tool, type ToolSet } from "koishi-plugin-ishiki";
 
 import type { ExecResult, WorkspaceShell } from "./shell.js";
 
@@ -16,23 +16,74 @@ interface EditInput extends PathInput {
   replace_all?: boolean;
 }
 
+type ToolPromptData = {
+  native: boolean;
+  shellPath: string;
+  gitBashPaths: boolean;
+};
+
+// @huggingface/jinja drops the newline that follows a tag, so each tag occupies its own line and
+// branch text starts at column zero; the rendered text keeps the line breaks written here. A template
+// that ends with a block tag leaves one trailing newline, trimmed where the description is rendered.
+const PATH_DESCRIPTION = new Template(
+  `File path; relative paths resolve against the current working directory.
+{% if gitBashPaths %}
+A Windows absolute path is accepted as D:/dir/file and as the git-bash spelling /d/dir/file; /tmp/... points at the system temp directory.
+{% endif %}`,
+);
+
+const BASH_DESCRIPTION = new Template(
+  `{% if native %}
+Run one command in the host shell ({{ shellPath }}).
+This is a real shell and a real filesystem: host files and commands are visible, and changes are written to disk.
+{% else %}
+Run a bash command inside the sandbox.
+The sandbox is a JavaScript-interpreted virtual environment, not a host shell: only files under the mounts are visible, and the command set is not the host's.
+{% endif %}
+Write paths outside the current working directory in full. cd, aliases, functions, and exported variables do not persist between calls.
+{% if gitBashPaths %}
+Command text follows git-bash path syntax: /d/work means D:\\work and /tmp is the system temp directory. A path inside a string that only gets handed to another program (a JavaScript string passed to node, a config value) is not converted, so write D:/... there.
+{% endif %}
+Returns stdout, stderr, and an exit code. A non-zero exit code means the command itself failed; its output is still valid, so read stderr before deciding to retry.`,
+);
+
+const READ_FILE_DESCRIPTION = new Template(
+  `{% if native %}
+Read the entire contents of a file on the host.
+{% else %}
+Read the entire contents of a file in the sandbox.
+{% endif %}
+path may be absolute or relative to the current working directory.
+If you do not know where the file is, locate it first with bash ls, find, or grep.`,
+);
+
+const WRITE_FILE_DESCRIPTION = new Template(
+  `{% if native %}
+Write content to a file on the host, replacing it if it exists; parent directories are created automatically.
+{% else %}
+Write content to a file in the sandbox, replacing it if it exists; parent directories are created automatically.
+{% endif %}
+Use edit_file for a small change instead of rewriting the whole file.
+Returns the number of bytes written.`,
+);
+
+const EDIT_FILE_DESCRIPTION = new Template(
+  `Make a precise replacement inside a file. Use this for a small edit.
+old_string must match the file exactly, including indentation and whitespace; an empty new_string deletes the matched text.
+By default only a unique match is replaced: multiple matches raise an error. Set replace_all to true to replace every occurrence.
+If old_string is missing or matches more than once while replace_all is false, the file is left unchanged and an error is raised. Retry with a longer old_string.`,
+);
+
 export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
   const native = sandbox.backend === "native";
+  // Git Bash on Windows reads /d/work and /tmp itself, but text handed to another program keeps its literal characters.
+  const gitBashPaths = native && process.platform === "win32" && sandbox.shellKind === "posix";
+  const prompt: ToolPromptData = { native, shellPath: sandbox.shellPath, gitBashPaths };
+  const pathDescription = PATH_DESCRIPTION.render(prompt).trimEnd();
+  const bashDescription = BASH_DESCRIPTION.render(prompt);
   return {
     bash: tool({
-      description: native
-        ? [
-            "Run one command in the host shell (" + sandbox.shellPath + ").",
-            "This is a real shell and a real filesystem: host files and commands are visible, and changes are written to disk.",
-            "Write paths outside the current working directory in full. cd, aliases, functions, and exported variables do not persist between calls.",
-            "Returns stdout, stderr, and an exit code. A non-zero exit code means the command itself failed; its output is still valid, so read stderr before deciding to retry.",
-          ].join("\n")
-        : [
-            "Run a bash command inside the sandbox.",
-            "The sandbox is a JavaScript-interpreted virtual environment, not a host shell: only files under the mounts are visible, and the command set is not the host's.",
-            "Write paths outside the current working directory in full. cd, aliases, functions, and exported variables do not persist between calls.",
-            "Returns stdout, stderr, and an exit code. A non-zero exit code means the command itself failed; its output is still valid, so read stderr before deciding to retry.",
-          ].join("\n"),
+      description: bashDescription,
       inputSchema: jsonSchema<{ command: string }>({
         type: "object",
         properties: {
@@ -60,15 +111,11 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
       execute: (input, options) => sandbox.exec(input.command, options.abortSignal),
     }),
     read_file: tool({
-      description: [
-        native ? "Read the entire contents of a file on the host." : "Read the entire contents of a file in the sandbox.",
-        "path may be absolute or relative to the current working directory.",
-        "If you do not know where the file is, locate it first with bash ls, find, or grep.",
-      ].join("\n"),
+      description: READ_FILE_DESCRIPTION.render(prompt),
       inputSchema: jsonSchema<PathInput>({
         type: "object",
         properties: {
-          path: { type: "string", description: "File path" },
+          path: { type: "string", description: pathDescription },
         },
         required: ["path"],
       }),
@@ -83,17 +130,11 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
       execute: async (input) => ({ content: await sandbox.read(input.path) }),
     }),
     write_file: tool({
-      description: [
-        native
-          ? "Write content to a file on the host, replacing it if it exists; parent directories are created automatically."
-          : "Write content to a file in the sandbox, replacing it if it exists; parent directories are created automatically.",
-        "Use edit_file for a small change instead of rewriting the whole file.",
-        "Returns the number of bytes written.",
-      ].join("\n"),
+      description: WRITE_FILE_DESCRIPTION.render(prompt),
       inputSchema: jsonSchema<WriteInput>({
         type: "object",
         properties: {
-          path: { type: "string", description: "File path" },
+          path: { type: "string", description: pathDescription },
           content: { type: "string", description: "Full file contents" },
         },
         required: ["path", "content"],
@@ -112,16 +153,11 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
       },
     }),
     edit_file: tool({
-      description: [
-        "Make a precise replacement inside a file. Use this for a small edit.",
-        "old_string must match the file exactly, including indentation and whitespace; an empty new_string deletes the matched text.",
-        "By default only a unique match is replaced: multiple matches raise an error. Set replace_all to true to replace every occurrence.",
-        "If old_string is missing or matches more than once while replace_all is false, the file is left unchanged and an error is raised. Retry with a longer old_string.",
-      ].join("\n"),
+      description: EDIT_FILE_DESCRIPTION.render(prompt),
       inputSchema: jsonSchema<EditInput>({
         type: "object",
         properties: {
-          path: { type: "string", description: "File path" },
+          path: { type: "string", description: pathDescription },
           old_string: { type: "string", description: "Exact text to replace, character for character" },
           new_string: { type: "string", description: "Replacement text; an empty string deletes the match" },
           replace_all: { type: "boolean", description: "Replace every occurrence instead of requiring a unique match" },

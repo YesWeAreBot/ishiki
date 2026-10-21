@@ -90,9 +90,11 @@ describe("native shell", () => {
     }
   });
 
-  it("converts git-bash style drive paths on Windows", async () => {
+  it("converts git-bash style paths on Windows", async () => {
     if (process.platform !== "win32") return;
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-native-"));
+    const tmpName = `ishiki-msys-${path.basename(home)}.txt`;
+    const tmpFile = path.join(os.tmpdir(), tmpName);
     try {
       const shell = await createNativeShell(resolveLayout(nativeOptions(home)));
       // <tmpdir 盘>:/... 形式的真实路径转回 /x/... 风格再读
@@ -101,7 +103,13 @@ describe("native shell", () => {
       await shell.write(msysPath, "via msys");
       expect(await fs.readFile(path.join(home, "workspace", "marked.txt"), "utf8")).toBe("via msys");
       expect(await shell.read(msysPath)).toBe("via msys");
+
+      // /tmp 与 git-bash 一致指向系统临时目录，落到 D:\tmp 就是错的
+      await shell.write(`/tmp/${tmpName}`, "via tmp");
+      expect(await fs.readFile(tmpFile, "utf8")).toBe("via tmp");
+      expect(await shell.read(`/tmp/${tmpName}`)).toBe("via tmp");
     } finally {
+      await fs.rm(tmpFile, { force: true });
       await fs.rm(home, { recursive: true, force: true });
     }
   });

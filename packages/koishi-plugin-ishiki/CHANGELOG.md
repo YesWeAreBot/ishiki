@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workspace context budgeting driven from the profile (`workspaceTokenLimit`, `charsPerToken`).
 - Initial plugin surface: profile configuration with validation and channel rules, scene management with frame rendering, session handlers for message creation and deletion, focus switching, notifications, self message events, and typing delay configuration.
 - `attachment.maxImageRenders`: each image is inlined at most that many times in its life (default once); after that the attachment leaves the request, and its URL stays recoverable through `read`
+- `Template` from `@huggingface/jinja` is re-exported by the plugin, so extensions render prompts with the same Jinja engine
 
 ### Changed
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`.

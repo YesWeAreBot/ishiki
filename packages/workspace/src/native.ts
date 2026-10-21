@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -18,9 +19,13 @@ export function shellArgs(kind: ShellKind, command: string): string[] {
   return ["-c", command];
 }
 
-/** git-bash 风格盘符路径 /d/x 与 /D:/x → D:/x。仅 Windows 生效，只识别单字母首段，/home 等不受影响。 */
+/**
+ * git-bash 风格路径 → 宿主 Windows 路径：/tmp 映射到系统临时目录，/d/x 与 /D:/x 映射到 D:/x。
+ * 仅 Windows 生效，只识别 /tmp 与单字母首段，/home 等不受影响。
+ */
 function msysToWin32(target: string): string {
   if (process.platform !== "win32") return target;
+  if (/^\/tmp(?=\/|$)/i.test(target)) return path.join(os.tmpdir(), target.slice(4));
   const matched = /^\/([a-z]):?(?=\/|$)/i.exec(target);
   if (matched === null) return target;
   const rest = target.slice(matched[0].length);
