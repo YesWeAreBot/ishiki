@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - `attachment.maxImageRenders`: each image is inlined at most that many times in its life (default once); after that the attachment leaves the request, and its URL stays recoverable through `read`.
 - Incremental tool catalogs with `catalogMode`, `fullSnapshotEvery`, and `knownIndex`; incremental updates send only new, changed, or removed tools, with catalog-version recovery after context compaction.
 - Shared output-type aliases in catalogs, so repeated MCP return shapes are declared once.
@@ -26,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `attachment.maxImageRenders`: each image is inlined at most that many times in its life (default once); after that the attachment leaves the request, and its URL stays recoverable through `read`
 
 ### Changed
+
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`.
 - Request projection spends a lifetime render quota per image and drains request capacity oldest-first; terminal rejections are stated once, and delivered attachments then leave the request.
 - Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order.
@@ -51,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`
 
 ### Removed
+
 - The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types.
 - The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration.
 - `think` tool, succeeded by `inner_thoughts`.
@@ -59,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types
 
 ### Fixed
+
 - Declared `msgs` wake windows count committed inbound input again: the wait machine subscribes to `message.appended` and `turn.start` to arm, count, and fire them.
 - Platform attachments preserve document order when asynchronous registrations complete out of order.
 - Live media references are snapshotted before attachment submission, and unresolved declared media reports its read error without a fabricated reference.

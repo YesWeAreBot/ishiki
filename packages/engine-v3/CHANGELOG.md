@@ -8,5 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - The `v3` engine trio as its own plugin, moved out of `koishi-plugin-ishiki`: WorldState context with core memory blocks, JSON OUTPUT tool protocol with per-step `thoughts`, and willingness-based wakeup. Install and enable it to keep using `engine: v3`; the three variants stay independently selectable and mixable with other engines.
 - The `v3` engine trio as its own plugin, moved out of `koishi-plugin-ishiki`: WorldState context with core memory blocks, JSON OUTPUT tool protocol with per-step `thoughts`, and willingness-based wakeup. Install and enable it to keep using `engine: v3`; the three variants stay independently selectable and mixable with other engines

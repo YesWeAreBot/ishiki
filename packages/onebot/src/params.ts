@@ -1,3 +1,4 @@
+import type { Context } from "koishi";
 import type { ResourceCenter } from "koishi-plugin-ishiki";
 
 import type { CatalogAction } from "./catalog/types.js";
@@ -9,7 +10,7 @@ export interface MediaOptions {
   maxInlineBytes: number;
   baseUrl?: string;
   /** 发布 HTTP URL 时需要的 Koishi Context；未配置 server 时 publish 自己会抛。 */
-  ctx: Parameters<MediaPublisher["publish"]>[0];
+  ctx: Context;
 }
 
 /**
