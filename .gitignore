@@ -182,3 +182,6 @@ tsconfig.temp.json
 tools/harness2-ishiki/runs/
 tools/harness2-ishiki/__pycache__/
 
+
+# OCR 中间产物
+.ocr-tmp/
