@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 
 import type { JSONValue, ToolResultOutput } from "@yesimagent/core";
 
-import type { AttachmentItem } from "../types.js";
+import type { AttachmentItem, ImageLifetime } from "../types.js";
 import type { ResourceCenter, ResourcePayload } from "./center.js";
 import { ResourceError } from "./errors.js";
+import { parseImageLifetime } from "./lifetime.js";
 import { renderTextPage, textFits, type FileTextSource } from "./text.js";
 
 /** One part of a `content` tool result. */
@@ -29,7 +30,7 @@ type Reference = { url: string; byteLength: number } | { reason: string };
 export interface ProcessedOutput {
   /** What the model sees for this result. */
   output: ToolResultOutput;
-  /** References the runtime submits with the tool's attachment message. */
+  /** References the runtime submits with the tool's attachment message; a missing lifetime means `once`. */
   items: AttachmentItem[];
 }
 
@@ -51,17 +52,35 @@ const ARTIFACT_URL = /^artifact:\/\/([^/?#]+)\/([^/?#]+)$/;
  * is parsed. Everything else stays plain JSON and is only subject to the
  * shared text budget.
  *
- * `raw` is the tool's own execute result. It is consulted for one thing: a
+ * `raw` is the tool's own execute result. It is consulted for two things: a
  * text payload that still carries read provenance is the complete text behind
  * a read page, so such a result is never archived again — the page is
- * re-rendered from its source instead.
+ * re-rendered from its source instead; and a read file result may name the
+ * attachment lifetime it chose, which the SDK file part has no field for.
+ *
+ * `imageInput` is the profile capability; when it is off, lifetime metadata is
+ * ignored while media bytes are still archived.
  */
-export async function processOutput(center: ResourceCenter, toolName: string, converted: ToolResultOutput, raw?: unknown): Promise<ProcessedOutput> {
+export async function processOutput(
+  center: ResourceCenter,
+  toolName: string,
+  converted: ToolResultOutput,
+  raw?: unknown,
+  imageInput = true,
+): Promise<ProcessedOutput> {
   if (converted.type === "error-text" || converted.type === "error-json" || converted.type === "execution-denied") return { output: converted, items: [] };
 
   const items: AttachmentItem[] = [];
   const output =
-    converted.type === "content" ? await externalizeContent(center, toolName, converted, items) : await externalizeJson(center, toolName, converted, items);
+    converted.type === "content"
+      ? await externalizeContent(center, toolName, converted, items)
+      : await externalizeJson(center, toolName, converted, items, imageInput);
+
+  // Only a direct read can hand its lifetime over through a raw result: the
+  // content part carries no lifetime field, and provider options reach the
+  // provider, so they must not transport runtime bookkeeping.
+  const lifetime = imageInput && converted.type === "content" && items.length > 0 ? rawLifetime(raw) : undefined;
+  if (lifetime !== undefined) for (const item of items) item.lifetime = lifetime;
 
   let visible: string;
   if (output.type === "text") visible = output.value;
@@ -92,6 +111,22 @@ function readSource(raw: unknown): { text: string; source: FileTextSource } | un
   if (!("line" in source) || typeof source.line !== "number") return undefined;
   if (!("column" in source) || typeof source.column !== "number") return undefined;
   return { text: raw.text, source: { url: source.url, offset: source.offset, line: source.line, column: source.column } };
+}
+
+/**
+ * The lifetime an attachment entry requested. Present on any entry, media or
+ * not, because a mistyped lifetime must be reported instead of passing
+ * silently; entries without one stay untouched.
+ */
+function entryLifetime(entry: unknown): ImageLifetime | undefined {
+  if (entry === null || typeof entry !== "object" || !Object.hasOwn(entry, "lifetime")) return undefined;
+  return parseImageLifetime((entry as Record<string, unknown>).lifetime);
+}
+
+/** The lifetime a direct read chose, recognized by its file result shape. */
+function rawLifetime(raw: unknown): ImageLifetime | undefined {
+  if (raw === null || typeof raw !== "object" || !("type" in raw) || raw.type !== "file" || !("lifetime" in raw)) return undefined;
+  return parseImageLifetime(raw.lifetime);
 }
 
 /** Replace file parts with markers, archiving their bytes in part order. */
@@ -137,13 +172,19 @@ async function externalizePart(center: ResourceCenter, toolName: string, part: C
  * Normalize a JSON value the way the SDK does (raw Dates and undefined do not
  * survive), then externalize its `attachments` array if it has one.
  */
-async function externalizeJson(center: ResourceCenter, toolName: string, converted: TextOrJson, items: AttachmentItem[]): Promise<TextOrJson> {
+async function externalizeJson(
+  center: ResourceCenter,
+  toolName: string,
+  converted: TextOrJson,
+  items: AttachmentItem[],
+  imageInput: boolean,
+): Promise<TextOrJson> {
   if (converted.type !== "json") return converted;
   const value: unknown = JSON.parse(JSON.stringify(converted.value) ?? "null");
   const attachments = attachmentEntries(value);
   if (attachments === undefined) return { type: "json", value: value as JSONValue, providerOptions: converted.providerOptions };
   const extracted: unknown[] = [];
-  for (const entry of attachments.entries) extracted.push(await externalizeEntry(center, toolName, entry, items));
+  for (const entry of attachments.entries) extracted.push(await externalizeEntry(center, toolName, entry, items, imageInput));
   // The parsed object already holds plain JSON; only the attachments array changes.
   const replaced: unknown = { ...attachments.node, attachments: extracted };
   return { type: "json", value: replaced as JSONValue, providerOptions: converted.providerOptions };
@@ -163,7 +204,8 @@ function attachmentEntries(value: unknown): { node: Record<string, unknown>; ent
  * Submitted bytes win over an accompanying URL — a matching source is reused
  * only when its sidecar proves both hash and type agree.
  */
-async function externalizeEntry(center: ResourceCenter, toolName: string, entry: unknown, items: AttachmentItem[]): Promise<unknown> {
+async function externalizeEntry(center: ResourceCenter, toolName: string, entry: unknown, items: AttachmentItem[], imageInput: boolean): Promise<unknown> {
+  const lifetime = imageInput ? entryLifetime(entry) : undefined;
   const media = mediaOf(entry);
   if (media === undefined) return entry;
 
@@ -185,7 +227,13 @@ async function externalizeEntry(center: ResourceCenter, toolName: string, entry:
     return entry;
   }
 
-  items.push({ url, mediaType: media.mediaType, ...(media.filename === undefined ? {} : { filename: media.filename }), byteLength });
+  items.push({
+    url,
+    mediaType: media.mediaType,
+    ...(media.filename === undefined ? {} : { filename: media.filename }),
+    byteLength,
+    ...(lifetime === undefined ? {} : { lifetime }),
+  });
   // The entry was parsed JSON; spreading keeps its ordinary fields readable as-is.
   const node: Record<string, unknown> = { ...(entry as Record<string, unknown>), url, byteLength };
   delete node.data;

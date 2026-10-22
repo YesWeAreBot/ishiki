@@ -266,10 +266,15 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
       default: 'false',
       description: '能力上限开关；开启要求模型/组内候选全部声明 input: [text, image]',
     },
-    maxImageRenders: {
+    recentImageCount: {
       type: 'number',
-      default: '1',
-      description: '每张图一生最多内联的请求次数；达到后不再进入请求',
+      default: '3',
+      description: 'recent 生命周期保留的目标数量；活动 recent 图片超出时成批移除',
+    },
+    imagePruneBatchSize: {
+      type: 'number',
+      default: '2',
+      description: '每次移除的最旧已查看图片数量；未查看的图片不参与',
     },
     maxImageBytes: {
       type: 'number',
@@ -294,7 +299,15 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
   }}
 />
 
-`maxImageRenders` 是每张图的一生额度；其余配额是每请求一份，平台与工具附件共用。容量不足的图不消耗额度，按到达顺序在后续请求里内联。终止性判定（能力关闭、格式不支持、单图超限、读取失败、同请求重复媒体）只输出一次原因，之后该附件消息不再出现。
+每个附件媒体项带 `lifetime`，默认 `once`，所有入口一致：平台图片、直接 MCP 返回、`read` 返回的媒体都只嵌入一次。`imageInput: false` 时不嵌入图片，生命周期一律按 `once` 处理，附件消息只说明未提供的原因。模型可用的覆盖路径只有两条：codemode 最终 `attachments[]` 里的媒体项可以带 `lifetime`；`imageInput` 开启时，直接调用的 `read` 接受 `lifetime`（codemode 内的 `read` 不提供）。
+
+- `once`：携带图片的模型响应成功持久化后才消耗展示机会；失败或中止的 step 不消耗展示机会，后续请求重试。
+- `recent`：最近查看过的图片继续可见。每次请求投影前统计活动 `recent` 图片总数（含未查看），超出 `recentImageCount` 的差额按 `imagePruneBatchSize` 向下取整成批，从最旧的已查看图片开始移除；未查看的图片永远不会被移除。默认值 `3` 与 `2` 意味着出现第 5 张活动图片时才触发移除，至多移除 2 张最旧的已查看图片；已查看不足 2 张时只移除现有的。来源记录被移除时同样释放，包括交付状态已经持久化的图片。
+- `retain`：来源记录仍在活动上下文时每轮都参与选择，由上下文引擎移除来源记录决定何时释放；本次请求预算不足时暂不携带，即使此前已持久化过交付状态。
+
+其余配额是每请求一份，平台与工具附件共用；容量不足的图片本次请求不嵌入、不消耗展示机会。硬预算下未被选中的已查看 `recent` 图片会释放，不再参与后续选择；未查看的图片只等待容量，`retain` 本次暂不携带后仍可再试。未发生生命周期移除或选择变化时，投影结果保持消息顺序、ID 与时间戳不变，以复用 provider 的前缀缓存；字节层面的复用只对 `immutable` 资源成立。终止性判定（能力关闭、媒体类型或编码不支持、图片自身字节超过单图上限、图片自身字节超过单次请求累计上限、图片尺寸超限）只输出一次原因，并随成功响应持久化；资源不可用与请求剩余容量不足属于本次请求未提供，会在后续请求重试。
+
+`maxImageRenders` 已移除，替换为生命周期机制与 `recentImageCount` / `imagePruneBatchSize`。profile 里仍写旧字段时，`resolveProfile` 直接报 `attachment.maxImageRenders was removed; use image lifetimes (once, recent, retain) and attachment.recentImageCount/imagePruneBatchSize`。
 
 ## 引擎配置段
 

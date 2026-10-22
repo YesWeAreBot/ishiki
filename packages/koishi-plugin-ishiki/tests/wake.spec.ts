@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createCustomMessage, jsonSchema, tool, type Agent, type AgentMessage, type CustomMessages, type ToolSet } from "@yesimagent/core";
+import { createCustomMessage, jsonSchema, tool, type Agent, type AgentMessage, type AgentPlugin, type CustomMessages, type ToolSet } from "@yesimagent/core";
 import { createGateway } from "@yesimagent/gateway";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -185,6 +185,7 @@ async function makeRuntime(options: {
   wakeup?: WakeupEngineInstance;
   gate?: (call: number) => Promise<void>;
   extensions?: ExtensionInstance[];
+  externalPlugins?: readonly AgentPlugin[];
   toolsearch?: { enable: boolean; resident: string[]; maxResults: number };
 }): Promise<{ runtime: AgentRuntime; bodies: unknown[] }> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-wake-"));
@@ -217,6 +218,7 @@ async function makeRuntime(options: {
     instructions: "test",
     tools: { finish: createFinish(), ...speakTool },
     extensions: options.extensions ?? [],
+    externalPlugins: options.externalPlugins,
     // 真实 standard 引擎的投影：created 折成 user 行，catalog 留给 toModelMessages。
     context: { renderMessages: (messages) => collapse(messages) },
     wakeup: options.wakeup ?? judgeWakeup(() => false),
@@ -263,6 +265,25 @@ describe("AgentRuntime wakeup subscription", () => {
     expect(request.messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(promptOf(bodies[0])).toContain("hello");
     expect(promptOf(bodies[0])).not.toContain("Continue.");
+  });
+
+  it("includes external AgentPlugin instructions in the model request", async () => {
+    const { runtime, bodies } = await makeRuntime({
+      steps: () => [],
+      wakeup: judgeWakeup(() => true),
+      externalPlugins: [
+        {
+          name: "prompt-overlay-test",
+          enforce: "post",
+          extendInstructions: () => "EXTERNAL_PROMPT_OVERLAY_SENTINEL",
+        },
+      ],
+    });
+
+    await runtime.deliver(created("overlay"));
+    await waitForTurns(runtime, 1);
+
+    expect(promptOf(bodies[0])).toContain("EXTERNAL_PROMPT_OVERLAY_SENTINEL");
   });
 
   it("stays silent when the engine declines while the fact stays stored", async () => {

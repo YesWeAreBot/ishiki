@@ -44,7 +44,7 @@ description: 内置工具的输入输出与资源 URL 的完整语法
 
 ### read
 
-读取资源，输入 `{ url }`。文件型 URL 支持行范围和元数据视图：
+读取资源，输入 `{ url }`；`imageInput` 开启且在 codemode 之外直接调用时，还可带 `lifetime`。文件型 URL 支持行范围和元数据视图：
 
 ```text
 read({ url: "artifact://bash/output.txt:1-200" })
@@ -58,12 +58,13 @@ read({ url: "local://notes.txt?view=meta" })
 | type | 内容 |
 | --- | --- |
 | `text` | `{ type, url, text, size, mediaType?, filename?, source? }`；`text` 包含请求范围内的完整内容 |
-| `file` | `{ type, url, mediaType, data, byteLength, filename?, immutable }`；`data` 是 base64 媒体数据 |
+| `file` | `{ type, url, mediaType, data, byteLength, filename?, immutable, lifetime? }`；`data` 是 base64 媒体数据。`imageInput` 开启时，直调 `read` 可传 `lifetime`，结果会回显所选值 |
 
 - FileScheme 的行选择器为 `:N`、`:start-end` 或 `:start+count`，位于 query 之前。`?view=meta` 读取元数据，惰性 asset 不因此下载。
 - FileScheme 文本的 `source` 包含 `{ url, offset, line, column }`，记录来源与位置；正文不混入展示尾注。
 - codemode 内取得完整结果，不受模型展示预算截断；仍受 SDK 的传输、结果大小和执行限制约束。
 - 传给其他工具时按其输入契约取 `result.text` 或 `result.data`；只有明确支持该 scheme 的工具才能直接接收资源 URL。最终的 `attachments` 可携带媒体节点。
+- `imageInput` 开启时，模型直调 `read` 可传 `lifetime`（`once` / `recent` / `retain`）选择返回媒体的生命周期；未知值报 `invalid_attachment_lifetime`，不会静默退回默认值。codemode 内的 `read` 不接受该参数，沙箱里请把 `lifetime` 写进最终 `attachments[]` 的媒体项。其他直接返回图片的工具使用默认 `once`。
 - 模型可见的文件页使用原来源续读；普通 handler 返回的超长内容先固化为 artifact。按结果里的完整 Continue URL 再 read，即可继续读取，包括超长单行的剩余部分。其他 scheme 自行解释完整 URL，不继承文件语法。
 
 ### wait
@@ -91,7 +92,7 @@ read({ url: "local://notes.txt?view=meta" })
 
 - 程序内 `await tools.name(input)` / `await tools["server_tool"](input)` 返回工具的原始 JSON 安全值。中间数据由程序处理，最终返回值进入后续模型上下文。
 - `direct` 名单内的工具保留模型直接调用入口，其余业务工具由程序调用；`send_message` 同时支持直接与程序调用，`finish`、`wait` 保持直接调用。
-- 传媒体出沙箱的唯一方式：返回值顶层带 `attachments` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。
+- 传媒体出沙箱的唯一方式：返回值顶层带 `attachments` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。媒体项可带 `lifetime`（`once` 默认、`recent`、`retain`）；沙箱内部工具返回的原始媒体不开始计算生命周期，只有最终 `return` 中的 `attachments[]` 项进入图片生命周期管理。
 - 每次调用是一个独立程序；需要分步传递的数据放进返回值，下一步以观察形式看到。
 
 ### search（toolsearch 开启时）
@@ -134,5 +135,5 @@ read 返回请求范围内的完整内容，传输与执行仍受现有 SDK 限�
 
 - 普通超长内容：完整表示归档为 `artifact`，模型看到前缀与续读 URL。归档包含媒体替换后的完整展示内容，不另外保存 execute 原始对象。
 - FileScheme 文本：使用已有来源分页，不把读取页面重新归档。
-- 媒体：固化新数据或复用已固化引用，替换为 `[attachment: <url>; <mediaType>; …]`，另写附件消息，下一 step 按能力与配额投影。实时文件引用作为历史附件时保存快照。
+- 媒体：固化新数据或复用已固化引用，替换为 `[attachment: <url>; <mediaType>; …]`，另写附件消息，下一 step 按能力、生命周期与预算投影。媒体项默认 `once`，携带它的模型响应成功持久化后才消耗展示机会；实时文件引用作为历史附件时保存快照。
 - codemode 内部工具：不执行这条模型出口链路；只有最终返回值进入处理，显式媒体字段为 `attachments`。

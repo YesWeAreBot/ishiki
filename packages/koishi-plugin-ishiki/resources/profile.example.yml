@@ -79,11 +79,20 @@ typing:
 
 # 平台图片与工具图片共用请求级附件策略。imageInput 是 profile 能力上限；
 # 开启时，models.yaml 中的模型及 failover 组内每个候选都必须声明 input: [text, image]。
+# 每个媒体项带 lifetime，默认 once：只嵌入一次，携带它的模型响应成功持久化后才消耗展示机会，失败或中止不消耗。
+# recent 保留最近查看过的图片（目标 recentImageCount 张）：活动图片超出时按 imagePruneBatchSize
+# 成批移除最旧的已查看图片，未查看的图片永远不参与移除；被硬预算挤出的已查看图片直接释放，
+# 来源记录被移除时同样释放（含已持久化的交付状态）。
+# retain 在来源记录仍处活动上下文时每轮都可嵌入，由上下文移除来源记录决定何时释放（含已持久化的交付状态）；
+# 本次请求预算不足时暂不携带。
+# 改写生命周期只有两个入口：codemode 最终 attachments[] 的媒体项，或 imageInput 开启时直接 read 的 lifetime 参数。
 # 工具原始媒体在最终输出阶段归档为 artifact；下一 step 以带来源说明的 user/file 消息加载。
 # codemode 内 read 始终返回 JSON-safe base64，纯文本模型也可将图片传给后续工具。
-# 不自动缩放；不能加载、超过配额或不支持的媒体保留 URL 与原因说明。
+# 不自动缩放；超过预算的图片等待容量，不能加载或不支持的媒体逐轮重试并保留 URL 与原因说明。
 attachment:
   imageInput: false
+  recentImageCount: 3 # recent 生命周期的目标保留数
+  imagePruneBatchSize: 2 # 每次移除的最旧已查看图片数
   maxImageBytes: 5242880 # 单图 5 MiB
   maxTotalImageBytes: 10485760 # 整次请求 10 MiB，跨平台与工具附件累计
   maxImageCount: 4

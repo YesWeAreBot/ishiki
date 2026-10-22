@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
 
+import { asSchema } from "@yesimagent/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createReadTool, type ReadTool } from "../src/builtin-tools/read.js";
@@ -143,5 +144,29 @@ describe("structured resource reads", () => {
   it("reports missing resources and unavailable schemes", async () => {
     await expect(read("local://missing.txt")).rejects.toMatchObject({ code: "resource_not_found" });
     await expect(read("unknown://value")).rejects.toMatchObject({ code: "resource_unavailable" });
+  });
+});
+
+describe("attachment lifetime", () => {
+  const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const call = { toolCallId: "read-1", messages: [], context: undefined };
+
+  it("exposes lifetime only when the call site allows choosing one", () => {
+    const disabled = asSchema(createReadTool({ center }).inputSchema).jsonSchema as unknown as { properties: Record<string, unknown> };
+    const enabled = asSchema(createReadTool({ center, lifetime: true }).inputSchema).jsonSchema as unknown as { properties: Record<string, unknown> };
+    expect(disabled.properties).not.toHaveProperty("lifetime");
+    expect(enabled.properties.lifetime).toMatchObject({ enum: ["once", "recent", "retain"] });
+    const output = asSchema(createReadTool({ center, lifetime: true }).outputSchema!).jsonSchema as unknown as {
+      oneOf: Array<{ properties: Record<string, unknown> }>;
+    };
+    expect(output.oneOf[1]!.properties).toHaveProperty("lifetime");
+  });
+
+  it("rejects an unknown lifetime and the choice when the call site disables it", async () => {
+    const url = await store.writeArtifact("image", bytes, { mediaType: "image/png", filename: "screen.png" });
+    await expect(createReadTool({ center, lifetime: true }).execute!({ url, lifetime: "forever" as never }, call)).rejects.toMatchObject({
+      code: "invalid_attachment_lifetime",
+    });
+    await expect(createReadTool({ center }).execute!({ url, lifetime: "recent" }, call)).rejects.toMatchObject({ code: "invalid_attachment_lifetime" });
   });
 });

@@ -9,7 +9,9 @@ import {
   ToolConflictError,
   type Agent,
   type AgentMessage,
+  type AgentPlugin,
   type AgentStorage,
+  type Awaitable,
   type JSONValue,
   type Tool,
   type ToolCallers,
@@ -31,9 +33,13 @@ import { captureResources } from "./resource/capture.js";
 import type { ResourceCenter } from "./resource/center.js";
 import { type AttachmentConfig } from "./resource/config.js";
 import { processOutput } from "./resource/output.js";
-import { attachmentMessages, projectAttachments, type AttachmentLedger } from "./resource/projection.js";
+import { attachmentMessages, AttachmentProjection } from "./resource/projection.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
+
+type ToolTransformStage = "base" | "complete";
+type ToolTransform = (tools: ToolSet, stage: ToolTransformStage) => Awaitable<ToolSet>;
+type DebugAgentPlugin = AgentPlugin & { transformTools?: ToolTransform };
 
 export interface AgentRuntimeConfig {
   id: string;
@@ -50,6 +56,11 @@ export interface AgentRuntimeConfig {
   logger: Logger;
   resources: ResourceCenter;
   attachment: AttachmentConfig;
+  externalPlugins?: readonly AgentPlugin[];
+}
+
+function isDebugAgentPlugin(plugin: AgentPlugin): plugin is DebugAgentPlugin {
+  return "transformTools" in plugin && typeof plugin.transformTools === "function";
 }
 
 function sendSucceeded(messages: readonly AgentMessage[]): boolean {
@@ -90,7 +101,7 @@ export class AgentRuntime {
   private readonly toolCallers: ToolCallers = {};
   private readonly initTools: ToolSet;
   private readonly condition: WaitConditionMachine;
-  private readonly attachments: AttachmentLedger = { slots: new Map() };
+  private readonly attachments: AttachmentProjection;
   private readonly disposeExtensions: Array<() => void> = [];
   private readonly config: AgentRuntimeConfig;
 
@@ -103,6 +114,7 @@ export class AgentRuntime {
     this.context = config.context;
     this.extensions = config.extensions;
     this.resources = config.resources;
+    this.attachments = new AttachmentProjection(config.resources, config.attachment);
     this.toolsearch = new ToolsearchState(config.toolsearch);
     this.initTools = config.tools;
     this.condition = new WaitConditionMachine(config.logger);
@@ -134,9 +146,14 @@ export class AgentRuntime {
             this.disposeWakeup?.();
             this.disposeContext?.();
           },
+          onAppend: (entries) => this.attachments.append(entries),
           transformEntries: async (entries, options) => {
             const filtered = this.toolsearch.filterEntries(entries);
             const prepared = await (this.context.prepareEntries?.(filtered, { turnId: options.turnId, signal: options.signal }) ?? filtered);
+            this.attachments.restore(
+              entries,
+              prepared.flatMap((entry) => (entry.type === "message" ? [entry.data] : [])),
+            );
             this.toolsearch.observeEntries(prepared);
             const repair = this.toolsearch.repairCatalog();
             if (repair === undefined) return prepared;
@@ -146,7 +163,7 @@ export class AgentRuntime {
           transformMessages: async (messages, options) => {
             const associated = attachmentMessages(messages);
             const rendered = (await this.context.renderMessages?.(associated, options)) ?? associated;
-            return projectAttachments(rendered, this.resources, this.config.attachment, this.attachments);
+            return this.attachments.project(rendered, options.turnId);
           },
           toModelMessages: (message: unknown) => {
             if (message === null || typeof message !== "object" || !("role" in message) || message.role !== "custom") return undefined;
@@ -210,6 +227,7 @@ export class AgentRuntime {
             this.condition.onTurnEnd(result.status);
           },
         },
+        ...(config.externalPlugins ?? []),
         ...(config.debugStream ? [createDebugPlugin(config.id, config.logger)] : []),
       ],
       ...(config.codemode.enable ? { toolCallers: this.toolCallers } : {}),
@@ -225,8 +243,22 @@ export class AgentRuntime {
    * `assemblePrompt`) and once at init, so both see the same assembled toolset;
    * re-entry rebuilds the routing tables instead of accumulating wrappers.
    */
+  private async transformTools(tools: ToolSet, stage: ToolTransformStage): Promise<ToolSet> {
+    let current = tools;
+    for (const plugin of this.config.externalPlugins ?? []) {
+      if (!isDebugAgentPlugin(plugin) || plugin.transformTools === undefined) continue;
+      const before = Object.keys(current).sort();
+      current = await plugin.transformTools(current, stage);
+      const after = Object.keys(current).sort();
+      if (before.length !== after.length || before.some((name, index) => name !== after[index])) {
+        throw new Error("external tool transforms must preserve the tool names");
+      }
+    }
+    return current;
+  }
+
   private async assembleTools(): Promise<ToolSet> {
-    const merged: ToolSet = { ...this.initTools };
+    let merged: ToolSet = { ...this.initTools };
     for (const ext of this.extensions) {
       const contributed = await ext.extendTools?.();
       if (contributed === undefined) continue;
@@ -235,6 +267,7 @@ export class AgentRuntime {
         merged[name] = tool;
       }
     }
+    merged = await this.transformTools(merged, "base");
     const final: ToolSet = { ...merged };
     if (WAIT_TOOL in merged) throw new ToolConflictError(WAIT_TOOL);
     final[WAIT_TOOL] = createWaitTool(this.condition);
@@ -245,8 +278,14 @@ export class AgentRuntime {
       final[CODEMODE_TOOL] = sandbox.tool;
     }
     if (this.config.toolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
+    const transformed = await this.transformTools(final, "complete");
+    const transformedNames = Object.keys(transformed);
+    const finalNames = Object.keys(final);
+    if (transformedNames.length !== finalNames.length || finalNames.some((name) => !(name in transformed))) {
+      throw new Error("external tool transforms must preserve the tool names");
+    }
     const wrapped: ToolSet = {};
-    for (const [name, original] of Object.entries(final)) {
+    for (const [name, original] of Object.entries(transformed)) {
       const descriptors = Object.getOwnPropertyDescriptors(original);
       descriptors.toModelOutput = {
         enumerable: true,
@@ -259,7 +298,7 @@ export class AgentRuntime {
               : typeof options.output === "string"
                 ? { type: "text", value: options.output }
                 : { type: "json", value: options.output as JSONValue };
-          const { output, items } = await processOutput(this.resources, name, converted, options.output);
+          const { output, items } = await processOutput(this.resources, name, converted, options.output, this.config.attachment.imageInput);
           if (items.length > 0) {
             this.agent.send(createCustomMessage("ishiki.attachment", { source: "tool", toolName: name, toolCallId: options.toolCallId, items }), {
               ifBusy: "join",
@@ -273,7 +312,7 @@ export class AgentRuntime {
     }
     if (this.config.toolsearch.enable) {
       this.toolsearch.codemodeEnabled = this.config.codemode.enable;
-      this.toolsearch.refresh(final, new Set(this.toolsearch.residentNames()), new Set(Object.keys(this.toolCallers)));
+      this.toolsearch.refresh(transformed, new Set(this.toolsearch.residentNames()), new Set(Object.keys(this.toolCallers)));
     }
     return wrapped;
   }

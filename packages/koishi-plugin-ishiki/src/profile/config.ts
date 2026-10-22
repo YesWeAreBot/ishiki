@@ -188,6 +188,12 @@ export interface Profile {
 }
 
 export function resolveProfile(raw: unknown, id: string, root: string): Profile {
+  if (raw !== null && typeof raw === "object" && "attachment" in raw) {
+    const attachment = raw.attachment;
+    if (attachment !== null && typeof attachment === "object" && "maxImageRenders" in attachment) {
+      throw new Error("attachment.maxImageRenders was removed; use image lifetimes (once, recent, retain) and attachment.recentImageCount/imagePruneBatchSize");
+    }
+  }
   const config = ProfileConfig(raw as ProfileConfig);
   return {
     id,

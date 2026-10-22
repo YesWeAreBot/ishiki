@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  createAssistantMessage,
   createCustomMessage,
+  createEntry,
+  createJsonlStorage,
   createToolMessage,
   jsonSchema,
   tool,
@@ -22,13 +25,13 @@ import { createReadTool } from "../src/builtin-tools/read.js";
 import { createSendMessage } from "../src/builtin-tools/send-message.js";
 import { collapse } from "../src/context/standard.engine.js";
 import { FailoverModel } from "../src/failover.js";
-import { CodemodeConfig, ToolsearchConfig, TypingConfig } from "../src/profile/config.js";
+import { CodemodeConfig, resolveProfile, ToolsearchConfig, TypingConfig } from "../src/profile/config.js";
 import { supportsImageInput } from "../src/resource/capabilities.js";
 import { captureResources } from "../src/resource/capture.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AttachmentConfig } from "../src/resource/config.js";
 import { processOutput } from "../src/resource/output.js";
-import { attachmentMessages, projectAttachments, type AttachmentLedger } from "../src/resource/projection.js";
+import { attachmentMessages, AttachmentProjection } from "../src/resource/projection.js";
 import { TEXT_BUDGET } from "../src/resource/text.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { StandardWakeupInstance } from "../src/wakeup/index.js";
@@ -87,6 +90,14 @@ function imageParts(messages: readonly AgentMessage[]) {
   return messages.flatMap((message) =>
     message.role === "user" && Array.isArray(message.content) ? message.content.filter((part) => part.type === "file") : [],
   );
+}
+
+async function commitImages(projection: AttachmentProjection, messages: readonly AgentMessage[]) {
+  const storage = createJsonlStorage(path.join(home, "projection.jsonl"));
+  await storage.append(...projection.append([createEntry("message", createAssistantMessage("observed"), { turnId: "turn" })]));
+  const entries = await storage.read();
+  projection.restore(entries, messages);
+  return entries;
 }
 
 async function attachmentFor(name: string, callId: string) {
@@ -376,6 +387,10 @@ describe("text budget", () => {
 });
 
 describe("request projection", () => {
+  it("rejects the removed per-request render quota during profile loading", () => {
+    expect(() => resolveProfile({ attachment: { maxImageRenders: 2 } }, "test", home)).toThrow("attachment.maxImageRenders was removed");
+  });
+
   it("ignores orphaned, denied and failed tools, and respects platform retraction", async () => {
     const orphan = await attachmentFor("probe", "call-1");
     expect(attachmentMessages([orphan])).toEqual([]);
@@ -405,59 +420,161 @@ describe("request projection", () => {
     expect(attachmentMessages([event, platformAttachment, deleted])).not.toContain(platformAttachment);
   });
 
-  it("drains capacity oldest-first, leaves the rest waiting, and renders each item once", async () => {
-    const first = (await process({ attachments: [imageBlock()] }, undefined, "a")).items[0]!;
-    const second = (await process({ attachments: [imageBlock()] }, undefined, "b")).items[0]!;
-    const messages = [
-      createCustomMessage("ishiki.attachment", { source: "tool", toolName: "a", toolCallId: "1", items: [first] }),
-      createCustomMessage("ishiki.attachment", { source: "tool", toolName: "b", toolCallId: "2", items: [second] }),
-    ];
-    const ledger: AttachmentLedger = { slots: new Map() };
-    const result = await projectAttachments(messages, center, { imageInput: true, maxImageCount: 1 }, ledger);
-    // The older item takes the only slot; the newer one waits without a message.
-    expect(result).toHaveLength(1);
+  it("waits for a durable model response before consuming once and drains unseen images first", async () => {
+    const first = await attachmentFor("a", "1");
+    const second = await attachmentFor("b", "2");
+    const messages = [toolMessage("a", "1"), first, toolMessage("b", "2"), second];
+    const projection = new AttachmentProjection(center, { imageInput: true, maxImageCount: 1 });
+    projection.restore([], messages);
+    const result = await projection.project(messages, "turn");
     expect(imageParts(result)).toHaveLength(1);
-    expect(JSON.stringify(result)).not.toContain(PNG);
-
-    // The next request has capacity again: the waiting item is delivered, the spent one is gone.
-    const next = await projectAttachments(messages, center, { imageInput: true, maxImageCount: 1 }, ledger);
-    expect(next).toHaveLength(1);
-    expect(JSON.stringify(next)).toContain("tool b, call 2");
+    expect(JSON.stringify(result)).toContain("waiting for capacity");
+    expect(await projection.project(messages, "turn")).toEqual(result);
+    await commitImages(projection, messages);
+    const next = await projection.project(messages, "turn");
     expect(imageParts(next)).toHaveLength(1);
-
-    // Third request: nothing is left to say.
-    expect(await projectAttachments(messages, center, { imageInput: true, maxImageCount: 1 }, ledger)).toEqual([]);
+    expect(JSON.stringify(next)).toContain("tool b, call 2");
+    expect(JSON.stringify(next)).not.toContain("tool a, call 1");
+    await commitImages(projection, messages);
+    expect(imageParts(await projection.project(messages, "turn"))).toEqual([]);
   });
 
-  it("renders an item at most maxImageRenders times", async () => {
-    const item = (await process({ attachments: [imageBlock()] }, undefined, "a")).items[0]!;
-    const messages = [createCustomMessage("ishiki.attachment", { source: "tool", toolName: "a", toolCallId: "1", items: [item] })];
-    const ledger: AttachmentLedger = { slots: new Map() };
-    const policy = { imageInput: true, maxImageRenders: 2 };
-    expect(imageParts(await projectAttachments(messages, center, policy, ledger))).toHaveLength(1);
-    expect(imageParts(await projectAttachments(messages, center, policy, ledger))).toHaveLength(1);
-    expect(await projectAttachments(messages, center, policy, ledger)).toEqual([]);
+  it("keeps retain images stable across committed steps and runtime reconstruction", async () => {
+    const attachment = await attachmentFor("reference", "same-call");
+    attachment.data.items[0]!.lifetime = "retain";
+    const messages = [toolMessage("reference", "same-call"), attachment];
+    const projection = new AttachmentProjection(center, { imageInput: true });
+    projection.restore([], messages);
+    const first = await projection.project(messages, "turn");
+    await commitImages(projection, messages);
+    expect(await projection.project(messages, "turn")).toEqual(first);
+    const entries = await commitImages(projection, messages);
+    const restored = new AttachmentProjection(center, { imageInput: true });
+    restored.restore(entries, messages);
+    expect(await restored.project(messages, "turn")).toEqual(first);
+    const trimmed = attachmentMessages([attachment]);
+    restored.restore(entries, trimmed);
+    expect(await restored.project(trimmed, "turn")).toEqual([]);
+    const expired = await commitImages(restored, trimmed);
+    const afterExpiry = new AttachmentProjection(center, { imageInput: true });
+    afterExpiry.restore(expired, messages);
+    expect(imageParts(await afterExpiry.project(messages, "turn"))).toEqual([]);
   });
 
-  it("states a terminal rejection once and never repeats it", async () => {
-    const item = (await process({ attachments: [imageBlock()] }, undefined, "x")).items[0]!;
-    const messages = [createCustomMessage("ishiki.attachment", { source: "tool", toolName: "x", toolCallId: "1", items: [item] })];
+  it("recovers once after an unpersisted response, but never resurrects committed images", async () => {
+    const attachment = await attachmentFor("probe", "call");
+    const messages = [toolMessage("probe", "call"), attachment];
+    const projection = new AttachmentProjection(center, { imageInput: true });
+    projection.restore([], messages);
+    await projection.project(messages, "turn");
+    projection.append([createEntry("message", createAssistantMessage("not persisted"), { turnId: "turn" })]);
+    const restarted = new AttachmentProjection(center, { imageInput: true });
+    restarted.restore([], messages);
+    expect(imageParts(await restarted.project(messages, "turn"))).toHaveLength(1);
+    const entries = await commitImages(restarted, messages);
+    restarted.restore(entries, []);
+    restarted.restore(entries, messages);
+    expect(imageParts(await restarted.project(messages, "turn"))).toEqual([]);
+  });
+
+  it("batches oldest viewed recent images and keeps retained references outside the window", async () => {
+    const attachments = await Promise.all(["a", "b", "c", "d", "e", "reference"].map((name) => attachmentFor(name, name)));
+    for (const attachment of attachments) attachment.data.items[0]!.lifetime = "recent";
+    attachments[5]!.data.items[0]!.lifetime = "retain";
+    const projection = new AttachmentProjection(center, { imageInput: true, maxImageCount: 8 });
+    const messages: AgentMessage[] = [];
+    for (const index of [5, 0, 1, 2]) {
+      const attachment = attachments[index]!;
+      if (attachment.data.source !== "tool") throw new Error("expected tool source");
+      messages.push(toolMessage(attachment.data.toolName, attachment.data.toolCallId), attachment);
+    }
+    projection.restore([], messages);
+    expect(imageParts(await projection.project(messages, "turn"))).toHaveLength(4);
+    await commitImages(projection, messages);
+    messages.push(toolMessage("d", "d"), attachments[3]!);
+    projection.restore(await createJsonlStorage(path.join(home, "projection.jsonl")).read(), messages);
+    expect(imageParts(await projection.project(messages, "turn"))).toHaveLength(5);
+    await commitImages(projection, messages);
+    messages.push(toolMessage("e", "e"), attachments[4]!);
+    projection.restore(await createJsonlStorage(path.join(home, "projection.jsonl")).read(), messages);
+    const pruned = await projection.project(messages, "turn");
+    expect(imageParts(pruned)).toHaveLength(4);
+    const text = JSON.stringify(pruned);
+    expect(text).not.toContain("tool a, call a");
+    expect(text).not.toContain("tool b, call b");
+    for (const name of ["c", "d", "e", "reference"]) expect(text).toContain(`tool ${name}, call ${name}`);
+    await commitImages(projection, messages);
+    expect(await projection.project(messages, "turn")).toEqual(pruned);
+  });
+
+  it("never prunes unseen recent images from an oversized batch", async () => {
+    const messages: AgentMessage[] = [];
+    for (const name of ["a", "b", "c", "d", "e", "f"]) {
+      const attachment = await attachmentFor(name, name);
+      attachment.data.items[0]!.lifetime = "recent";
+      messages.push(toolMessage(name, name), attachment);
+    }
+    const projection = new AttachmentProjection(center, { imageInput: true, maxImageCount: 1, recentImageCount: 1, imagePruneBatchSize: 2 });
+    projection.restore([], messages);
+    for (const name of ["a", "b", "c", "d", "e", "f"]) {
+      const output = await projection.project(messages, "turn");
+      expect(imageParts(output)).toHaveLength(1);
+      const supplied = output.find(
+        (message) => message.role === "user" && Array.isArray(message.content) && message.content.some((part) => part.type === "file"),
+      );
+      expect(JSON.stringify(supplied)).toContain(`tool ${name}, call ${name}`);
+      await commitImages(projection, messages);
+    }
+  });
+
+  it("separates repeated tool call ids and independent references to identical media", async () => {
+    const original = await attachmentFor("probe", "reused");
+    const retained = createCustomMessage("ishiki.attachment", {
+      ...original.data,
+      items: original.data.items.map((item) => ({ ...item, lifetime: "retain" as const })),
+    });
+    const messages = [toolMessage("probe", "reused"), original, retained];
+    const projection = new AttachmentProjection(center, { imageInput: true });
+    projection.restore([], messages);
+    expect(imageParts(await projection.project(messages, "turn"))).toHaveLength(1);
+    const entries = await commitImages(projection, messages);
+    expect(imageParts(await projection.project(messages, "turn"))).toHaveLength(1);
+    const next = await attachmentFor("probe", "reused");
+    const subsequent = [toolMessage("probe", "reused"), next];
+    projection.restore(entries, subsequent);
+    expect(imageParts(await projection.project(subsequent, "turn"))).toHaveLength(1);
+    const failed = toolMessage("probe", "reused", { type: "error-text", value: "failed" });
+    expect(attachmentMessages([...messages, failed, next])).not.toContain(next);
+  });
+
+  it("commits terminal rejections without claiming visual delivery and retries unavailable resources", async () => {
+    const attachment = await attachmentFor("x", "1");
+    const messages = [toolMessage("x", "1"), attachment];
     for (const policy of [{ imageInput: false }, { imageInput: true, maxImageBytes: 1 }, { imageInput: true, maxTotalImageBytes: 1 }]) {
-      const ledger: AttachmentLedger = { slots: new Map() };
-      const result = await projectAttachments(messages, center, policy, ledger);
-      expect(imageParts(result)).toHaveLength(0);
-      expect(JSON.stringify(result)).toContain(item.url);
+      const projection = new AttachmentProjection(center, policy);
+      projection.restore([], messages);
+      const result = await projection.project(messages, "turn");
+      expect(imageParts(result)).toEqual([]);
       expect(JSON.stringify(result)).toContain("not supplied");
-      expect(await projectAttachments(messages, center, policy, ledger)).toEqual([]);
+      const batch = projection.append([createEntry("message", createAssistantMessage("reason received"), { turnId: "turn" })]);
+      const delivery = batch.find((entry) => entry.type === "ishiki.images");
+      expect(delivery).toMatchObject({ data: { shown: [], released: [`${attachment.id}:0`] } });
+      projection.restore(batch, messages);
+      expect(imageParts(await projection.project(messages, "turn"))).toEqual([]);
+      expect(JSON.stringify(await projection.project(messages, "turn"))).not.toContain("not supplied");
     }
     const missing = createCustomMessage("ishiki.attachment", {
       source: "tool",
       toolName: "x",
       toolCallId: "2",
-      items: [{ url: "artifact://x/missing", mediaType: "image/png" }],
+      items: [{ url: "artifact://x/missing", mediaType: "image/png", lifetime: "retain" }],
     });
-    const ledger: AttachmentLedger = { slots: new Map() };
-    expect(JSON.stringify(await projectAttachments([missing], center, { imageInput: true }, ledger))).toContain("resource unavailable");
+    const projection = new AttachmentProjection(center, { imageInput: true });
+    const missingMessages = [toolMessage("x", "2"), missing];
+    projection.restore([], missingMessages);
+    expect(JSON.stringify(await projection.project(missingMessages, "turn"))).toContain("resource unavailable");
+    await commitImages(projection, missingMessages);
+    expect(JSON.stringify(await projection.project(missingMessages, "turn"))).toContain("resource unavailable");
   });
 
   it("keeps attachments in the standard context engine", async () => {

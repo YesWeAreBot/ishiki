@@ -12,7 +12,8 @@ Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能�
 ```yaml
 attachment:
   imageInput: true           # 本 profile 的能力上限开关
-  maxImageRenders: 1         # 每张图一生最多内联几次，默认 1
+  recentImageCount: 3        # recent 生命周期的目标保留数，默认 3
+  imagePruneBatchSize: 2     # 每次成批移除最旧的已查看图片数，默认 2
   maxImageBytes: 5242880     # 单图上限，默认 5 MiB
   maxTotalImageBytes: 10485760   # 整次请求所有图累计，默认 10 MiB
   maxImageCount: 4           # 单次请求图片张数上限，默认 4
@@ -23,16 +24,54 @@ attachment:
 profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml` 里声明 `input: [text, image]`。只要有任何一个候选没声明，profile 装配即失败并报 `profile imageInput requires declared image input on every candidate of …`。这是故意的——故障转移不能把请求落到看不见图的模型上。
 </Callout>
 
-图片被消费一次就丢弃：`maxImageRenders`（默认 1）规定一张图一生最多被内联几次，达到上限后它不再进入任何请求。轮到但容量不足的图不消耗额度，按到达顺序在后续请求里内联，因此一次涌入的多张图不会饿死较旧的几张。
+### 图片生命周期
 
-描述行只在判定终止时出现一次：能力关闭、格式不支持、单图超限、读取失败、同一请求内已有相同媒体。之后该附件消息不再出现；URL 仍留在工具结果的 `[attachment: …]` 标记或源消息体里。
+每个附件媒体项带一个 `lifetime`，决定它的字节还能出现在多少次请求里：
+
+| `lifetime` | 行为 | 何时退出请求 |
+| --- | --- | --- |
+| `once`（默认） | 只嵌入一次 | 携带图片的模型响应成功持久化后，消耗该图片的展示机会；失败或中止的 step 不消耗展示机会，后续请求重试 |
+| `recent` | 保留最近查看过的图片，供后续轮次回看 | 活动 `recent` 图总数超出 `recentImageCount` 时，按 `imagePruneBatchSize` 成批移除最旧的**已查看**图片；未查看的图片不参与移除。被硬预算挤出的已查看图片直接释放；来源记录被移除时同样释放，包括交付状态已经持久化的图片 |
+| `retain` | 只要来源记录还在活动上下文里，每轮都可嵌入 | 上下文引擎移除来源记录（`prepareEntries`）时释放，即使此前已持久化过交付状态；本次请求预算不足时暂不携带，不算退出 |
+
+所有入口默认 `once`：平台消息里的图片、直接 MCP 返回的媒体、`read` 返回的媒体都一样。`imageInput: false` 时不会嵌入任何图片，生命周期一律按 `once` 处理，附件消息只说明未提供的原因。模型可用的覆盖路径只有两条：
+
+- codemode 最终返回值的 `attachments[]` 中，媒体项可以直接带 `lifetime`。沙箱内部的中间结果不产生附件，只有最终 return 计算在内。
+- `imageInput` 开启时，直接调用的 `read` 接受 `{ url, lifetime }`。codemode 内的 `read` 不提供这个参数；在沙箱里请把 `lifetime` 写进最终 `attachments[]` 的对应项。
+
+codemode 里 MCP 原始媒体与处理后的媒体使用同一个 `attachments[]` 形状，生命周期写在对应项上：
+
+```js
+const shot = await tools["windows-mcp_Screenshot"]({ use_annotation: false });
+const page = await tools.read({ url: "artifact://codemode/page.png" });
+
+return {
+  text: shot[0].text,
+  attachments: [
+    { ...shot[1], lifetime: "recent" }, // MCP image 块：{ type: "image", mimeType, data }
+    { ...page, lifetime: "retain" },    // read 的 file 结果：{ type: "file", url, mediaType, ... }
+  ],
+};
+```
+
+选择原则：瞬时的截图用 `once`，需要在最近几轮里对比画面用 `recent`，参考页、文档页这类长期依据才用 `retain`。
+
+直接调用 `read` 时，`lifetime` 是可选项；省略即 `once`：
+
+```js
+read({ url: "asset://<32位十六进制>", lifetime: "recent" })
+```
+
+`recent` 的移除在每次请求投影前执行，并按批进行。例如 `recentImageCount: 3`、`imagePruneBatchSize: 2`，出现第 5 张活动图片时才触发移除，从最旧的已查看图片开始移除至多 2 张；已查看不足 2 张时只移除现有的，第 4 张不会触发移除。批处理让两次移除之间的消息前缀保持不变，provider 的前缀缓存不会被每来一张新图片打散。图片不自动缩放；`maxImageCount`、`maxImageBytes`、`maxTotalImageBytes`、`maxImageDimension` 是每请求预算，容量不足的图片本次请求不嵌入、不消耗展示机会，按到达顺序等待后续请求。硬预算下未被选中的已查看 `recent` 图片会释放，不再参与后续选择；未查看的图片只等待容量，`retain` 本次暂不携带后仍可再试。
+
+终止性判定（能力关闭、媒体类型或编码不支持、图片自身字节超过单图上限、图片自身字节超过单次请求累计上限、图片尺寸超限）只输出一次原因，并随成功响应持久化；之后该附件消息不再出现。URL 仍留在工具结果的 `[attachment: …]` 标记或源消息体里。资源不可用与请求剩余容量不足属于本次请求未提供，会在后续请求重试。
 
 几个明确的行为边界：
 
-- 图片不自动缩放；超过任一配额的图不再内联，原因说明只发一次。
-- 抓取失败（源失效、超时）按已消费处理，不会在每条后续请求里重试。
-- 内联过的图想再看，用 `read` 读它的 URL：这会生成新的附件记录，额度重新开始。
-- 即使 `imageInput: false`，模型仍可在 codemode 里把图片字节传给其他工具（比如交给 OCR 工具），只是它自己「看不见」。
+- 抓取失败（源失效、超时）本次请求不嵌入，也不消耗展示机会；后续请求会继续尝试，直到成功或来源消失。
+- 嵌入过的图片想再看，用 `read` 读它的 URL：默认生成新的 `once` 附件记录；直接调用时可传 `lifetime: recent` 或 `retain`。
+- 即使 `imageInput: false`，模型仍可在 codemode 里把图片字节传给其他工具（比如交给 OCR 工具），只是它自己「看不见」；此时直接 `read` 不提供 `lifetime` 参数。
+- `maxImageRenders` 已移除。profile 里仍写这个字段时，装配期报 `attachment.maxImageRenders was removed; use image lifetimes (once, recent, retain) and attachment.recentImageCount/imagePruneBatchSize`。
 
 ## 让 bot 发图
 
@@ -72,14 +111,16 @@ profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml`
 
 - 入站图片在到达时注册为 `asset://<id>` 资源，随后以一条「附件消息」进入对话；原消息被撤回时，附件消息自动从历史投影中消失。
 - 工具返回的媒体统一归档为 `artifact://<tool>/<name>`，模型看到的是占位标记 `[attachment: artifact://…; image/png; …]`，真实字节在资源里。
-- 附件消息只在还有东西要交付时出现：要内联的字节，或者一次性的失败原因。交付完就整条退出请求，源消息体与工具结果里的 URL 仍在。
-- 模型想回看某张图，用 `read` 工具按 URL 读（`imageInput` 开启时投为图像，关闭时得到描述与元数据），这会生成新的附件记录。
+- 附件消息只在还有内容需要交付时出现：需要嵌入的字节，或者本次请求无法提供的原因。交付状态由生命周期决定：`once` 成功交付后退出请求，`recent` 保留最近几张，`retain` 跟随来源记录存活。源消息体与工具结果里的 URL 始终保留。
+- 未发生生命周期移除或预算选择变化时，投影出的消息保持原有顺序、ID 与时间戳不变，方便 provider 复用前缀缓存；只有 `immutable` 资源（如 artifact 快照）保证字节不变，动态来源每次读取可能不同。
+- 模型想回看某张图，用 `read` 工具按 URL 读（`imageInput` 开启时投为图像，关闭时得到描述与元数据）。直接调用可以带 `lifetime`；这会生成新的附件记录。
 
 ## 排错
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 装配报 `requires declared image input` | 模型/failover 候选未声明 `input: [text, image]` | 补全 models.yaml 的模型声明 |
+| 装配报 `maxImageRenders was removed` | profile 还在用旧字段 | 删除 `maxImageRenders`，按需设置 `recentImageCount` / `imagePruneBatchSize` |
 | 图发出去是空的或没发出去 | `src` 不在白名单协议、资源已失效 | 用工具结果里的原样 URL |
 | bot 说「看不见图」 | `imageInput` 关着；或配额把图挡了 | 开启开关；调大配额；看附件消息里的原因 |
-| 历史里的图「不见了」 | 图片已消费完它的渲染额度 | 正常行为；需要时让 bot 重新 read 对应 URL |
+| 历史里的图片「不见了」 | `once` 已成功交付，或 `recent` 已被成批移除 | 正常行为；需要时让 bot 重新 read 对应 URL，或改用 `retain` 生命周期 |

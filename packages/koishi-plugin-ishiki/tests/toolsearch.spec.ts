@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SEARCH_TOOL, ToolsearchState, createSearchTool } from "../src/builtin-tools/toolsearch.js";
 import { buildCodeModeToolCatalogMessage } from "../src/builtin-tools/vendor/tool-prompt.js";
+import { createAgentOverlayPlugin } from "../src/debug/agent-overlay.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime, type AgentRuntimeConfig } from "../src/runtime.js";
 import { StandardWakeupInstance } from "../src/wakeup/index.js";
@@ -518,6 +519,33 @@ describe("AgentRuntime baseline catalog", () => {
     const catalog = messages[0]!.data as MessageData;
     expect(catalog.type).toBe("ishiki.tools.catalog");
     expect(catalog.data!.text).toContain("Tool catalog update.");
+  });
+
+  it("uses external tools.md descriptions in the first toolsearch catalog", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ishiki-tool-overlay-"));
+    homes.push(root);
+    writeFileSync(
+      path.join(root, "tools.md"),
+      "---\nversion: 1\ntools:\n  read:\n    description: Read through the evaluation overlay.\n    parameters:\n      url: Use the exact resource URL.\n---\n",
+    );
+    const plugin = createAgentOverlayPlugin({ root, toolsFile: "tools.md" });
+    const runtime = makeRuntime({
+      tools: { ...makeTools(), read: makeTool("read", "original read description", { url: { type: "string" } }) },
+      externalPlugins: [plugin],
+    });
+
+    await runtime.agent.init();
+    const catalog = (await runtime.storage.read()).find((entry) => {
+      if (entry.type !== "message") return false;
+      const data = entry.data as MessageData;
+      return data.role === "custom" && data.type === "ishiki.tools.catalog";
+    });
+
+    expect(catalog?.type).toBe("message");
+    if (catalog?.type !== "message") throw new Error("baseline catalog missing");
+    const data = catalog.data as MessageData;
+    expect(data.data?.text).toContain("Read through the evaluation overlay.");
+    expect(data.data?.text).toContain("Use the exact resource URL.");
   });
 
   it("appends nothing when toolsearch is disabled", async () => {

@@ -11,11 +11,14 @@ declare module "@yesimagent/core" {
 
 export type IshikiEvent = CustomMessages;
 
+export type ImageLifetime = "once" | "recent" | "retain";
+
 export interface AttachmentItem {
   url: string;
   mediaType: string;
   filename?: string;
   byteLength?: number;
+  lifetime?: ImageLifetime;
 }
 
 export type IshikiAttachment =

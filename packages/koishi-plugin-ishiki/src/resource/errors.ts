@@ -4,6 +4,7 @@
  */
 export type ResourceErrorCode =
   | "invalid_resource_uri"
+  | "invalid_attachment_lifetime"
   | "unsupported_view"
   | "resource_unavailable"
   | "resource_not_found"

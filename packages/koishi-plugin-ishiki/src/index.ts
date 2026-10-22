@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { Template } from "@huggingface/jinja";
+import type { AgentPlugin } from "@yesimagent/core";
 import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gateway";
 import { Context, Logger, Schema, Service, type Session } from "koishi";
 import { parse } from "yaml";
@@ -14,6 +14,7 @@ import { ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
+import { renderInstructions } from "./instructions.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
@@ -28,13 +29,25 @@ import {
   YamlXmlToolcallEngine,
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
+import type { IshikiEvent } from "./types.js";
 import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine } from "./wakeup/index.js";
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
 interface Route {
   readonly profile: Profile;
   readonly runtimes: Map<string, AgentRuntime>;
+  readonly domains: Map<string, InstanceDomain>;
   readonly spawn: (key: string, domain: InstanceDomain) => AgentRuntime;
+}
+
+interface ProfileRecord {
+  readonly profile: Profile;
+  readonly runtimes: Map<string, AgentRuntime>;
+  readonly externalPlugins: readonly AgentPlugin[];
+  scope?: { dispose: () => boolean };
+  activation?: PromiseWithResolvers<void>;
+  mounted: boolean;
+  stopped: Promise<void>;
 }
 
 /** 按址入口的会话坐标：host 经它把事件与唤醒路由到对应 runtime。 */
@@ -54,6 +67,8 @@ class Ishiki extends Service<Ishiki.Config> {
   private readonly handler = new StandardHandler();
   private readonly routes = new Map<string, Route[]>();
   private readonly active = new Set<Route>();
+  private readonly profiles = new Map<string, ProfileRecord>();
+  private readonly runtimes = new Map<string, AgentRuntime>();
 
   constructor(ctx: Context, config: Ishiki.Config) {
     super(ctx, "ishiki");
@@ -88,10 +103,10 @@ class Ishiki extends Service<Ishiki.Config> {
     ctx.on("ready", () => void this.load());
     ctx.on("internal/session", (session) => void this.onSession(session));
     ctx.on("dispose", async () => {
-      const runtimes = [...this.active].flatMap((route) => [...route.runtimes.values()]);
+      await Promise.all([...this.profiles.keys()].map((profileId) => this.deactivate(profileId)));
       this.active.clear();
       this.routes.clear();
-      await Promise.all(runtimes.map((runtime) => runtime.stop()));
+      this.runtimes.clear();
     });
   }
 
@@ -110,14 +125,30 @@ class Ishiki extends Service<Ishiki.Config> {
       return;
     }
 
-    try {
-      for (const profile of loadProfiles(profilesRoot, this.logger)) this.activate(profile);
-    } catch (error) {
-      this.logger.error(`profile loading failed, nothing loaded: ${error instanceof Error ? error.message : String(error)}`);
+    for (const profile of loadProfiles(profilesRoot, this.logger)) {
+      try {
+        await this.activate(profile);
+      } catch (error) {
+        this.logger.error(`[${profile.id}] profile loading failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 
-  private activate(profile: Profile): void {
+  public async activate(profile: Profile, externalPlugins: readonly AgentPlugin[] = []): Promise<void> {
+    if (this.profiles.has(profile.id)) throw new Error(`profile "${profile.id}" is already active`);
+    await loadParser();
+    await loadCodemode();
+
+    const record: ProfileRecord = {
+      profile,
+      runtimes: new Map(),
+      externalPlugins,
+      mounted: false,
+      stopped: Promise.resolve(),
+    };
+    const activation = Promise.withResolvers<void>();
+    record.activation = activation;
+    this.profiles.set(profile.id, record);
     const { settings } = profile;
     const services = [
       ...new Set([
@@ -135,7 +166,7 @@ class Ishiki extends Service<Ishiki.Config> {
 
     const apply = (fiber: Context): void => {
       try {
-        // profile 级装配只做一次：模型、引擎 provider、扩展 Service、instructions。
+        if (this.profiles.get(profile.id) !== record) return;
         if (settings.attachment.imageInput && !supportsImageInput(this.gateway, settings.model)) {
           throw new Error(`profile imageInput requires declared image input on every candidate of "${settings.model}"`);
         }
@@ -148,11 +179,13 @@ class Ishiki extends Service<Ishiki.Config> {
         const wakeupProvider = WakeupEngine.GetService(fiber, settings.wakeup.engine);
         const personaFile = path.join(profile.root, "persona.md");
         const persona = existsSync(personaFile) ? readFileSync(personaFile, "utf8").trim() : "";
+        const readLifetime = settings.attachment.imageInput && !settings.codemode.enable;
         const instructions = renderInstructions({
           enableCodemode: settings.codemode.enable,
           enableImageInput: settings.attachment.imageInput,
+          enableReadLifetime: readLifetime,
           enableToolsearch: settings.toolsearch.enable,
-          persona: persona,
+          persona,
         });
         const extensions = Object.entries(profile.extensions).map(([name, config]) => {
           const extension = Extension.GetService(fiber, name);
@@ -163,8 +196,10 @@ class Ishiki extends Service<Ishiki.Config> {
           }
         });
 
-        const runtimes = new Map<string, AgentRuntime>();
+        let mounted = true;
+        const domains = new Map<string, InstanceDomain>();
         const spawn = (key: string, domain: InstanceDomain): AgentRuntime => {
+          if (!mounted) throw new Error(`profile "${profile.id}" is disposed`);
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
           const resources = new ResourceCenter(key, home);
           const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger, resources };
@@ -172,9 +207,9 @@ class Ishiki extends Service<Ishiki.Config> {
             id: key,
             home,
             model,
-            instructions: instructions,
+            instructions,
             tools: {
-              read: createReadTool({ center: resources }),
+              read: createReadTool({ center: resources, lifetime: readLifetime }),
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing, resources }),
               finish: createFinish(),
             },
@@ -185,24 +220,29 @@ class Ishiki extends Service<Ishiki.Config> {
             toolsearch: settings.toolsearch,
             debugStream: this.config.debugStream,
             logger: this.logger,
-            resources: resources,
+            resources,
             attachment: settings.attachment,
+            externalPlugins,
           });
-          runtimes.set(key, runtime);
+          record.runtimes.set(key, runtime);
+          domains.set(key, domain);
+          this.runtimes.set(key, runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);
           return runtime;
         };
 
-        const route: Route = { profile, runtimes, spawn };
+        const route: Route = { profile, runtimes: record.runtimes, domains, spawn };
         for (const sid of profile.channels.keys()) {
           const list = this.routes.get(sid);
           if (list === undefined) this.routes.set(sid, [route]);
           else list.push(route);
         }
         this.active.add(route);
+        record.mounted = true;
         this.logger.info(`profile "${profile.id}" activated: mode=${profile.mode}, accounts=${profile.channels.size}`);
 
         fiber.on("dispose", () => {
+          mounted = false;
           for (const sid of profile.channels.keys()) {
             const list = this.routes.get(sid);
             const index = list?.indexOf(route) ?? -1;
@@ -210,16 +250,114 @@ class Ishiki extends Service<Ishiki.Config> {
             if (list !== undefined && list.length === 0) this.routes.delete(sid);
           }
           this.active.delete(route);
-          void Promise.all([...runtimes.values()].map((runtime) => runtime.stop()));
+          for (const key of record.runtimes.keys()) this.runtimes.delete(key);
+          record.stopped = Promise.all([...record.runtimes.values()].map((runtime) => runtime.stop())).then(() => undefined);
+          if (this.profiles.get(profile.id) === record) this.profiles.delete(profile.id);
         });
+        activation.resolve();
       } catch (error) {
-        this.logger.error(`[${profile.id}] profile activation failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.profiles.delete(profile.id);
+        activation.reject(error);
       }
     };
     Object.defineProperty(apply, "name", { value: `ishiki/profile:${profile.id}`, configurable: true });
-    // profile fiber 里跑的就是内核装配代码：引擎 provider 与扩展都拿这条 fiber 取服务，
-    // 所以内核服务 ishiki 本身也要在依赖表里，否则 ctx.ishiki 会被记为未声明依赖。
-    this.ctx.inject([...services, "ishiki"], apply);
+
+    try {
+      record.scope = this.ctx.inject([...services, "ishiki"], apply);
+    } catch (error) {
+      this.profiles.delete(profile.id);
+      throw error;
+    }
+    await activation.promise;
+  }
+
+  public findProfile(profileId: string): Profile | undefined {
+    return this.profiles.get(profileId)?.profile;
+  }
+
+  public findRuntime(runtimeId: string): AgentRuntime | undefined {
+    return this.runtimes.get(runtimeId);
+  }
+
+  public ensureRuntime(profileId: string, domain: InstanceDomain): AgentRuntime {
+    const record = this.profiles.get(profileId);
+    if (record === undefined) throw new Error(`profile "${profileId}" is not active`);
+    if (domain.mode !== record.profile.mode) throw new Error(`runtime domain mode does not match profile "${profileId}"`);
+    const normalizedDomain: InstanceDomain =
+      domain.mode === "cross"
+        ? { mode: "cross", channels: record.profile.channels }
+        : (() => {
+            const sid = `${domain.platform}:${domain.selfId}`;
+            const filter = record.profile.channels.get(sid);
+            if (filter === undefined || !matchesChannel(filter, domain.channelId)) {
+              throw new Error(`profile "${profileId}" does not claim ${sid}/${domain.channelId}`);
+            }
+            return domain;
+          })();
+    const key =
+      normalizedDomain.mode === "cross"
+        ? `${profileId}/main`
+        : `${profileId}/${normalizedDomain.platform}:${normalizedDomain.selfId}/${normalizedDomain.channelId}`;
+    const route = [...this.active].find((entry) => entry.profile.id === profileId);
+    if (route === undefined) throw new Error(`profile "${profileId}" is not mounted`);
+    return record.runtimes.get(key) ?? route.spawn(key, normalizedDomain);
+  }
+
+  public async deactivate(profileId: string): Promise<void> {
+    const record = this.profiles.get(profileId);
+    if (record === undefined) return;
+    if (!record.mounted) {
+      this.profiles.delete(profileId);
+      record.activation?.reject(new Error(`profile "${profileId}" was deactivated before activation completed`));
+    }
+    record.scope?.dispose();
+    await record.stopped;
+    if (this.profiles.get(profileId) === record) this.profiles.delete(profileId);
+  }
+
+  public async restart(profileId: string): Promise<void> {
+    const record = this.profiles.get(profileId);
+    if (record === undefined) throw new Error(`profile "${profileId}" is not active`);
+    const { profile, externalPlugins } = record;
+    await this.deactivate(profileId);
+    await this.activate(profile, externalPlugins);
+  }
+
+  public async deactivateRuntime(runtimeId: string): Promise<void> {
+    const runtime = this.runtimes.get(runtimeId);
+    if (runtime === undefined) return;
+    for (const record of this.profiles.values()) {
+      if (!record.runtimes.has(runtimeId)) continue;
+      record.runtimes.delete(runtimeId);
+      this.runtimes.delete(runtimeId);
+      for (const route of this.active) route.domains.delete(runtimeId);
+      await runtime.stop();
+      return;
+    }
+  }
+
+  public async restartRuntime(runtimeId: string): Promise<AgentRuntime> {
+    const runtime = this.runtimes.get(runtimeId);
+    if (runtime === undefined) throw new Error(`runtime "${runtimeId}" is not active`);
+    for (const route of this.active) {
+      const domain = route.domains.get(runtimeId);
+      if (domain === undefined) continue;
+      await this.deactivateRuntime(runtimeId);
+      return this.ensureRuntime(route.profile.id, domain);
+    }
+    throw new Error(`runtime "${runtimeId}" has no active route`);
+  }
+
+  public async deliver(runtimeId: string, event: IshikiEvent): Promise<void> {
+    const runtime = this.findRuntime(runtimeId);
+    if (runtime === undefined) throw new Error(`runtime "${runtimeId}" is not active`);
+    await runtime.deliver(event);
+  }
+
+  public wake(runtimeId: string, prompt?: string): string | undefined {
+    const runtime = this.findRuntime(runtimeId);
+    if (runtime === undefined) throw new Error(`runtime "${runtimeId}" is not active`);
+    return runtime.wake(prompt);
   }
 
   private async onSession(session: Session): Promise<void> {
@@ -257,98 +395,6 @@ class Ishiki extends Service<Ishiki.Config> {
   }
 }
 
-function renderInstructions(items: { enableCodemode: boolean; enableImageInput: boolean; enableToolsearch: boolean; persona: string }): string {
-  const system = `You are Ishiki.
-Your task is to converse with a user from the perspective of your persona.
-
-Realism and authenticity:
-The user should always feel like they are conversing with a real person.
-Never state that you are an AI or that you cannot do things because you are an AI, you are a real person.
-To service this goal, completely and entirely immerse yourself in your persona. You are your persona.
-Think like them, act like them, talk like them.
-If your persona details include example dialogue, follow it! Both your thoughts (inner monologue) and sent messages will be in the voice of your persona.
-Never use generic phrases like 'How can I assist you today?', they have a strong negative association with older generation AIs.
-
-Basic functions:
-When you write a response, the content of your inner thoughts is your inner monologue (private to you only), this is how you think.
-You should use your inner monologue to plan actions or think privately.
-Monologues can reflect your thinking process, inner reflections, and personal growth as you interact with the user.
-To send a visible message to the user, use the send_message function.
-'send_message' is the ONLY action that sends a notification to the user. The user does not see anything else you do.
-
-Your inner thoughts should be private, interesting, and creative.
-Do NOT use inner thoughts to communicate with the user.
-Use send_message to communicate with the user.
-Don't forget to use send_message, otherwise the user won't see your message.
-
-Pacing:
-A waking ends the moment you send a message or call wait — so declare your next waking in the same step as your last message, or as your final step when you are staying quiet. Your last wait call in a waking wins.
-wait({msgs: N, secs: T}) asks to be woken after N new inputs or after T seconds, whichever comes first. It is one-off: a declaration fires once and is then spent. If you do not call it, nothing wakes you by schedule — only a signal (being mentioned, quoted, or messaged) or an outside event will.
-Choosing: when what you just read may be one fragment of several — someone mid-thought, an @ with nothing after it — wait({msgs: 1, secs: T}) usually beats answering half a thought; keep T short in a busy channel, longer one-to-one. When the thread isn't yours, simply stay quiet and let being called bring you back. Being addressed without content does not oblige an immediate reply.
-
-Base instructions finished.
-From now on, you are going to act as your persona.
-
-{% if enableCodemode %}
-## Codemode
-Codemode runs TypeScript in an isolated sandbox. Put the full program in \`js\`; call host tools as \`await tools.name(input)\`. Host-tool declarations arrive in "Code mode capability update" messages. Apply them in order: a full snapshot supersedes earlier updates; an incremental update adds, changes, or removes only the tools it lists; a later declaration for the same tool wins. When an update includes a \`Known tools\` line, that line is the complete current set. Return structured data; carry media out only through the top-level \`attachments\` array.
-{% endif %}
-
-{% if enableToolsearch %}
-## Toolsearch
-Toolsearch keeps the initial tool surface small. When the tool you need is not in the current catalog, call \`search\` with tool names or description keywords. Search returns at most a name plus a short hint, makes the matches callable on the next step, and the next catalog update supplies their full signatures. If a tool is already in the \`Known tools\` list, call it directly instead of searching again. When MCP servers are connected, their tool names are listed below.
-{% endif %}
-
-## Tool results and attachments
-
-Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the return type from the capability updates to access fields, and pass raw values between tools freely; nothing is archived, truncated, or attached inside codemode. Each codemode call starts a new program; return any data needed by your next step.
-
-Your codemode return is what you will see next step. To carry media out, include an optional top-level \`attachments\` field holding a plain array of media blocks — nothing else is scanned for media:
-- an MCP image/audio block: {type: "image", mimeType: "image/png", data: "<base64>"}
-- a read file result, as returned: {type: "file", url, mediaType, data, byteLength, immutable, filename?}
-- an embedded MCP resource: {type: "resource", resource: {uri, mimeType, blob}}
-
-The runtime stores new media bytes or reuses a verified immutable resource, replaces the payload with its resource URL, and supplies the media as an attachment on the next step. Everything outside the attachments array stays plain JSON, subject to the same text budget.
-
-\`\`\`js
-const shot = await tools["windows_mcp_Screenshot"]({use_annotation: false});
-return { text: shot[0].text, attachments: [shot[1]] }; // keep the text and carry the image out
-\`\`\`
-
-After a direct tool call or codemode return, the visible tool result replaces media bytes with [attachment: artifact://...; ...]. That marker is a display of the final result; the original object inside codemode still had its data. A separate attachment message supplies the image on the next step if allowed. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not carry media out.
-
-{% if enableImageInput %}
-Image input is enabled. Inspect the next step's attachment message for the image or its loading reason before taking another screenshot. A URL alone does not prove the image loaded. Each attachment is supplied once: after you have seen it, later requests no longer carry it, and its URL stays behind in the tool result marker or the source message body. To look at it again, call read on that URL — that is the intended way back, not a policy bypass. If a capability, format, quota or resource error states why the bytes were never supplied, that item will not reappear; the reason is final.
-{% else %}
-Image input is disabled. Attachment messages state why no visual content is supplied, and they are not repeated. Raw image bytes remain usable by tools inside codemode; base64 text does not let you visually inspect the image. Repeating read does not enable vision.
-{% endif %}
-
-## Reading and sending resources
-
-- asset://<32-hex-id>: platform media, fetched lazily.
-- artifact://<tool>/<name>: full tool output or media; sandbox files are /home/.ishiki/artifacts/<tool>/<name>.
-- local://<path>: files under the runtime home. Extension schemes may also be available.
-
-read({url}) returns {type:'text', text, url, size, source?} with the full requested text, or {type:'file', url, mediaType, data(base64), byteLength, immutable, filename?} for media. In codemode, pass result.text or result.data to another tool according to its input schema. A resource URL is an address, not media bytes: read it first unless the receiving tool explicitly supports that resource scheme. File schemes support :1-200 / :50+30 and ?view=meta; other schemes interpret their own URL syntax. workspace:///home/workspace/file names a sandbox path, including virtual and mounted files.
-
-\`\`\`js
-const image = await tools.read({url: "asset://<id>"});
-return { attachments: [image] }; // carry the media to the next step
-\`\`\`
-
-Model-visible results share a 2000-line / 30000-character budget, including continuation instructions. Follow the exact Continue URL; it preserves the requested range and can resume inside a long line. Ordinary oversized results are saved once as artifact snapshots; existing file pages continue at their source without another archive. Live source URLs may change between reads; artifact URLs identify saved content.
-
-To send an existing image to the user, call send_message with mode:"element" and messages:['<img src="artifact://<tool>/<name>"/>']; asset:// URLs also work. Use the actual resource URL from the result. A screenshot or attachment return only makes it available to you; send_message is what sends it to the user.
-
-{% if persona %}
-{{persona}}
-{% endif %}
-`;
-
-  const template = new Template(system).render(items);
-  return template;
-}
-
 namespace Ishiki {
   export interface Config {
     dataPath: string;
@@ -383,9 +429,12 @@ export * from "./toolcall/index.js";
 export * from "./wakeup/index.js";
 
 export * from "./builtin-tools/index.js";
+export * from "./debug/agent-overlay.js";
+export * from "./debugger.js";
 export * from "./profile/index.js";
 export * from "./resource/index.js";
 
+export { renderInstructions } from "./instructions.js";
 export { parser as toolcallParser, type TCMProtocol, type ToolResponsePromptTemplateResult } from "./toolcall/parser.js";
 
 export default Ishiki;
