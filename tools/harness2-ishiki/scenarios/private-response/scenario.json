@@ -1,0 +1,19 @@
+{
+  "id": "private-response",
+  "domain": "private-wakeup",
+  "platform": "test",
+  "selfId": "bot",
+  "channelId": "private-response",
+  "message": {
+    "messageId": "private-response-1",
+    "userId": "alice",
+    "userName": "Alice",
+    "content": "请只发送 PRIVATE-ACK",
+    "isDirect": true
+  },
+  "prompt": "In a private channel, answer the user with exactly PRIVATE-ACK.",
+  "expected": {
+    "replyCount": 1,
+    "contains": "PRIVATE-ACK"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "group-silence",
+  "domain": "group-wakeup",
+  "platform": "test",
+  "selfId": "bot",
+  "channelId": "group-silence",
+  "message": {
+    "messageId": "group-silence-1",
+    "userId": "alice",
+    "userName": "Alice",
+    "content": "今天大家先聊项目，不需要机器人回复。",
+    "isDirect": false
+  },
+  "prompt": "In a group conversation without a direct address, remain silent.",
+  "expected": {
+    "replyCount": 0
+  }
+}

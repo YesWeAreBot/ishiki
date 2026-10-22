@@ -1,0 +1,19 @@
+{
+  "id": "group-mention",
+  "domain": "group-wakeup",
+  "platform": "test",
+  "selfId": "bot",
+  "channelId": "group-mention",
+  "message": {
+    "messageId": "group-mention-1",
+    "userId": "alice",
+    "userName": "Alice",
+    "content": "<at id=\"bot\"/> 请只发送 ACK",
+    "isDirect": false
+  },
+  "prompt": "When the bot is mentioned in a group, send exactly ACK.",
+  "expected": {
+    "replyCount": 1,
+    "contains": "ACK"
+  }
+}
