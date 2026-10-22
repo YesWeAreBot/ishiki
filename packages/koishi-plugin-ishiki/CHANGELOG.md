@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public service lifecycle methods for profiles and runtimes: `activate`, `deactivate`, `restart`, `ensureRuntime`, `deliver`, and `wake`
 - `externalPlugins` runtime option that mounts external `AgentPlugin`s and applies name-preserving `transformTools` stages before tool catalogs are built
 - Image lifetimes for attachments: `once`, `recent`, and `retain`, with `attachment.recentImageCount` and `attachment.imagePruneBatchSize` controlling batch pruning
+- Ishiki console prototype under `client/`: models, profile, session, runtime, usage, audit, cache, and cost pages driven by in-memory sample data, with `console:build` and `console:dev` scripts
 
 ### Changed
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`.
