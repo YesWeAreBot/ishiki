@@ -70,6 +70,14 @@ codemode:
   maxResultBytes: 33554432 # 最终结果先穿过沙箱边界，再由统一出口处理
   memoryLimitBytes: 268435456 # 256 MiB，QuickJS 内存预算
 
+# 一次唤醒（一轮）的步数预算。maxSteps 是硬上限：走到这一步 runtime 直接结束这一轮，
+# 所以剩下的步数不够时，程序会在每次请求前附一句「还剩几步」的提醒，
+# 让模型在最后一步用一条 send_message 交代结果，避免整轮没有任何回应。
+pacing:
+  maxSteps: 20 # 一轮最多几步；也是硬上限
+  wrapUpSteps: 2 # 剩余步数不多于这个值时每一步都提醒收尾；0 关闭
+  progressAt: 8 # 走到第几步时提醒汇报一次进度（一轮最多一次，已发过消息则不提醒）；0 关闭
+
 # 发消息前等多久，模拟打字
 typing:
   baseDelay: 500

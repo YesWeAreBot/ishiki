@@ -249,6 +249,7 @@ async function run(): Promise<void> {
     context: new StandardContextInstance(settings.context.standard ?? {}, { domain } as never),
     wakeup: new StandardWakeupInstance(wake),
     codemode: settings.codemode,
+    pacing: settings.pacing,
     toolsearch: settings.toolsearch,
     debugStream: false,
     logger: logger as never,

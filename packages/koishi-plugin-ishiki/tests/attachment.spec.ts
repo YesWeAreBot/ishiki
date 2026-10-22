@@ -729,6 +729,7 @@ async function scenario(options: {
     // 真实 standard 引擎：run() 投递的 created 事实都是私聊，逐条开轮。
     wakeup: new StandardWakeupInstance(),
     codemode: CodemodeConfig({ enable: options.codemode ?? true, direct: options.direct ?? [], maxToolOutputBytes: options.maxToolOutputBytes } as never),
+    pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0 },
     toolsearch: ToolsearchConfig({ enable: options.search ?? false, resident: options.search ? Object.keys(options.tools ?? {}) : [] } as never),
     debugStream: false,
     logger,

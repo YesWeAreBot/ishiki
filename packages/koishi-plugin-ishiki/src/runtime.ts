@@ -28,7 +28,8 @@ import { createWaitTool, WAIT_TOOL, WaitConditionMachine } from "./builtin-tools
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
-import type { CodemodeConfig, ToolsearchConfig } from "./profile/index.js";
+import { appendReminder, PacingState } from "./pacing.js";
+import type { CodemodeConfig, PacingConfig, ToolsearchConfig } from "./profile/index.js";
 import { captureResources } from "./resource/capture.js";
 import type { ResourceCenter } from "./resource/center.js";
 import { type AttachmentConfig } from "./resource/config.js";
@@ -51,6 +52,7 @@ export interface AgentRuntimeConfig {
   context: ContextEngineInstance;
   wakeup: WakeupEngineInstance;
   codemode: CodemodeConfig;
+  pacing: PacingConfig;
   toolsearch: ToolsearchConfig;
   debugStream: boolean;
   logger: Logger;
@@ -95,6 +97,7 @@ export class AgentRuntime {
   private readonly wakeup: WakeupEngineInstance;
   private readonly extensions: ExtensionInstance[];
   private readonly toolsearch: ToolsearchState;
+  private readonly pacing = new PacingState();
 
   private disposeContext?: () => void;
   private disposeWakeup?: () => void;
@@ -126,6 +129,7 @@ export class AgentRuntime {
       id: this.id,
       model: config.model,
       storage: this.storage,
+      maxSteps: config.pacing.maxSteps,
       plugins: [
         {
           name: "ishiki.core",
@@ -186,11 +190,17 @@ export class AgentRuntime {
             return this.assembleTools();
           },
           prepareStep: (options) => {
-            if (!config.toolsearch.enable) return options;
-            const visible = this.toolsearch.visibleTools();
-            const prior = options.activeTools;
-            const activeTools = prior === undefined ? visible : [...new Set([...prior, ...visible])];
-            return { ...options, activeTools };
+            let prepared = options;
+            if (config.toolsearch.enable) {
+              const visible = this.toolsearch.visibleTools();
+              const prior = options.activeTools;
+              const activeTools = prior === undefined ? visible : [...new Set([...prior, ...visible])];
+              prepared = { ...options, activeTools };
+            }
+            // 提醒只进本次请求：core 用 prepareStep 返回的 messages 组装当前调用，
+            // 不写回事实流，所以模型看到的是剩余步数，历史里不留噪声。
+            const reminder = this.pacing.take(options.turnId, options.stepNumber, config.pacing);
+            return reminder === undefined ? prepared : appendReminder(prepared, reminder);
           },
           onStepFinish: (info) => {
             // Emit at most one catalog per step, after the step's search results
@@ -215,6 +225,9 @@ export class AgentRuntime {
               }
               if (continueRequested) break;
             }
+
+            // 本轮说过话之后就不再催进度：报过进度再被催一次是噪声。
+            this.pacing.observe(info.turnId, [...calls]);
 
             // 说话即收尾：send_message 成功且没有别的动作时关轮。wait 属于同一类收尾
             // 动作（不算「别的动作」），所以和 send_message 一起调用时照样关轮——

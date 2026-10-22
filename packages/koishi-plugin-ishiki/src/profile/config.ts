@@ -78,6 +78,21 @@ export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
     .default(256 * 1024 * 1024),
 });
 
+export interface PacingConfig {
+  /** 一轮允许的步数上限，也是 core 的硬上限。 */
+  maxSteps: number;
+  /** 剩余步数不多于这个值时，每一步都提醒收尾；0 关闭。 */
+  wrapUpSteps: number;
+  /** 走到第几步时提醒汇报一次进度；0 关闭。 */
+  progressAt: number;
+}
+
+export const PacingConfig: Schema<PacingConfig> = Schema.object({
+  maxSteps: Schema.number().min(1).default(20),
+  wrapUpSteps: Schema.number().min(0).default(2),
+  progressAt: Schema.number().min(0).default(8),
+});
+
 export interface ToolsearchConfig {
   enable: boolean;
   /** 额外常驻工具名；未列出的工具（builtin 保底之外）进入延迟池 */
@@ -142,6 +157,7 @@ export interface ProfileSettings {
   wakeup: WakeupConfig;
   toolcall: ToolcallConfig;
   codemode: CodemodeConfig;
+  pacing: PacingConfig;
   toolsearch: ToolsearchConfig;
   typing: TypingConfig;
   attachment: AttachmentConfig;
@@ -157,6 +173,7 @@ export interface ProfileConfig {
   wakeup?: WakeupConfig;
   toolcall?: ToolcallConfig;
   codemode?: CodemodeConfig;
+  pacing?: PacingConfig;
   toolsearch?: ToolsearchConfig;
   typing?: TypingConfig;
   attachment?: AttachmentConfig;
@@ -172,6 +189,7 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   wakeup: WakeupConfig,
   toolcall: Schema.union([ToolcallConfig, Schema.any()]),
   codemode: CodemodeConfig,
+  pacing: PacingConfig,
   toolsearch: ToolsearchConfig,
   typing: TypingConfig,
   attachment: AttachmentConfig,
@@ -208,6 +226,7 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       wakeup: fillEngine(config.wakeup, "standard"),
       toolcall: fillEngine(config.toolcall, "native"),
       codemode: CodemodeConfig((config.codemode ?? {}) as CodemodeConfig),
+      pacing: PacingConfig((config.pacing ?? {}) as PacingConfig),
       toolsearch: ToolsearchConfig((config.toolsearch ?? {}) as ToolsearchConfig),
       typing: TypingConfig((config.typing ?? {}) as TypingConfig),
       attachment: AttachmentConfig((config.attachment ?? {}) as AttachmentConfig),

@@ -484,6 +484,7 @@ describe("AgentRuntime baseline catalog", () => {
       context: {} as AgentRuntimeConfig["context"],
       wakeup: new StandardWakeupInstance(),
       codemode: { enable: false, direct: [], timeoutMs: 1000 },
+      pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0 },
       toolsearch: { enable: true, resident: [], maxResults: 5 },
       debugStream: false,
       logger: {} as Logger,

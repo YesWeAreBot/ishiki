@@ -217,6 +217,7 @@ class Ishiki extends Service<Ishiki.Config> {
             context: contextProvider(settings.context, context),
             wakeup: wakeupProvider(settings.wakeup, context),
             codemode: settings.codemode,
+            pacing: settings.pacing,
             toolsearch: settings.toolsearch,
             debugStream: this.config.debugStream,
             logger: this.logger,

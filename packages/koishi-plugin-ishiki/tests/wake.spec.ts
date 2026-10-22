@@ -223,6 +223,7 @@ async function makeRuntime(options: {
     context: { renderMessages: (messages) => collapse(messages) },
     wakeup: options.wakeup ?? judgeWakeup(() => false),
     codemode: { enable: false, direct: [], timeoutMs: 1000 },
+    pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0 },
     toolsearch: options.toolsearch ?? { enable: false, resident: [], maxResults: 5 },
     debugStream: false,
     logger: logger as never,

@@ -98,7 +98,11 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
           description: "one chat bubble each; send the line you would actually type, not a summary",
         },
         mode: { type: "string", enum: ["element", "raw"], description: "message mode" },
-        continue: { type: "boolean", description: "whether to continue sending messages after a failure" },
+        continue: {
+          type: "boolean",
+          description:
+            "keep going after this call: continue past a failed bubble, and keep this waking open after sending (use it when reporting progress mid-task)",
+        },
         ...(cross
           ? {
               target: {

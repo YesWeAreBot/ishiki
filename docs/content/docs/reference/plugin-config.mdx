@@ -85,6 +85,10 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
       type: 'CodemodeConfig',
       description: '代码模式，见下',
     },
+    pacing: {
+      type: 'PacingConfig',
+      description: '一轮的步数预算与中途提醒，见下',
+    },
     toolsearch: {
       type: 'ToolsearchConfig',
       description: '按需发现工具，见下',
@@ -227,6 +231,32 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
     },
   }}
 />
+
+### pacing
+
+一轮（一次唤醒）的步数预算。`maxSteps` 是硬上限：core 的循环走到这一步数就不再请求模型，这一轮到此结束。为免整轮没有任何回应，runtime 在每次请求前按剩余步数临时附一句提醒，提醒只进当次请求，不写进事实流。
+
+<TypeTable
+  type={{
+    maxSteps: {
+      type: 'number',
+      default: '20',
+      description: '一轮允许的步数上限，硬上限',
+    },
+    wrapUpSteps: {
+      type: 'number',
+      default: '2',
+      description: '剩余步数不多于这个值时，每一步都提醒模型收尾发言；0 关闭',
+    },
+    progressAt: {
+      type: 'number',
+      default: '8',
+      description: '走到第几步时提醒汇报一次进度；本轮已发过消息则不提醒，一轮最多一次；0 关闭',
+    },
+  }}
+/>
+
+收尾提醒报出剩余步数，要求模型停止开新工作、把已完成与未完成的部分折成一条 `send_message`，并在同一步声明 `wait` 以便下次继续；收尾窗口内每步都给。进度提醒要求模型用一条 `send_message` 加 `continue: true` 报一句正在做什么，然后继续同一轮。两者互斥，收尾优先。
 
 ### typing
 

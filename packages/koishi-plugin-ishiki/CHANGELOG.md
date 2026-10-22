@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- Per-profile `pacing` step budget: `maxSteps` caps one waking (default 20), `wrapUpSteps` (default 2) reminds the model before the cap so the last step sends something, and `progressAt` (default 8) asks once for a mid-task progress bubble. Both reminders ride only the affected request and never enter the stored transcript; `0` disables either one.
 - Image lifetimes for attachments: `once` (default; consumed only when the image-bearing response is persisted), `recent` (keep the latest viewed images, pruned in batches), and `retain` (stay eligible while the source record remains in context). `attachment.recentImageCount` (default 3) and `attachment.imagePruneBatchSize` (default 2) control pruning; final codemode `attachments[]` items and direct `read` calls under `imageInput` can override the lifetime.
 - Incremental tool catalogs with `catalogMode`, `fullSnapshotEvery`, and `knownIndex`; incremental updates send only new, changed, or removed tools, with catalog-version recovery after context compaction.
 - Shared output-type aliases in catalogs, so repeated MCP return shapes are declared once.
@@ -31,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ishiki console prototype under `client/`: models, profile, session, runtime, usage, audit, cache, and cost pages driven by in-memory sample data, with `console:build` and `console:dev` scripts
 
 ### Changed
+
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`.
 - Request projection tracks image delivery per item: `once` commits only when the image-bearing response is persisted (the ledger entry is appended with that response), `recent` keeps the latest viewed images and prunes the oldest viewed in batches, `retain` stays eligible while its source record survives, and failed or aborted steps do not consume. Terminal rejections are stated once, and projected message prefixes keep their order, IDs and timestamps until selection or pruning changes.
 - Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order.
@@ -52,8 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The system prompt drops the control-flow section and states pacing after the basic functions; the codemode example uses the underscore tool name
 - System prompt rendering moved to `renderInstructions()`, which plugin activation and the harness both reuse
 - Image delivery is tracked per projected item, so failed or aborted steps do not consume a lifetime and message prefixes keep their order, IDs, and timestamps
+- The system prompt states the step budget and the mid-task progress habit after the basic functions, and codemode instructions note the sandbox has no `fetch` or timers
 
 ### Removed
+
 - `attachment.maxImageRenders`: replaced by image lifetimes (`once`, `recent`, `retain`) and `attachment.recentImageCount` / `attachment.imagePruneBatchSize`. Profiles that still set it fail activation with an explicit migration error.
 - The narrative context and tool-calling engines now ship as the separate `koishi-plugin-ishiki-narrative` plugin; core keeps only the engine families and their base types.
 - The standalone attachment module, central `ResourceUrl` parser, `resolveView` / `opaque` / `locate` handler hooks, and the singular `attachment` result field; no compatibility aliases or data migration.
@@ -62,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `attachment.maxImageRenders`, replaced by image lifetimes; profiles that still set it fail activation with a migration error
 
 ### Fixed
+
 - Assets without a directly downloadable source return `resource_unavailable` with their metadata URL and platform-neutral recovery guidance. HTTP fetch errors retain status or network error codes without exposing source URLs.
 - Codemode instructions keep temporary download URLs in local variables across tool calls within one execution and return only the final operation's result.
 - Declared `msgs` wake windows count committed inbound input again: the wait machine subscribes to `message.appended` and `turn.start` to arm, count, and fire them.
