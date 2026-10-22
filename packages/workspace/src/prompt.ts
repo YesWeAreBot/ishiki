@@ -8,6 +8,7 @@ const NATIVE_INSTRUCTIONS = new Template(
 You run commands directly on the host: a real shell ({{ shellPath }}), not an isolated environment. Host files and commands are visible, and changes are written to disk.
 Current working directory: {{ cwd }}
 There are no virtual mounts: relative paths resolve against the current working directory; write other paths as absolute host paths.
+Keep scratch files in the working directory, for example ./tmp/download.docx. The system temp directory is not a shared location: the shell, a host program you start, and the file tools can each resolve /tmp to a different folder, so a file written by one is invisible to the others. Relative paths are the only spelling every one of them agrees on.
 Network: available through the host network.
 Command timeout: {{ timeoutMs }} ms; a timeout returns exit code 124.
 Executor output safety limit: {{ maxExecutionOutputBytes }} bytes. Inside codemode you receive the raw output; the runtime handles model-visible previews and archives. Return structured results instead of stringifying or slicing them yourself.

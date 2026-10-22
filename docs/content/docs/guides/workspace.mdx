@@ -48,6 +48,8 @@ extends:
 `network`、`javascript`、`python`、`mounts` 都不生效（bot 天然全都有），也没有任何隔离。
 </Callout>
 
+native 模式下 `/tmp` 没有统一定义：shell 自己按 MSYS 的挂载点解析（Git Bash 通常是 `C:/Users/<用户名>/AppData/Local/Temp`），由 shell 启动的宿主程序按宿主环境变量解析，文件工具按 shell 自报的同一个位置解析。提示词因此要求把中间文件放在工作目录下的 `tmp/`，相对路径是这三方都认的写法。
+
 ## sandbox 的世界长什么样
 
 实例内的路径布局固定：

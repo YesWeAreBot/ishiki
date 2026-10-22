@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
@@ -27,6 +28,15 @@ function nativeOptions(home: string, overrides: Partial<WorkspaceConfig> = {}): 
 }
 
 const kind: ShellKind = process.platform === "win32" ? "powershell" : "posix";
+
+/** PATH 里的 git-bash：System32\bash.exe 是 WSL 的入口，没有 usr/bin 同级目录，据此区分。 */
+function gitBash(): string | undefined {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    const candidate = path.join(dir, "bash.exe");
+    if (existsSync(candidate) && existsSync(path.join(dir, "..", "usr", "bin", "bash.exe"))) return candidate;
+  }
+  return undefined;
+}
 
 /** kind 无关的打印 N 字节文本命令。 */
 function emitBytes(n: number): string {
@@ -93,8 +103,6 @@ describe("native shell", () => {
   it("converts git-bash style paths on Windows", async () => {
     if (process.platform !== "win32") return;
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-native-"));
-    const tmpName = `ishiki-msys-${path.basename(home)}.txt`;
-    const tmpFile = path.join(os.tmpdir(), tmpName);
     try {
       const shell = await createNativeShell(resolveLayout(nativeOptions(home)));
       // <tmpdir 盘>:/... 形式的真实路径转回 /x/... 风格再读
@@ -103,13 +111,27 @@ describe("native shell", () => {
       await shell.write(msysPath, "via msys");
       expect(await fs.readFile(path.join(home, "workspace", "marked.txt"), "utf8")).toBe("via msys");
       expect(await shell.read(msysPath)).toBe("via msys");
-
-      // /tmp 与 git-bash 一致指向系统临时目录，落到 D:\tmp 就是错的
-      await shell.write(`/tmp/${tmpName}`, "via tmp");
-      expect(await fs.readFile(tmpFile, "utf8")).toBe("via tmp");
-      expect(await shell.read(`/tmp/${tmpName}`)).toBe("via tmp");
     } finally {
-      await fs.rm(tmpFile, { force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("writes /tmp where the shell itself resolves it", async () => {
+    if (process.platform !== "win32") return;
+    const bash = gitBash();
+    if (bash === undefined) return;
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-native-"));
+    const name = `ishiki-tmp-${path.basename(home)}.txt`;
+    try {
+      const shell = await createNativeShell(resolveLayout(nativeOptions(home, { shell: bash })));
+      // 工具写 /tmp，git-bash 自己读同一个位置：MSYS 的 usertemp 挂载与 os.tmpdir() 不同时这里拿不到内容。
+      await shell.write(`/tmp/${name}`, "via tmp");
+      const seen = await shell.exec(`cat /tmp/${name}`);
+      expect(seen.exitCode).toBe(0);
+      expect(seen.stdout.trim()).toBe("via tmp");
+      expect(await shell.read(`/tmp/${name}`)).toBe("via tmp");
+    } finally {
+      await fs.rm(path.join(os.tmpdir(), name), { force: true });
       await fs.rm(home, { recursive: true, force: true });
     }
   });

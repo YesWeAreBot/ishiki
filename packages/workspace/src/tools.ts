@@ -28,7 +28,8 @@ type ToolPromptData = {
 const PATH_DESCRIPTION = new Template(
   `File path; relative paths resolve against the current working directory.
 {% if gitBashPaths %}
-A Windows absolute path is accepted as D:/dir/file and as the git-bash spelling /d/dir/file; /tmp/... points at the system temp directory.
+A Windows absolute path is accepted as D:/dir/file and as the git-bash spelling /d/dir/file.
+Keep scratch files under the working directory (./tmp/...); /tmp resolves differently in the shell, in a program you start, and in the file tools.
 {% endif %}`,
 );
 
@@ -42,7 +43,8 @@ The sandbox is a JavaScript-interpreted virtual environment, not a host shell: o
 {% endif %}
 Write paths outside the current working directory in full. cd, aliases, functions, and exported variables do not persist between calls.
 {% if gitBashPaths %}
-Command text follows git-bash path syntax: /d/work means D:\\work and /tmp is the system temp directory. A path inside a string that only gets handed to another program (a JavaScript string passed to node, a config value) is not converted, so write D:/... there.
+Command text follows git-bash path syntax: /d/work means D:\\work. A path inside a string that only gets handed to another program (a JavaScript string passed to node, a config value) is not converted, so write D:/... there.
+Write scratch files under the working directory rather than /tmp: the shell, a program it starts, and the file tools may resolve /tmp to different folders.
 {% endif %}
 Returns stdout, stderr, and an exit code. A non-zero exit code means the command itself failed; its output is still valid, so read stderr before deciding to retry.`,
 );
