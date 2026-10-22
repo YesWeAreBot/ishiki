@@ -1,6 +1,6 @@
 {
-  "name": "ishiki",
-  "version": "0.0.1",
+  "name": "ishiki-ai",
+  "version": "0.0.1-rc.0",
   "license": "MIT",
   "files": [
     "lib"
