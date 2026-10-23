@@ -1,4 +1,4 @@
-import { Schema } from "koishi";
+import Schema from "schemastery";
 
 import { ContextEngines } from "../context/index.js";
 import { AttachmentConfig } from "../resource/config.js";
@@ -59,8 +59,8 @@ export interface CodemodeConfig {
 }
 
 export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
-  enable: Schema.boolean().default(true),
-  direct: Schema.array(Schema.string()).default([]),
+  enable: Schema.boolean().description("启用代码模式沙箱").default(true),
+  direct: Schema.array(Schema.string()).description("直接暴露给脚本的宿主工具名称").default([]),
   timeoutMs: Schema.number().min(1).description("单次执行的超时时间（毫秒），脚本里的 @options 可以覆盖").default(30_000),
   memoryLimitBytes: Schema.number()
     .min(1)
@@ -79,9 +79,9 @@ export interface PacingConfig {
 }
 
 export const PacingConfig: Schema<PacingConfig> = Schema.object({
-  maxSteps: Schema.number().min(1).default(20),
-  wrapUpSteps: Schema.number().min(0).default(2),
-  progressAt: Schema.number().min(0).default(8),
+  maxSteps: Schema.number().min(1).description("一轮允许的步数上限").default(20),
+  wrapUpSteps: Schema.number().min(0).description("剩余步数不多于该值时，每一步都提醒收尾；0 表示关闭").default(2),
+  progressAt: Schema.number().min(0).description("走到该步数时提醒汇报进度；0 表示关闭").default(8),
 });
 
 export interface FailoverConfig {
@@ -91,9 +91,9 @@ export interface FailoverConfig {
 }
 
 export const FailoverConfig: Schema<FailoverConfig> = Schema.object({
-  attempts: Schema.number(),
-  backoffMs: Schema.number().default(500),
-  failoverOn: Schema.union(["unavailable", "any"]).default("unavailable"),
+  attempts: Schema.number().min(1).description("最多尝试次数，留空表示只调用一次"),
+  backoffMs: Schema.number().min(0).description("每次重试前的等待时间（毫秒）").default(500),
+  failoverOn: Schema.union(["unavailable", "any"]).description("仅在模型不可用时切换，或对任何错误都切换").default("unavailable"),
 });
 
 export type ProfileMode = "channel" | "cross";
@@ -148,19 +148,19 @@ export interface ProfileConfig {
 }
 
 export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
-  model: Schema.string().required(),
-  instructions: Schema.array(Schema.string()).default(["PERSONA.md"]),
-  mode: Schema.union(["channel", "cross"]).default("channel"),
-  channels: Schema.dict(Schema.array(Schema.string())),
-  extends: Schema.dict(ProfileExtensionConfig),
-  failover: FailoverConfig,
-  context: ContextConfig,
-  wakeup: WakeupConfig,
-  toolcall: Schema.union([ToolcallConfig, Schema.any()]),
-  codemode: CodemodeConfig,
-  pacing: PacingConfig,
-  typing: TypingConfig,
-  attachment: AttachmentConfig,
+  model: Schema.string().required().description("模型或模型组引用，Profile 的输入会发送到这里"),
+  instructions: Schema.array(Schema.string()).description("按顺序读取的指令文件，路径相对于 Profile 目录").default(["PERSONA.md"]),
+  mode: Schema.union(["channel", "cross"]).description("channel 为每个频道创建独立实例，cross 在一个实例里汇合多个频道").default("channel"),
+  channels: Schema.dict(Schema.array(Schema.string())).description("频道认领表，键为 platform:selfId，值为 include/exclude 模式"),
+  extends: Schema.dict(ProfileExtensionConfig).description("扩展配置，键为扩展名称"),
+  failover: FailoverConfig.description("模型失败时的重试与切换策略"),
+  context: ContextConfig.description("上下文引擎"),
+  wakeup: WakeupConfig.description("唤醒引擎"),
+  toolcall: Schema.union([ToolcallConfig, Schema.any()]).description("工具调用引擎"),
+  codemode: CodemodeConfig.description("代码模式沙箱"),
+  pacing: PacingConfig.description("轮次步数节奏"),
+  typing: TypingConfig.description("消息打字模拟"),
+  attachment: AttachmentConfig.description("附件与图片处理"),
 });
 
 /** 解析产物：一个 profile 的全部静态信息，装配期只读它。 */
@@ -285,10 +285,10 @@ export function overlaps(left: ChannelFilter, right: ChannelFilter): boolean {
   );
 }
 
-/** runtime key 转目录名：key 以 profile id 开头，剩下的每段做文件名安全化。 */
+/** runtime key 转目录名：key 以 profile id 开头，剩下的每段做文件名安全化后用下划线连接成单层目录。 */
 export function directoryName(key: string): string {
   return key
     .split("/")
     .map((segment) => segment.replace(/[<>:"/\\|?*]/g, "_"))
-    .join("/");
+    .join("_");
 }

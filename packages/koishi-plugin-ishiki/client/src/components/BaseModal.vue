@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 
+import { useIshikiTheme } from "../lib/theme";
 import Icon from "./Icon.vue";
+
+const { isDark } = useIshikiTheme();
 
 const props = withDefaults(
   defineProps<{
@@ -72,7 +75,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="modal-backdrop" @mousedown.self="closeOnBackdrop && closable && emit('close')">
+    <div v-if="open" class="modal-backdrop ishiki-root" :class="{ 'is-dark': isDark }" @mousedown.self="closeOnBackdrop && closable && emit('close')">
       <div
         ref="dialog"
         class="modal"

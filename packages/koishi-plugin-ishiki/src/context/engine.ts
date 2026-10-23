@@ -1,8 +1,10 @@
 import type { Agent, AgentEntry, AgentMessage } from "@yesimagent/core";
 import { Awaitable, Service, type Context } from "koishi";
+import Schema from "schemastery";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
+import { listServices, registerService } from "../registry.js";
 
 export interface ContextEngines {}
 
@@ -36,8 +38,15 @@ export abstract class ContextEngine<K extends keyof ContextEngines = keyof Conte
     return provider;
   }
 
+  static list(ctx: Context): ContextEngine[] {
+    return listServices<ContextEngine>(ctx, "context");
+  }
+
+  public Schema?: Schema<any>;
+
   public constructor(ctx: Context, name: K) {
     super(ctx, ContextEngine.GetName(String(name)));
+    registerService(ctx, "context", String(name), this);
   }
 
   public abstract [Service.invoke](config: EngineConfig<Pick<ContextEngines, K>>, context: ExtensionContext): ContextEngineInstance;

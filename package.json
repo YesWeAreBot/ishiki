@@ -29,6 +29,7 @@
     "vite": "7.3.6",
     "vitest": "4.1.10",
     "yakumo": "^3.2.1",
+    "yakumo-client": "workspace:*",
     "yakumo-esbuild": "^3.0.2",
     "yakumo-tsc": "^3.0.1",
     "yakumo-vitest": "^1.3.3"

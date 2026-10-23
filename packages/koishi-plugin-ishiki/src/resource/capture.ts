@@ -1,4 +1,4 @@
-import { h } from "koishi";
+import h from "@satorijs/element";
 
 import type { AttachmentItem } from "../types.js";
 import type { ResourceCenter } from "./center.js";

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { AgentPlugin, type AgentCustomEvent, type AgentEvent, type LanguageModelUsage } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import type Logger from "reggol";
 
 export interface DumpFetchOptions {
   readonly logger: Logger;

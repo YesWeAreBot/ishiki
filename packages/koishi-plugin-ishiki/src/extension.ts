@@ -1,7 +1,10 @@
 import { ToolSet } from "@yesimagent/core";
-import { Awaitable, Service, type Context, type Logger, type Schema } from "koishi";
+import { Awaitable, Service, type Context } from "koishi";
+import type Logger from "reggol";
+import type Schema from "schemastery";
 
 import type { InstanceDomain } from "./profile/index.js";
+import { listServices, registerService } from "./registry.js";
 import type { ResourceCenter } from "./resource/center.js";
 import { AgentRuntime } from "./runtime.js";
 
@@ -52,6 +55,11 @@ export abstract class Extension<T = any> extends Service {
 
   public constructor(ctx: Context, name: string) {
     super(ctx, Extension.GetName(name));
+    registerService(ctx, "extension", name, this);
+  }
+
+  static list(ctx: Context): Extension[] {
+    return listServices<Extension>(ctx, "extension");
   }
 
   public abstract [Service.invoke](config: T, context: ExtensionContext): ExtensionInstance | undefined;

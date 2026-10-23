@@ -4,10 +4,10 @@
       build:
         - tsc
         - esbuild
+        - client
       clean:
         - tsc --clean
-    exclude:
-      - docs
-- name: yakumo-esbuild
 - name: yakumo-tsc
+- name: yakumo-esbuild
 - name: yakumo-vitest
+- name: yakumo-client

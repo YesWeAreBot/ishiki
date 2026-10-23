@@ -9,7 +9,7 @@ import {
   type LanguageModelV4StreamResult,
 } from "@yesimagent/core";
 import type { Candidate, Gateway } from "@yesimagent/gateway";
-import type { Logger } from "koishi";
+import type Logger from "reggol";
 
 import type { FailoverConfig } from "./profile/index.js";
 

@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 
+import { useIshikiTheme } from "../lib/theme";
 import Icon from "./Icon.vue";
+
+const { isDark } = useIshikiTheme();
 
 const props = withDefaults(defineProps<{ open: boolean; title: string; desc?: string; width?: string }>(), {});
 const emit = defineEmits<{ close: [] }>();
@@ -39,7 +42,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="drawer-backdrop" @mousedown.self="emit('close')">
+    <div v-if="open" class="drawer-backdrop ishiki-root" :class="{ 'is-dark': isDark }" @mousedown.self="emit('close')">
       <section
         ref="drawer"
         class="drawer"

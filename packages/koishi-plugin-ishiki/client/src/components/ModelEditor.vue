@@ -1,380 +1,407 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 
-import BaseModal from "../components/BaseModal.vue";
-import DrawerShell from "../components/DrawerShell.vue";
-import FormField from "../components/FormField.vue";
-import Icon from "../components/Icon.vue";
-import ToggleSwitch from "../components/ToggleSwitch.vue";
-import type { ApiName, Modality, ModelDecl, ModelType, ProviderConfig, ThinkLevel } from "../data/types";
-import { MODALITIES, THINK_LEVELS } from "../data/types";
-import { API_OPTIONS, MODEL_TYPE_OPTIONS, THINK_LEVEL_LABELS, apiLabel, findDeclaredModel } from "../lib/models";
-import { referencesForModel, saveModel, setDirty, store, toast } from "../store";
+import { findDeclaredModel, MODEL_TYPE_OPTIONS } from "../lib/models";
+import { schemaDefaults } from "../lib/schema";
+import type { GroupView, ModelDecl, ModelDeclView, ModelOption, ModelsSchemas, ProviderInput, ProviderView } from "../types";
+import BaseModal from "./BaseModal.vue";
+import FormField from "./FormField.vue";
+import Icon from "./Icon.vue";
+import SchemaForm from "./SchemaForm.vue";
 
-const props = defineProps<{ open: boolean; reference?: string; presetProvider?: string }>();
-const emit = defineEmits<{ close: [saved?: boolean] }>();
+/** 服务端 SchemaNode 没有从 client/src/types.ts 重新导出，用同一份声明取别名。 */
+type SchemaNode = ModelsSchemas["model"];
 
-const providerChoice = ref("__new");
-const providerId = ref("");
-const api = ref<ApiName>("openai-completions");
-const baseUrl = ref("");
-const apiKey = ref("");
-const showSecret = ref(false);
-const headers = ref<Array<{ key: string; value: string }>>([]);
-const settingsText = ref("{}");
-const model = ref<ModelDecl>({ id: "", type: "language", name: "", input: ["text"], toolCall: true });
-const saving = ref(false);
-const serverError = ref("");
+const NEW_PROVIDER = "__new";
+
+const props = defineProps<{
+  open: boolean;
+  /** 编辑目标：带 reference 表示编辑已有模型，否则新建（providerId 可作为预选供应商）。 */
+  modelValue?: { reference?: string; providerId?: string };
+  providers: readonly ProviderView[];
+  groups: readonly GroupView[];
+  options: readonly ModelOption[];
+  schema: SchemaNode;
+  providerSchema: SchemaNode;
+  busy?: boolean;
+  error?: string;
+}>();
+
+const emit = defineEmits<{
+  save: [payload: { providerId: string; provider: ProviderInput; isNewProvider: boolean; model: ModelDecl; originalModelId?: string }];
+  close: [];
+}>();
+
+const providerSelect = ref(NEW_PROVIDER);
+const newProviderId = ref("");
+const providerDraft = ref<Record<string, unknown>>({});
+const modelDraft = ref<Record<string, unknown>>({});
+const formError = ref("");
 const confirmDiscard = ref(false);
 const baseline = ref("");
-const errors = reactive<Record<string, string>>({});
 
-const isEditing = computed(() => props.reference !== undefined);
-const references = computed(() => (props.reference === undefined ? [] : referencesForModel(props.reference)));
-const locked = computed(() => references.value.length > 0);
-const provider = computed(() => store.providers.find((entry) => entry.id === providerChoice.value));
-const isNewProvider = computed(() => providerChoice.value === "__new");
-const selectedApi = computed(() => API_OPTIONS.find((entry) => entry.value === api.value) ?? API_OPTIONS[0]);
-const selectedType = computed(() => MODEL_TYPE_OPTIONS.find((entry) => entry.value === model.value.type) ?? MODEL_TYPE_OPTIONS[0]);
-const providerModelCount = computed(() => provider.value?.models.length ?? 0);
-const referencePreview = computed(() => `${providerId.value || providerChoice.value || "provider"}:${model.value.id || "model"}`);
+const originalReference = computed(() => props.modelValue?.reference);
+const editing = computed(() => originalReference.value !== undefined);
+const target = computed(() => (originalReference.value === undefined ? undefined : findDeclaredModel(props.providers, originalReference.value)));
+const originalModelId = computed(() => target.value?.model.id);
+const isNewProvider = computed(() => providerSelect.value === NEW_PROVIDER);
+const selectedProvider = computed(() => props.providers.find((entry) => entry.id === providerSelect.value));
+const activeProviderId = computed(() => (isNewProvider.value ? newProviderId.value.trim() : providerSelect.value));
+const providerModelCount = computed(() => selectedProvider.value?.models.length ?? 0);
+const referencingGroups = computed(() => {
+  const reference = originalReference.value;
+  if (reference === undefined) return [];
+  return props.groups.filter((group) => group.models.includes(reference)).map((group) => group.name);
+});
+const modelIdPreview = computed(() => text(modelDraft.value.id) ?? "model");
+const referencePreview = computed(() => `${activeProviderId.value.length > 0 ? activeProviderId.value : "provider"}:${modelIdPreview.value}`);
 
-function snapshot(): string {
-  return JSON.stringify({
-    providerChoice: providerChoice.value,
-    providerId: providerId.value,
-    api: api.value,
-    baseUrl: baseUrl.value,
-    apiKey: apiKey.value,
-    headers: headers.value,
-    settingsText: settingsText.value,
-    model: model.value,
-  });
-}
+/** provider 表单不渲染 models 字段：模型在独立的表单里编辑。 */
+const providerForm = computed(() => {
+  const base = withoutKeys(props.providerSchema, ["models"]);
+  const secret = selectedProvider.value?.apiKey;
+  if (isNewProvider.value || secret === undefined || !secret.configured) return base;
+  return withSecretState(base, secret.reference);
+});
 
+const displayError = computed(() => formError.value || props.error || "");
 const dirty = computed(() => props.open && baseline.value.length > 0 && snapshot() !== baseline.value);
-
-watch(dirty, (value) => setDirty("model-editor", value));
-
-function clearErrors(): void {
-  for (const key of Object.keys(errors)) delete errors[key];
-  serverError.value = "";
-}
-
-function applyProvider(entry: ProviderConfig): void {
-  providerId.value = entry.id;
-  api.value = entry.api;
-  baseUrl.value = entry.baseUrl ?? "";
-  apiKey.value = entry.apiKey;
-  headers.value = Object.entries(entry.headers).map(([key, value]) => ({ key, value }));
-  settingsText.value = JSON.stringify(entry.settings ?? {}, null, 2);
-}
-
-function hydrate(): void {
-  clearErrors();
-  baseline.value = "";
-  showSecret.value = false;
-  if (props.reference !== undefined) {
-    const found = findDeclaredModel(store.providers, props.reference);
-    if (found === undefined) {
-      serverError.value = "模型已不存在。";
-      return;
-    }
-    providerChoice.value = found.provider.id;
-    applyProvider(found.provider);
-    model.value = JSON.parse(JSON.stringify(found.model)) as ModelDecl;
-  } else if (props.presetProvider !== undefined) {
-    const entry = store.providers.find((providerEntry) => providerEntry.id === props.presetProvider);
-    if (entry !== undefined) {
-      providerChoice.value = entry.id;
-      applyProvider(entry);
-    }
-    model.value = { id: "", type: "language", name: "", input: ["text"], toolCall: true };
-  } else {
-    providerChoice.value = "__new";
-    providerId.value = "";
-    api.value = "openai-completions";
-    baseUrl.value = "";
-    apiKey.value = "";
-    headers.value = [];
-    settingsText.value = "{}";
-    model.value = { id: "", type: "language", name: "", input: ["text"], toolCall: true };
-  }
-  nextTick(() => {
-    baseline.value = snapshot();
-    setDirty("model-editor", false);
-  });
-}
 
 watch(
   () => props.open,
   (open) => {
     if (open) hydrate();
     else {
-      setDirty("model-editor", false);
       confirmDiscard.value = false;
+      baseline.value = "";
     }
   },
+  { immediate: true },
 );
 
-watch(providerChoice, (choice) => {
-  if (choice === "__new") {
-    providerId.value = "";
-    api.value = "openai-completions";
-    baseUrl.value = "";
-    apiKey.value = "";
-    headers.value = [];
-    settingsText.value = "{}";
-    return;
+watch(providerSelect, (choice) => {
+  if (choice === NEW_PROVIDER) providerDraft.value = initialRecord(providerForm.value);
+  else {
+    const provider = props.providers.find((entry) => entry.id === choice);
+    providerDraft.value = provider === undefined ? initialRecord(providerForm.value) : providerDraftOf(provider);
   }
-  const entry = store.providers.find((candidate) => candidate.id === choice);
-  if (entry !== undefined) applyProvider(entry);
 });
 
-function updateBodyType(type: ModelType): void {
-  const next: ModelDecl = { id: model.value.id, type, name: model.value.name };
-  if (type === "language") {
-    next.input = model.value.input?.length ? model.value.input : ["text"];
-    next.toolCall = model.value.toolCall ?? true;
-    next.reasoning = model.value.reasoning ?? false;
-    if (model.value.contextWindow !== undefined) next.contextWindow = model.value.contextWindow;
-    if (model.value.maxTokens !== undefined) next.maxTokens = model.value.maxTokens;
-    if (model.value.thinking !== undefined) next.thinking = model.value.thinking;
-  } else if (type === "embedding") {
-    next.input = model.value.input?.length ? model.value.input : ["text"];
-    next.dimensions = model.value.dimensions ?? 1024;
-  }
-  model.value = next;
-}
-
-function toggleModality(modality: Modality): void {
-  const current = model.value.input ?? [];
-  const next = current.includes(modality) ? current.filter((entry) => entry !== modality) : [...current, modality];
-  model.value.input = next;
-}
-
-function toggleThinking(enabled: boolean): void {
-  if (enabled) model.value.thinking = { mode: "effort", efforts: ["low", "medium", "high"] };
-  else delete model.value.thinking;
-}
-
-function toggleEffort(level: ThinkLevel): void {
-  const current = model.value.thinking?.efforts ?? [];
-  const next = current.includes(level) ? current.filter((entry) => entry !== level) : [...current, level];
-  model.value.thinking = { mode: "effort", efforts: next };
-}
-
-function addHeader(): void {
-  headers.value.push({ key: "", value: "" });
-}
-
-function removeHeader(index: number): void {
-  headers.value.splice(index, 1);
-}
-
-function parseSettings(): Record<string, unknown> | undefined {
-  try {
-    const parsed: unknown = JSON.parse(settingsText.value || "{}");
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      errors.settings = "settings 必须是 JSON 对象。";
-      return undefined;
+function hydrate(): void {
+  formError.value = "";
+  confirmDiscard.value = false;
+  baseline.value = "";
+  const reference = originalReference.value;
+  if (reference !== undefined) {
+    const found = findDeclaredModel(props.providers, reference);
+    if (found === undefined) {
+      providerSelect.value = NEW_PROVIDER;
+      newProviderId.value = "";
+      providerDraft.value = {};
+      modelDraft.value = {};
+      formError.value = "该模型已不在当前配置里，请关闭编辑器后重试。";
+      return;
     }
-    return parsed as Record<string, unknown>;
-  } catch (error) {
-    errors.settings = `settings JSON 无法解析：${error instanceof Error ? error.message : String(error)}`;
-    return undefined;
+    providerSelect.value = found.provider.id;
+    newProviderId.value = "";
+    providerDraft.value = providerDraftOf(found.provider);
+    modelDraft.value = modelDraftOf(found.model);
+  } else {
+    const preset = props.modelValue?.providerId;
+    const provider = preset === undefined ? undefined : props.providers.find((entry) => entry.id === preset);
+    providerSelect.value = provider?.id ?? NEW_PROVIDER;
+    newProviderId.value = "";
+    providerDraft.value = provider === undefined ? initialRecord(providerForm.value) : providerDraftOf(provider);
+    modelDraft.value = initialRecord(props.schema);
   }
+  void nextTick(() => {
+    baseline.value = snapshot();
+  });
 }
 
-function validate(): boolean {
-  clearErrors();
-  if (providerChoice.value === "__new") {
-    if (providerId.value.trim().length === 0) errors.providerId = "新建供应商需要 ID。";
-    else if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(providerId.value.trim())) errors.providerId = "只能使用字母、数字、点、下划线与连字符。";
+function snapshot(): string {
+  return JSON.stringify({
+    providerSelect: providerSelect.value,
+    newProviderId: newProviderId.value,
+    provider: providerDraft.value,
+    model: modelDraft.value,
+  });
+}
+
+function providerDraftOf(provider: ProviderView): Record<string, unknown> {
+  const draft = initialRecord(providerForm.value);
+  draft.api = provider.api;
+  draft.baseUrl = provider.baseUrl;
+  draft.apiKey = "";
+  draft.headers = { ...provider.headers };
+  draft.settings = cloneJson(provider.settings);
+  return draft;
+}
+
+function modelDraftOf(model: ModelDeclView): Record<string, unknown> {
+  const values = asRecord(cloneJson(model));
+  delete values.reference;
+  delete values.provider;
+  return { ...initialRecord(props.schema), ...values };
+}
+
+function submit(): void {
+  if (props.busy === true) return;
+  formError.value = "";
+  const result = buildModel();
+  if ("error" in result) {
+    formError.value = result.error;
+    return;
   }
-  if (apiKey.value.trim().length === 0) errors.apiKey = "API key 必填；支持 ${ENV_VAR} 插值。";
-  if (baseUrl.value.trim().length > 0 && !/^https?:\/\//.test(baseUrl.value.trim()) && !/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(baseUrl.value.trim())) {
-    errors.baseUrl = "baseUrl 需要 http(s) URL，或一个完整的环境变量引用。";
+  const providerId = activeProviderId.value;
+  if (isNewProvider.value) {
+    if (providerId.length === 0) {
+      formError.value = "新建供应商需要填写供应商 ID。";
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(providerId)) {
+      formError.value = "供应商 ID 只能包含字母、数字、点、下划线与连字符，并以字母或数字开头。";
+      return;
+    }
+    if (props.providers.some((entry) => entry.id === providerId)) {
+      formError.value = `供应商 ${providerId} 已存在，请改用现有供应商。`;
+      return;
+    }
   }
-  const seen = new Set<string>();
-  for (const [index, header] of headers.value.entries()) {
-    if (header.key.trim().length === 0) {
-      errors[`header.${index}`] = "Header 名称不能为空。";
+  const provider = buildProvider(collectModels(result.model));
+  if (provider === undefined) {
+    formError.value = "请选择供应商的 API 端点类型。";
+    return;
+  }
+  if (isNewProvider.value && (provider.apiKey ?? "").trim().length === 0) {
+    formError.value = "新建供应商必须填写 API 密钥，已有供应商留空表示保留原密钥。";
+    return;
+  }
+  if (!isNewProvider.value) {
+    const secret = selectedProvider.value?.apiKey;
+    if (secret !== undefined && !secret.configured && (provider.apiKey ?? "").trim().length === 0) {
+      formError.value = `供应商 ${providerId} 还没有配置密钥，请在这里填写后再保存。`;
+      return;
+    }
+  }
+  emit("save", { providerId, provider, isNewProvider: isNewProvider.value, model: result.model, originalModelId: originalModelId.value });
+}
+
+function buildModel(): { model: ModelDecl } | { error: string } {
+  const draft = modelDraft.value;
+  const reference = originalReference.value;
+  const id = (text(draft.id) ?? "").trim();
+  const errors: string[] = [];
+  if (id.length === 0) errors.push("模型 ID 必填。");
+  if (id.includes(":")) errors.push("模型 ID 不能包含冒号。");
+  if (reference !== undefined && originalModelId.value !== undefined && id !== originalModelId.value && referencingGroups.value.length > 0) {
+    errors.push(`该模型被 ${referencingGroups.value.join("、")} 引用，模型 ID 不能修改。`);
+  }
+  const type = text(draft.type) ?? "language";
+  if (!MODEL_TYPE_OPTIONS.some((option) => option.value === type)) errors.push(`模型类型 ${type} 不在支持范围内。`);
+  const duplicate =
+    activeProviderId.value.length > 0 &&
+    props.options.some((option) => option.kind === "model" && option.reference === `${activeProviderId.value}:${id}` && option.reference !== reference);
+  if (duplicate) errors.push(`引用 ${activeProviderId.value}:${id} 已存在。`);
+
+  const model: ModelDecl = { id, type };
+  const name = text(draft.name);
+  if (name !== undefined) model.name = name;
+  if (typeof draft.toolCall === "boolean") model.toolCall = draft.toolCall;
+  if (typeof draft.reasoning === "boolean") model.reasoning = draft.reasoning;
+  const modalities = stringList(draft.input);
+  if (modalities !== undefined && modalities.length > 0) model.input = modalities;
+  const thinking = asRecord(draft.thinking);
+  const mode = text(thinking.mode);
+  const efforts = stringList(thinking.efforts) ?? [];
+  if (mode === undefined && efforts.length > 0) errors.push("填写思考档位之前需要先填写思考取向。");
+  if (mode !== undefined) {
+    if (efforts.length === 0) errors.push("思考取向至少需要一个档位。");
+    model.thinking = { mode, efforts };
+  }
+  for (const [key, label] of [
+    ["contextWindow", "上下文窗口"],
+    ["maxTokens", "输出上限"],
+    ["dimensions", "向量维度"],
+  ] as const) {
+    const value = draft[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+      errors.push(`${label}需要大于 0 的整数。`);
       continue;
     }
-    if (seen.has(header.key.trim().toLowerCase())) errors[`header.${index}`] = "Header 名称重复。";
-    seen.add(header.key.trim().toLowerCase());
+    model[key] = value;
   }
-  if (model.value.id.trim().length === 0) errors.modelId = "模型 ID 必填。";
-  else if (model.value.id.includes(":")) errors.modelId = "模型 ID 不能包含冒号。";
-  if (model.value.type === "language") {
-    for (const key of ["contextWindow", "maxTokens"] as const) {
-      const value = model.value[key];
-      if (value !== undefined && value !== null && (value as unknown) !== "" && (!Number.isInteger(value) || value <= 0)) errors[key] = "需要大于 0 的整数。";
-    }
-    if (model.value.thinking !== undefined && model.value.thinking.efforts.length === 0) errors.thinking = "至少选择一个思考档位。";
-    if (model.value.input === undefined || model.value.input.length === 0) errors.input = "至少声明一种输入模态。";
-  }
-  if (model.value.type === "embedding") {
-    const dimensions = model.value.dimensions;
-    if (dimensions !== undefined && dimensions !== null && (dimensions as unknown) !== "" && (!Number.isInteger(dimensions) || dimensions <= 0)) {
-      errors.dimensions = "维度需要大于 0 的整数。";
-    }
-    if (model.value.input === undefined || model.value.input.length === 0) errors.input = "至少声明一种输入模态。";
-  }
-  parseSettings();
-  return Object.keys(errors).length === 0;
+  if (errors.length > 0) return { error: errors.join(" ") };
+  return { model };
 }
 
-async function submit(): Promise<void> {
-  serverError.value = "";
-  if (!validate()) {
-    serverError.value = "还有字段需要修正。";
-    await nextTick();
-    document.querySelector<HTMLElement>(".drawer [aria-invalid='true']")?.focus();
-    return;
-  }
-  const settings = parseSettings();
-  if (settings === undefined) return;
-  const modelDraft = JSON.parse(JSON.stringify(model.value)) as ModelDecl;
-  for (const key of ["contextWindow", "maxTokens", "dimensions"] as const) {
-    if ((modelDraft[key] as unknown) === "" || modelDraft[key] === null) delete modelDraft[key];
-  }
-  saving.value = true;
-  const result = await saveModel({
-    originalReference: props.reference,
-    providerId: providerChoice.value === "__new" ? providerId.value.trim() : providerChoice.value,
-    providerIsNew: providerChoice.value === "__new",
-    api: api.value,
-    baseUrl: baseUrl.value,
-    apiKey: apiKey.value,
-    headers: Object.fromEntries(headers.value.filter((header) => header.key.trim().length > 0).map((header) => [header.key.trim(), header.value])),
-    settings,
-    model: modelDraft,
-  });
-  saving.value = false;
-  if (!result.ok) {
-    serverError.value = result.error ?? "保存失败。";
-    if (serverError.value.includes("apiKey") || serverError.value.includes("environment variable")) errors.apiKey = serverError.value;
-    else if (serverError.value.includes("已经声明") || serverError.value.includes("模型 ID")) errors.modelId = serverError.value;
-    else if (serverError.value.includes("供应商")) errors.providerId = serverError.value;
-    toast("error", "模型保存失败", serverError.value);
-    return;
-  }
-  baseline.value = snapshot();
-  setDirty("model-editor", false);
-  toast("success", "模型已保存", "Profile 与模型组中的模型选择器已同步，无需刷新页面。");
-  emit("close", true);
+function collectModels(model: ModelDecl): ModelDecl[] {
+  const provider = selectedProvider.value;
+  const kept = provider === undefined ? [] : provider.models.filter((entry) => entry.id !== originalModelId.value).map(toDecl);
+  return [...kept, model];
+}
+
+function buildProvider(models: ModelDecl[]): ProviderInput | undefined {
+  const draft = providerDraft.value;
+  const api = text(draft.api);
+  if (api === undefined) return undefined;
+  return {
+    api,
+    baseUrl: text(draft.baseUrl),
+    apiKey: typeof draft.apiKey === "string" ? draft.apiKey : "",
+    headers: recordOfStrings(draft.headers),
+    settings: asRecord(draft.settings),
+    models,
+  };
+}
+
+function toDecl(view: ModelDeclView): ModelDecl {
+  const decl: ModelDecl = { id: view.id, type: view.type };
+  if (view.name !== undefined) decl.name = view.name;
+  if (view.toolCall !== undefined) decl.toolCall = view.toolCall;
+  if (view.reasoning !== undefined) decl.reasoning = view.reasoning;
+  if (view.input !== undefined) decl.input = [...view.input];
+  if (view.thinking !== undefined) decl.thinking = { mode: view.thinking.mode, efforts: [...view.thinking.efforts] };
+  if (view.contextWindow !== undefined) decl.contextWindow = view.contextWindow;
+  if (view.maxTokens !== undefined) decl.maxTokens = view.maxTokens;
+  if (view.dimensions !== undefined) decl.dimensions = view.dimensions;
+  return decl;
 }
 
 function requestClose(): void {
-  if (dirty.value) confirmDiscard.value = true;
-  else emit("close", false);
+  if (props.busy === true) return;
+  if (dirty.value) {
+    confirmDiscard.value = true;
+    return;
+  }
+  emit("close");
 }
 
 function discard(): void {
   confirmDiscard.value = false;
-  setDirty("model-editor", false);
-  emit("close", false);
+  baseline.value = "";
+  emit("close");
 }
 
-onBeforeUnmount(() => setDirty("model-editor", false));
+function initialRecord(schema: SchemaNode): Record<string, unknown> {
+  return asRecord(initialValue(schema));
+}
+
+function initialValue(node: SchemaNode): unknown {
+  return schemaDefaults(node);
+}
+
+/** 复制 schema 并去掉指定字段：被去掉的字段由组件自己渲染。 */
+function withoutKeys(node: SchemaNode, keys: readonly string[]): SchemaNode {
+  const clone = cloneSchema(node);
+  if (clone.dict !== undefined) for (const key of keys) delete clone.dict[key];
+  return clone;
+}
+
+function withSecretState(node: SchemaNode, reference: string | undefined): SchemaNode {
+  const field = node.dict?.apiKey;
+  if (field === undefined) return node;
+  field.meta = {
+    ...field.meta,
+    configured: true,
+    description:
+      reference === undefined
+        ? "该供应商已保存密钥；留空表示保留原密钥，填写新值会覆盖。支持 ${环境变量} 引用。"
+        : `密钥来自 ${reference}；留空表示保留原密钥，填写新值会覆盖。支持 \${环境变量} 引用。`,
+  };
+  return node;
+}
+
+function cloneSchema(node: SchemaNode): SchemaNode {
+  return {
+    type: node.type,
+    meta: { ...node.meta },
+    dict: node.dict === undefined ? undefined : Object.fromEntries(Object.entries(node.dict).map(([key, child]) => [key, cloneSchema(child)])),
+    list: node.list?.map((branch) => cloneSchema(branch)),
+    inner: node.inner === undefined ? undefined : cloneSchema(node.inner),
+    value: node.value,
+  };
+}
+
+/** 配置内容都是 JSON 数据；用 JSON 往返复制可以避开响应式代理无法结构化克隆的问题。 */
+function cloneJson(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value)) as unknown;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function stringList(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0) : undefined;
+}
+
+function recordOfStrings(value: unknown): Record<string, string> {
+  const source = asRecord(value);
+  const result: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(source)) if (typeof entry === "string") result[key] = entry;
+  return result;
+}
 </script>
 
 <template>
-  <DrawerShell
+  <BaseModal
     :open="open"
-    :title="isEditing ? '编辑模型' : '新增模型'"
-    :desc="isEditing ? '修改声明会重建 gateway 模型目录；被引用的模型不能改 ID 或类型。' : '模型声明写入示例 providers；保存后所有模型选择器会同步更新。'"
-    width="min(780px, 100vw)"
+    :title="editing ? '编辑模型' : '新增模型'"
+    desc="模型声明写入供应商配置；保存后网关目录重建，Profile 的 model 选择器自动同步。"
+    width="min(760px, 100%)"
     @close="requestClose"
   >
-    <div v-if="serverError" class="error-panel" role="alert">
+    <div v-if="displayError.length > 0" class="error-panel" role="alert">
       <Icon name="alert" :size="16" />
       <div>
         <strong>无法保存</strong>
-        <div>{{ serverError }}</div>
+        <div>{{ displayError }}</div>
       </div>
     </div>
 
-    <section class="form-section" :class="{ 'form-section': serverError }">
+    <section class="form-section">
       <div class="form-section-head">
         <div>
           <div class="form-section-title">供应商与端点</div>
-          <div class="form-section-desc">这些字段属于 provider，会影响该供应商下的全部模型。</div>
+          <div class="form-section-desc">这些字段属于 provider，修改会作用于该供应商下的全部模型。</div>
         </div>
       </div>
 
       <div class="form-grid">
-        <FormField label="归属供应商" required :hint="isEditing ? '编辑模型时不能切换到其他供应商。' : '可复用现有供应商，或新建一个。'">
-          <select v-model="providerChoice" class="select" :disabled="isEditing">
-            <option value="__new">新建供应商</option>
-            <option v-for="entry in store.providers" :key="entry.id" :value="entry.id">{{ entry.id }} · {{ apiLabel(entry.api) }}</option>
+        <FormField label="归属供应商" required :hint="editing ? '编辑已有模型时不能切换供应商。' : '可以复用现有供应商，或新建一个。'">
+          <select v-model="providerSelect" class="select" :disabled="editing">
+            <option :value="NEW_PROVIDER">新建供应商</option>
+            <option v-for="entry in providers" :key="entry.id" :value="entry.id">{{ entry.id }} · {{ entry.api }}</option>
           </select>
         </FormField>
 
-        <FormField v-if="isNewProvider" label="供应商 ID" required :error="errors.providerId" hint="例如 deepseek、relay、local。">
-          <input v-model="providerId" class="input input-mono" :aria-invalid="errors.providerId !== undefined" placeholder="relay" />
+        <FormField v-if="isNewProvider" label="供应商 ID" required hint="例如 deepseek、relay、local；保存后不可改名。">
+          <input v-model="newProviderId" class="input input-mono" placeholder="relay" autocomplete="off" />
         </FormField>
-        <FormField v-else label="模型引用" hint="引用格式 provider:model[:thinkLevel]">
+        <FormField v-else label="模型引用" hint="Profile 里填写 provider:model。">
           <input :value="referencePreview" class="input input-mono" readonly />
         </FormField>
-
-        <FormField label="API 端点类型" required :hint="selectedApi.hint">
-          <select v-model="api" class="select">
-            <option v-for="entry in API_OPTIONS" :key="entry.value" :value="entry.value">
-              {{ entry.label }}
-            </option>
-          </select>
-        </FormField>
-
-        <FormField label="Base URL" :error="errors.baseUrl" hint="留空时使用该方言的默认端点；支持 http(s) 地址。">
-          <input v-model="baseUrl" class="input input-mono" :aria-invalid="errors.baseUrl !== undefined" placeholder="https://api.example.com/v1" />
-        </FormField>
-
-        <FormField label="API Key" required :error="errors.apiKey" hint="支持 ${ENV_VAR}；未设置的环境变量会让 gateway 重建失败。">
-          <div class="row">
-            <input
-              v-model="apiKey"
-              class="input input-mono flex-1"
-              :type="showSecret ? 'text' : 'password'"
-              :aria-invalid="errors.apiKey !== undefined"
-              placeholder="${DEEPSEEK_KEY}"
-            />
-            <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="showSecret ? '隐藏密钥' : '显示密钥'" @click="showSecret = !showSecret">
-              <Icon :name="showSecret ? 'eye' : 'lock'" :size="15" />
-            </button>
-          </div>
-        </FormField>
-
-        <FormField label="settings" class="span-2" :error="errors.settings" :hint="selectedApi.settingsHint">
-          <textarea v-model="settingsText" class="textarea input-mono" :aria-invalid="errors.settings !== undefined" spellcheck="false" rows="3"></textarea>
-        </FormField>
-
-        <div class="span-2">
-          <div class="row" style="margin-bottom: 7px">
-            <span class="field-label">附加 Headers</span>
-            <button type="button" class="btn btn-ghost btn-sm" @click="addHeader"><Icon name="plus" :size="13" /> 添加</button>
-          </div>
-          <div v-if="headers.length === 0" class="field-hint">没有附加请求头。值同样支持 ${ENV_VAR} 插值。</div>
-          <div v-else class="kv-list">
-            <div v-for="(header, index) in headers" :key="index">
-              <div class="kv-row">
-                <input v-model="header.key" class="input" :aria-label="`Header ${index + 1} 名称`" placeholder="Header 名称" />
-                <input v-model="header.value" class="input" :aria-label="`Header ${index + 1} 值`" placeholder="值，支持 ${ENV_VAR}" />
-                <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="`移除 Header ${index + 1}`" @click="removeHeader(index)">
-                  <Icon name="trash" :size="14" />
-                </button>
-              </div>
-              <div v-if="errors[`header.${index}`]" class="field-error">{{ errors[`header.${index}`] }}</div>
-            </div>
-          </div>
-        </div>
       </div>
 
-      <div v-if="isEditing && providerModelCount > 1" class="notice" style="margin-top: 12px">
+      <div v-if="!isNewProvider && providerModelCount > 1" class="notice" style="margin-top: 12px">
         <Icon name="info" :size="15" />
-        <span>该供应商还有 {{ providerModelCount - 1 }} 个模型。修改端点、密钥或 headers 会同时影响它们。</span>
+        <span>供应商 {{ providerSelect }} 下还有 {{ providerModelCount - 1 }} 个模型；这里保存的端点与密钥会同时作用于它们。</span>
+      </div>
+
+      <div style="margin-top: 12px">
+        <SchemaForm :schema="providerForm" :model-value="providerDraft" :disabled="busy === true" @update:model-value="providerDraft = asRecord($event)" />
+      </div>
+
+      <div v-if="editing && referencingGroups.length > 0" class="notice notice-warning" style="margin-top: 12px">
+        <Icon name="warningCircle" :size="15" />
+        <span>该模型被 {{ referencingGroups.join("、") }} 引用，模型 ID 已锁定；其余字段可以调整。</span>
       </div>
     </section>
 
@@ -382,121 +409,24 @@ onBeforeUnmount(() => setDirty("model-editor", false));
       <div class="form-section-head">
         <div>
           <div class="form-section-title">模型声明</div>
-          <div class="form-section-desc">{{ selectedType.description }}</div>
+          <div class="form-section-desc">引用地址为 {{ referencePreview }}。</div>
         </div>
       </div>
-
-      <div v-if="locked" class="notice notice-warning" style="margin-bottom: 13px">
-        <Icon name="warningCircle" :size="15" />
-        <span> 该模型被 {{ references.join("、") }} 引用，因此模型 ID 与类型不可更改。需要改名时先调整引用。 </span>
-      </div>
-
-      <div class="form-grid">
-        <FormField label="模型 ID" required :error="errors.modelId" hint="对应接口的 model 参数；可以包含 provider 特有的斜杠或点。">
-          <input v-model="model.id" class="input input-mono" :aria-invalid="errors.modelId !== undefined" :disabled="locked" placeholder="deepseek-chat" />
-        </FormField>
-
-        <FormField label="模型类型" required :hint="locked ? '被引用时锁定。' : '类型决定下方展示的声明字段。'">
-          <select :value="model.type" class="select" :disabled="locked" @change="updateBodyType(($event.target as HTMLSelectElement).value as ModelType)">
-            <option v-for="entry in MODEL_TYPE_OPTIONS" :key="entry.value" :value="entry.value">{{ entry.label }}</option>
-          </select>
-        </FormField>
-
-        <FormField label="显示名称" hint="留空时界面显示模型 ID。">
-          <input v-model="model.name" class="input" placeholder="DeepSeek Chat" />
-        </FormField>
-
-        <FormField v-if="model.type === 'embedding'" label="向量维度" :error="errors.dimensions" hint="仅 embedding 模型使用。">
-          <input v-model.number="model.dimensions" type="number" min="1" class="input" :aria-invalid="errors.dimensions !== undefined" placeholder="1024" />
-        </FormField>
-      </div>
-
-      <div v-if="model.type === 'language' || model.type === 'embedding'" style="margin-top: 14px">
-        <div class="field-label">输入模态 <span class="required" aria-hidden="true">*</span></div>
-        <div class="field-hint" style="margin-bottom: 6px">imageInput 开启的 Profile 要求候选模型声明 image。</div>
-        <div class="chip-set">
-          <button
-            v-for="modality in MODALITIES"
-            :key="modality"
-            type="button"
-            class="chip-toggle"
-            :aria-pressed="model.input?.includes(modality) ?? false"
-            @click="toggleModality(modality)"
-          >
-            {{ modality }}
-          </button>
-        </div>
-        <div v-if="errors.input" class="field-error">{{ errors.input }}</div>
-      </div>
-
-      <div v-if="model.type === 'language'" class="form-grid" style="margin-top: 14px">
-        <div class="field span-2">
-          <span class="field-label">能力声明</span>
-          <div class="row row-wrap">
-            <ToggleSwitch :checked="model.toolCall ?? false" label="工具调用 toolCall" @update:checked="model.toolCall = $event" />
-            <ToggleSwitch :checked="model.reasoning ?? false" label="推理输出 reasoning" @update:checked="model.reasoning = $event" />
-            <ToggleSwitch :checked="model.thinking !== undefined" label="思考档位 thinking" @update:checked="toggleThinking" />
-          </div>
-        </div>
-
-        <FormField label="上下文窗口" :error="errors.contextWindow" hint="token 数；用于展示，不限制实际请求。">
-          <input
-            v-model.number="model.contextWindow"
-            type="number"
-            min="1"
-            class="input"
-            :aria-invalid="errors.contextWindow !== undefined"
-            placeholder="128000"
-          />
-        </FormField>
-        <FormField label="最大输出" :error="errors.maxTokens" hint="token 数。">
-          <input v-model.number="model.maxTokens" type="number" min="1" class="input" :aria-invalid="errors.maxTokens !== undefined" placeholder="8192" />
-        </FormField>
-
-        <div v-if="model.thinking !== undefined" class="field span-2">
-          <span class="field-label">可用的思考档位</span>
-          <div class="field-hint" style="margin-bottom: 6px">Profile 引用末尾的 :level 必须落在这里声明的档位中，否则 gateway 构建失败。</div>
-          <div class="chip-set">
-            <button
-              v-for="level in THINK_LEVELS"
-              :key="level"
-              type="button"
-              class="chip-toggle"
-              :aria-pressed="model.thinking.efforts.includes(level)"
-              @click="toggleEffort(level)"
-            >
-              {{ THINK_LEVEL_LABELS[level] }}
-            </button>
-          </div>
-          <div v-if="errors.thinking" class="field-error">{{ errors.thinking }}</div>
-        </div>
-
-        <div v-if="api === 'typesafe-ai'" class="notice notice-warning span-2">
-          <Icon name="warningCircle" :size="15" />
-          <span>TypeSafe System One 是判定模型端点。语言模型通常不放在这里；Ishiki 对话会按语言模型能力校验。</span>
-        </div>
-      </div>
-
-      <div v-if="model.type !== 'language' && model.type !== 'embedding'" class="notice" style="margin-top: 14px">
-        <Icon name="info" :size="15" />
-        <span>当前 gateway 的 {{ selectedType.label }} 声明只有 id 与显示名。Ishiki 的对话链路只使用语言模型。</span>
-      </div>
+      <SchemaForm :schema="schema" :model-value="modelDraft" :disabled="busy === true" @update:model-value="modelDraft = asRecord($event)" />
     </section>
 
     <template #footer>
-      <span class="dirty-note">
-        <template v-if="dirty"><span class="badge badge-warning">未保存</span> 修改只存在当前表单。</template>
-        <template v-else
-          >引用预览：<span class="mono">{{ referencePreview }}</span></template
-        >
+      <span class="dirty-note" style="margin-right: auto">
+        <template v-if="dirty"><span class="badge badge-warning">未保存</span> {{ referencePreview }}</template>
+        <template v-else>{{ editing ? `编辑 ${originalReference}` : "新模型" }}</template>
       </span>
-      <button type="button" class="btn" @click="requestClose">取消</button>
-      <button type="button" class="btn btn-primary" :disabled="saving" @click="submit">
-        <span v-if="saving" class="spinner" aria-hidden="true"></span>
-        {{ saving ? "保存中…" : "保存模型" }}
+      <button type="button" class="btn" :disabled="busy === true" @click="requestClose">取消</button>
+      <button type="button" class="btn btn-primary" :disabled="busy === true" @click="submit">
+        <span v-if="busy === true" class="spinner" aria-hidden="true"></span>
+        {{ busy === true ? "保存中…" : "保存模型" }}
       </button>
     </template>
-  </DrawerShell>
+  </BaseModal>
 
   <BaseModal :open="confirmDiscard" title="放弃未保存的修改？" desc="表单内容会丢失，已保存的模型配置不受影响。" @close="confirmDiscard = false">
     <template #footer>

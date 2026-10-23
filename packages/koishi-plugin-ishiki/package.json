@@ -4,6 +4,7 @@
   "license": "MIT",
   "files": [
     "lib",
+    "dist",
     "resources"
   ],
   "type": "module",
@@ -23,24 +24,47 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "console:build": "vite build --config client/vite.config.ts",
-    "console:dev": "vite --config client/vite.config.ts"
+    "console:build": "cd ../.. && yakumo client koishi-plugin-ishiki"
   },
   "dependencies": {
     "@ai-sdk-tool/parser": "5.1.6",
     "@earendil-works/pi-codemode": "1.4.0",
     "@huggingface/jinja": "^0.5.10",
+    "@koishijs/console": "^5.30.11",
+    "@satorijs/element": "^3.2.0",
     "@yesimagent/core": "0.0.9",
     "@yesimagent/gateway": "0.0.9",
+    "reggol": "^1.7.1",
+    "schemastery": "^3.18.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@koishijs/client": "^5.30.11",
+    "@koishijs/plugin-console": "^5.30.11",
     "@koishijs/plugin-database-memory": "^3.7.0",
-    "@vitejs/plugin-vue": "^6.0.10",
+    "@koishijs/plugin-server": "^3.2.9",
     "koishi": "^4.18.11",
-    "vue": "^3.5.44"
+    "vue": "^3.5.44",
+    "vue-router": "^4.6.4",
+    "vue-tsc": "^3.3.13"
   },
   "peerDependencies": {
     "koishi": "^4.18.11"
+  },
+  "yakumo": {
+    "client": {
+      "build": {
+        "rollupOptions": {
+          "output": {
+            "paths": {
+              "@koishijs/client": "../client.js",
+              "vue": "../vue.js",
+              "vue-router": "../vue-router.js",
+              "@vueuse/core": "../vueuse.js"
+            }
+          }
+        }
+      }
+    }
   }
 }

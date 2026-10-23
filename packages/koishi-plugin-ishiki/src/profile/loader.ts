@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import type { Logger } from "koishi";
+import type Logger from "reggol";
 import { parse } from "yaml";
 
 import { overlaps, resolveProfile, type Profile } from "./config.js";

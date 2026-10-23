@@ -1,5 +1,5 @@
 import { jsonSchema, tool, type Agent, type Tool } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import type Logger from "reggol";
 
 /** 解析后的声明：condition 是本次声明的窗口，未声明则为 undefined。 */
 export type WaitOutcome = { condition: { msgs?: number; secs?: number } } | undefined;

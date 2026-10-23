@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import * as fs from "node:fs/promises";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { ResourceError } from "./errors.js";

@@ -1,8 +1,10 @@
 import type { Agent } from "@yesimagent/core";
 import { h, Service, type Context } from "koishi";
+import Schema from "schemastery";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
+import { listServices, registerService } from "../registry.js";
 
 export interface WakeupEngines {}
 
@@ -41,8 +43,15 @@ export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupE
     return provider;
   }
 
+  static list(ctx: Context): WakeupEngine[] {
+    return listServices<WakeupEngine>(ctx, "wakeup");
+  }
+
+  public Schema?: Schema<any>;
+
   public constructor(ctx: Context, name: K) {
     super(ctx, WakeupEngine.GetName(String(name)));
+    registerService(ctx, "wakeup", String(name), this);
   }
 
   public abstract [Service.invoke](config: EngineConfig<Pick<WakeupEngines, K>>, context: ExtensionContext): WakeupEngineInstance;

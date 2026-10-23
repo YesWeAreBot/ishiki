@@ -1,29 +1,129 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-import type { LogEntry } from "../data/types";
 import { formatClock, formatDateTime, formatNumber } from "../lib/format";
+import type { LogEntry } from "../types";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{ entry: LogEntry }>();
 
+type Fields = Record<string, unknown>;
+
 const textOpen = ref(false);
 
-const message = computed(() => (props.entry.type === "message" ? (props.entry.data as Record<string, any>) : undefined));
-const role = computed(() => String(message.value?.role ?? ""));
-const customType = computed(() => (role.value === "custom" ? String(message.value?.type ?? "") : ""));
-const eventType = computed(() => (props.entry.type === "event" ? String(props.entry.data.type ?? "") : ""));
+function fields(value: unknown): Fields | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return value as Fields;
+}
+
+function text(source: Fields | undefined, key: string): string | undefined {
+  const value = source?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function number(source: Fields | undefined, key: string): number | undefined {
+  const value = source?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function list(source: Fields | undefined, key: string): unknown[] {
+  const value = source?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function identifier(source: Fields | undefined, key: string): string {
+  const value = source?.[key];
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  return "";
+}
+
+function json(value: unknown): string {
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return String(value);
+  }
+}
+
+const entryType = computed(() => String(props.entry.type));
+const data = computed<Fields>(() => fields(props.entry.data) ?? {});
+const isMessage = computed(() => entryType.value === "message");
+const role = computed(() => (isMessage.value ? (text(data.value, "role") ?? "") : ""));
+const customType = computed(() => (role.value === "custom" ? (text(data.value, "type") ?? "") : ""));
+const eventType = computed(() => (entryType.value === "event" ? (text(data.value, "type") ?? "") : ""));
+
+const created = computed(() => (customType.value === "ishiki.message.created" ? fields(data.value.data) : undefined));
+const deleted = computed(() => (customType.value === "ishiki.message.deleted" ? fields(data.value.data) : undefined));
+const attachment = computed(() => (customType.value === "ishiki.attachment" ? fields(data.value.data) : undefined));
+const compact = computed(() => (entryType.value === "ishiki.compact" ? data.value : undefined));
+const projection = computed(() => {
+  if (entryType.value === "message" || entryType.value === "event" || entryType.value === "state") return undefined;
+  if (compact.value !== undefined) return undefined;
+  return data.value;
+});
+
+const createdUser = computed(() => fields(created.value?.user));
+const createdUserName = computed(() => text(createdUser.value, "name") ?? text(createdUser.value, "id") ?? "未知用户");
+const createdMessageId = computed(() => identifier(created.value, "messageId"));
+const createdContent = computed(() => text(created.value, "content") ?? "");
+const createdDirect = computed(() => created.value?.isDirect === true);
+const createdTarget = computed(() => {
+  const platform = text(created.value, "platform");
+  if (platform === undefined) return "";
+  return `${platform}:${text(created.value, "selfId") ?? "?"} / ${text(created.value, "channelId") ?? "?"}`;
+});
+const quote = computed(() => fields(created.value?.quote));
+const quoteId = computed(() => identifier(quote.value, "id"));
+const quoteContent = computed(() => text(quote.value, "content") ?? "");
+
+const deletedSummary = computed(() => {
+  const source = deleted.value;
+  if (source === undefined) return "";
+  const userId = text(source, "userId") ?? "未知用户";
+  const operatorId = text(source, "operatorId");
+  const messageId = identifier(source, "messageId") || "?";
+  if (operatorId !== undefined && operatorId !== userId) return `${userId} 的消息被 ${operatorId} 撤回 #${messageId}`;
+  return `${userId} 撤回了一条消息 #${messageId}`;
+});
+
+const attachmentItems = computed(() =>
+  list(attachment.value, "items")
+    .map((item) => fields(item))
+    .filter((item): item is Fields => item !== undefined)
+    .map((item) => ({
+      url: text(item, "url") ?? "",
+      mediaType: text(item, "mediaType") ?? "unknown",
+      name: text(item, "filename") ?? text(item, "url") ?? "",
+      lifetime: text(item, "lifetime") ?? "once",
+    })),
+);
+
+const compactSummary = computed(() => text(compact.value, "summary") ?? "");
+const compactLast = computed(() => text(compact.value, "lastEntryId") ?? "");
+const projectionText = computed(() => text(projection.value, "script") ?? text(projection.value, "text") ?? "");
+const projectionKind = computed(() => text(projection.value, "kind") ?? "");
+const projectionOrigin = computed(() => text(projection.value, "originMessageId") ?? "");
 
 const kind = computed(() => {
-  if (props.entry.type === "event") return "event";
-  if (props.entry.type === "state") return "state";
-  if (props.entry.type === "ishiki.compact") return "compact";
-  if (props.entry.type === "ishiki.narrative") return "narrative";
-  if (role.value === "assistant") return "assistant";
-  if (role.value === "tool") return "tool";
-  if (role.value === "custom") return customType.value === "ishiki.message.created" ? "user" : "custom";
-  if (role.value === "user" || role.value === "system") return role.value;
-  return "other";
+  if (entryType.value === "event") return "event";
+  if (entryType.value === "state") return "state";
+  if (compact.value !== undefined) return "compact";
+  if (isMessage.value) {
+    if (role.value === "assistant") return "assistant";
+    if (role.value === "tool") return "tool";
+    if (role.value === "user" || role.value === "system") return role.value;
+    if (role.value === "custom") {
+      if (customType.value === "ishiki.message.created") return "created";
+      if (customType.value === "ishiki.message.deleted") return "deleted";
+      if (customType.value === "ishiki.attachment") return "attachment";
+      return "custom";
+    }
+    return "unknown";
+  }
+  if (projection.value !== undefined) return "projection";
+  return "unknown";
 });
 
 const label = computed(() => {
@@ -32,23 +132,27 @@ const label = computed(() => {
       return "助手";
     case "tool":
       return "工具结果";
+    case "created":
     case "user":
       return "频道消息";
+    case "deleted":
+      return "消息撤回";
+    case "attachment":
+      return "附件";
+    case "custom":
+      return `自定义消息 · ${customType.value || "unknown"}`;
     case "event":
       return eventLabel(eventType.value);
     case "state":
       return "Agent 状态";
     case "compact":
       return "上下文压缩";
-    case "narrative":
+    case "projection":
       return "叙事投影";
-    case "custom":
-      if (customType.value === "ishiki.tools.catalog") return "工具目录";
-      if (customType.value === "ishiki.attachment") return "附件";
-      if (customType.value === "ishiki.message.deleted") return "消息撤回";
-      return `自定义消息 · ${customType.value || "unknown"}`;
+    case "system":
+      return "系统消息";
     default:
-      return role.value || props.entry.type;
+      return role.value || entryType.value;
   }
 });
 
@@ -58,15 +162,20 @@ const marker = computed(() => {
       return "pulse";
     case "tool":
       return "terminal";
+    case "created":
     case "user":
       return "sessions";
+    case "deleted":
+      return "trash";
+    case "attachment":
+      return "file";
     case "event":
       return eventType.value === "turn.failed" ? "alert" : "clock";
     case "state":
       return "memory";
     case "compact":
       return "minimize";
-    case "narrative":
+    case "projection":
       return "file";
     default:
       return "tag";
@@ -74,89 +183,127 @@ const marker = computed(() => {
 });
 
 const markerTone = computed(() => {
-  if (eventType.value === "turn.failed" || eventType.value === "turn.aborted") return { background: "var(--danger-soft)", color: "var(--danger-ink)" };
+  if (eventType.value === "turn.failed" || eventType.value === "turn.aborted") {
+    return { background: "var(--danger-soft)", color: "var(--danger-ink)" };
+  }
   if (kind.value === "assistant") return { background: "var(--accent-soft)", color: "var(--accent-ink)" };
   if (kind.value === "tool") return { background: "var(--info-soft)", color: "var(--info-ink)" };
+  if (kind.value === "deleted") return { background: "var(--danger-soft)", color: "var(--danger-ink)" };
   return undefined;
 });
 
-const text = computed(() => {
-  const value = message.value?.content;
+const badgeClass = computed(() => {
+  if (kind.value === "assistant") return "badge-success";
+  if (kind.value === "created" || kind.value === "user") return "badge-info";
+  if (kind.value === "deleted" || eventType.value === "turn.failed") return "badge-danger";
+  return "badge-neutral";
+});
+
+const contentParts = computed(() => (isMessage.value ? list(data.value, "content") : []));
+const bodyText = computed(() => {
+  const value = data.value.content;
+  if (!isMessage.value) return "";
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
     return value
-      .map((part: any) => {
+      .map((part) => {
         if (typeof part === "string") return part;
-        if (part?.type === "text") return String(part.text ?? "");
-        return "";
+        const item = fields(part);
+        return text(item, "type") === "text" ? (text(item, "text") ?? "") : "";
       })
       .filter((part) => part.length > 0)
       .join("\n\n");
   }
   if (value === undefined) return "";
-  return JSON.stringify(value, null, 2);
-});
-
-const long = computed(() => {
-  const data = props.entry.data as Record<string, any>;
-  const source =
-    data?.role === "custom" && data.type === "ishiki.message.created"
-      ? String(data.data?.content ?? "")
-      : props.entry.type === "ishiki.compact"
-        ? String(data.summary ?? "")
-        : text.value;
-  return source.length > 520 || source.split("\n").length > 9;
+  return json(value);
 });
 
 const reasoning = computed(() =>
-  Array.isArray(message.value?.content)
-    ? message.value.content.filter((part: any) => part?.type === "reasoning").map((part: any) => String(part.text ?? ""))
-    : [],
+  contentParts.value
+    .map((part) => fields(part))
+    .filter((part): part is Fields => part !== undefined && text(part, "type") === "reasoning")
+    .map((part) => text(part, "text") ?? ""),
 );
 
 const toolCalls = computed(() =>
-  Array.isArray(message.value?.content)
-    ? message.value.content
-        .filter((part: any) => part?.type === "tool-call")
-        .map((part: any) => ({
-          id: String(part.toolCallId ?? ""),
-          name: String(part.toolName ?? ""),
-          input: part.input,
-        }))
-    : [],
+  contentParts.value
+    .map((part) => fields(part))
+    .filter((part): part is Fields => part !== undefined && text(part, "type") === "tool-call")
+    .map((part) => ({
+      id: text(part, "toolCallId") ?? "",
+      name: text(part, "toolName") ?? "tool",
+      input: part.input,
+    })),
 );
 
 const toolResults = computed(() =>
-  Array.isArray(message.value?.content)
-    ? message.value.content
-        .filter((part: any) => part?.type === "tool-result")
-        .map((part: any) => ({
-          id: String(part.toolCallId ?? ""),
-          name: String(part.toolName ?? ""),
-          output: part.output,
-          error: part.output?.type === "error-text" || part.output?.type === "error-json",
-        }))
-    : [],
+  contentParts.value
+    .map((part) => fields(part))
+    .filter((part): part is Fields => part !== undefined && text(part, "type") === "tool-result")
+    .map((part) => ({
+      id: text(part, "toolCallId") ?? "",
+      name: text(part, "toolName") ?? "tool",
+      output: part.output,
+      error: isErrorOutput(part.output),
+    })),
 );
 
-const usage = computed(() => message.value?.usage as Record<string, any> | undefined);
-const created = computed(() => (customType.value === "ishiki.message.created" ? (message.value?.data as Record<string, any>) : undefined));
-const deleted = computed(() => (customType.value === "ishiki.message.deleted" ? (message.value?.data as Record<string, any>) : undefined));
-const attachment = computed(() => (customType.value === "ishiki.attachment" ? (message.value?.data as Record<string, any>) : undefined));
-const catalog = computed(() => (customType.value === "ishiki.tools.catalog" ? (message.value?.data as Record<string, any>) : undefined));
-const compact = computed(() => (props.entry.type === "ishiki.compact" ? (props.entry.data as Record<string, any>) : undefined));
-const narrative = computed(() => (props.entry.type === "ishiki.narrative" ? (props.entry.data as Record<string, any>) : undefined));
+const usage = computed(() => fields(data.value.usage));
+const usageItems = computed(() => {
+  const source = usage.value;
+  if (source === undefined) return [] as Array<{ label: string; value: string }>;
+  const inputDetails = fields(source.inputTokenDetails);
+  const outputDetails = fields(source.outputTokenDetails);
+  const result: Array<{ label: string; value: string }> = [];
+  const push = (label: string, value: number | undefined): void => {
+    if (value !== undefined) result.push({ label, value: formatNumber(value) });
+  };
+  push("in", number(source, "inputTokens"));
+  push("out", number(source, "outputTokens"));
+  push("cache read", number(inputDetails, "cacheReadTokens"));
+  push("cache write", number(inputDetails, "cacheWriteTokens"));
+  push("reasoning", number(outputDetails, "reasoningTokens"));
+  return result;
+});
+const finishReason = computed(() => (isMessage.value ? text(data.value, "finishReason") : undefined));
+
+const modelId = computed(() => (role.value === "assistant" ? (text(data.value, "modelId") ?? "assistant") : ""));
 
 const eventText = computed(() => {
-  if (props.entry.type !== "event") return "";
-  const data = props.entry.data;
-  if (data.type === "turn.failed") return `${data.error?.name ?? "Error"}: ${data.error?.message ?? "未知错误"}`;
-  if (data.type === "turn.aborted") return `原因：${data.reason ?? "未提供"}`;
-  if (data.type === "turn.done" && data.totalUsage !== undefined) {
-    return `输入 ${formatNumber(data.totalUsage.inputTokens)} · 输出 ${formatNumber(data.totalUsage.outputTokens)} · 合计 ${formatNumber(data.totalUsage.totalTokens)} tokens`;
+  if (kind.value !== "event") return "";
+  switch (eventType.value) {
+    case "turn.failed": {
+      const error = fields(data.value.error);
+      return `${text(error, "name") ?? "Error"}: ${text(error, "message") ?? "未知错误"}`;
+    }
+    case "turn.aborted":
+      return `原因：${text(data.value, "reason") ?? "未提供"}`;
+    case "turn.done": {
+      const total = fields(data.value.totalUsage);
+      if (total === undefined) return "";
+      const input = number(total, "inputTokens");
+      const output = number(total, "outputTokens");
+      const all = number(total, "totalTokens");
+      return `输入 ${formatNumber(input)} · 输出 ${formatNumber(output)} · 合计 ${formatNumber(all)} tokens`;
+    }
+    default:
+      return "";
   }
-  return "";
 });
+
+function isErrorOutput(value: unknown): boolean {
+  const type = text(fields(value), "type");
+  return type === "error-text" || type === "error-json";
+}
+
+const longSource = computed(() => {
+  if (created.value !== undefined) return createdContent.value;
+  if (compact.value !== undefined) return compactSummary.value;
+  if (kind.value === "projection") return projectionText.value;
+  return bodyText.value;
+});
+
+const long = computed(() => longSource.value.length > 520 || longSource.value.split("\n").length > 9);
 
 function eventLabel(type: string): string {
   switch (type) {
@@ -169,12 +316,8 @@ function eventLabel(type: string): string {
     case "turn.aborted":
       return "轮次中断";
     default:
-      return `事件 · ${type}`;
+      return `事件 · ${type || "unknown"}`;
   }
-}
-
-function json(value: unknown): string {
-  return JSON.stringify(value, null, 2) ?? "";
 }
 </script>
 
@@ -186,92 +329,69 @@ function json(value: unknown): string {
 
     <div class="log-card">
       <header class="log-card-head">
-        <span
-          class="badge"
-          :class="
-            kind === 'user'
-              ? 'badge-info'
-              : kind === 'assistant'
-                ? 'badge-success'
-                : kind === 'event' && eventType === 'turn.failed'
-                  ? 'badge-danger'
-                  : 'badge-neutral'
-          "
-          >{{ label }}</span
-        >
-        <span v-if="created" class="log-who">{{ created.user?.name ?? created.user?.id }}</span>
-        <span v-else-if="role === 'assistant'" class="log-who mono">{{ message?.modelId ?? "assistant" }}</span>
-        <span v-else-if="role === 'tool'" class="log-who mono">{{ toolResults.map((result) => result.name).join(", ") || "tool" }}</span>
-        <span v-if="created?.isDirect" class="badge badge-outline">私聊</span>
-        <span v-if="created !== undefined" class="msg-target">{{ created.platform }}:{{ created.selfId }} / {{ created.channelId }}</span>
+        <span class="badge" :class="badgeClass">{{ label }}</span>
+        <span v-if="created" class="log-who">{{ createdUserName }}</span>
+        <span v-else-if="kind === 'assistant'" class="log-who mono">{{ modelId }}</span>
+        <span v-else-if="kind === 'tool'" class="log-who mono">{{ toolResults.map((result) => result.name).join(", ") || "tool" }}</span>
+        <span v-if="createdDirect" class="badge badge-outline">私聊</span>
+        <span v-if="createdTarget.length > 0" class="msg-target">{{ createdTarget }}</span>
         <span class="log-time" :title="formatDateTime(entry.timestamp)">{{ formatClock(entry.timestamp) }}</span>
       </header>
 
       <div class="log-body">
-        <template v-if="created">
+        <template v-if="kind === 'created'">
           <div class="row" style="margin-bottom: 5px">
-            <span class="badge badge-outline mono">#{{ created.messageId }}</span>
-            <span class="faint small">{{ created.user?.name ?? created.user?.id }}</span>
+            <span v-if="createdMessageId.length > 0" class="badge badge-outline mono">#{{ createdMessageId }}</span>
+            <span class="faint small">{{ createdUserName }}</span>
           </div>
-          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ created.content || "（空消息）" }}</div>
+          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ createdContent || "（空消息）" }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
-          <div v-if="created.quote" class="notice" style="margin-top: 8px">
+          <div v-if="quote" class="notice" style="margin-top: 8px">
             <Icon name="link" :size="14" />
             <span
-              >引用 #{{ created.quote.id }}<template v-if="created.quote.content">：{{ created.quote.content }}</template></span
+              >引用 #{{ quoteId }}<template v-if="quoteContent.length > 0">：{{ quoteContent }}</template></span
             >
           </div>
         </template>
 
-        <template v-else-if="deleted">
-          <p>
-            {{ deleted.userId === deleted.operatorId ? `${deleted.userId} 撤回了一条消息` : `${deleted.userId} 的消息被 ${deleted.operatorId} 撤回` }} #{{
-              deleted.messageId
-            }}
-          </p>
+        <template v-else-if="kind === 'deleted'">
+          <p>{{ deletedSummary }}</p>
         </template>
 
-        <template v-else-if="attachment">
+        <template v-else-if="kind === 'attachment'">
           <div class="row row-wrap">
             <Icon name="file" :size="15" />
-            <span class="mono small">{{ attachment.items?.length ?? 0 }} 个附件</span>
-            <span v-for="item in attachment.items" :key="item.url" class="badge badge-outline mono">{{ item.mediaType }}</span>
+            <span class="mono small">{{ attachmentItems.length }} 个附件</span>
+            <span v-for="item in attachmentItems" :key="item.url" class="badge badge-outline mono">{{ item.mediaType }}</span>
           </div>
           <div class="field-hint" style="margin-top: 5px">
-            <span v-for="item in attachment.items" :key="item.url">{{ item.filename ?? item.url }}（{{ item.lifetime ?? "once" }}）</span>
+            <span v-for="item in attachmentItems" :key="`${item.url}:${item.lifetime}`">{{ item.name }}（{{ item.lifetime }}）</span>
           </div>
         </template>
 
-        <template v-else-if="catalog">
-          <details>
-            <summary class="log-toggle" style="margin: 0">
-              工具目录 v{{ catalog.version ?? "?" }} · {{ catalog.tools?.length ?? 0 }} 个工具 · {{ catalog.mode ?? "full" }}
-            </summary>
-            <pre class="json-block" style="margin-top: 8px">{{ catalog.text }}</pre>
-          </details>
-        </template>
-
-        <template v-else-if="compact">
-          <p class="muted small">压缩到条目 {{ compact.lastEntryId }}</p>
-          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ compact.summary || "（空摘要）" }}</div>
+        <template v-else-if="kind === 'compact'">
+          <p class="muted small">
+            压缩到条目 <span class="mono">{{ compactLast || "—" }}</span>
+          </p>
+          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ compactSummary || "（空摘要）" }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
         </template>
 
-        <template v-else-if="narrative">
+        <template v-else-if="kind === 'projection'">
           <p class="small">
-            <span class="badge badge-outline">{{ narrative.kind }}</span>
-            <span v-if="narrative.originMessageId" class="faint mono">origin {{ narrative.originMessageId }}</span>
+            <span v-if="projectionKind.length > 0" class="badge badge-outline">{{ projectionKind }}</span>
+            <span v-if="projectionOrigin.length > 0" class="faint mono">origin {{ projectionOrigin }}</span>
           </p>
-          <div class="log-text" style="margin-top: 6px">{{ narrative.script || narrative.text || json(narrative) }}</div>
+          <div class="log-text" style="margin-top: 6px">{{ projectionText || json(entry.data) }}</div>
         </template>
 
-        <template v-else-if="role === 'assistant'">
+        <template v-else-if="kind === 'assistant'">
           <details v-for="(item, index) in reasoning" :key="index" class="reasoning" style="margin-bottom: 8px">
             <summary>推理内容 · {{ item.length }} 字符</summary>
             <p>{{ item }}</p>
           </details>
 
-          <div v-if="text.length > 0" class="log-text" :class="{ clamped: long && !textOpen }">{{ text }}</div>
+          <div v-if="bodyText.length > 0" class="log-text" :class="{ clamped: long && !textOpen }">{{ bodyText }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
 
           <div v-for="call in toolCalls" :key="call.id" class="tool-call" style="margin-top: 8px">
@@ -286,29 +406,17 @@ function json(value: unknown): string {
             </details>
           </div>
 
-          <div v-if="usage" class="usage-row">
-            <span
-              >in <strong>{{ formatNumber(usage.inputTokens) }}</strong></span
+          <div v-if="usageItems.length > 0 || finishReason !== undefined" class="usage-row">
+            <span v-for="item in usageItems" :key="item.label"
+              >{{ item.label }} <strong>{{ item.value }}</strong></span
             >
-            <span
-              >out <strong>{{ formatNumber(usage.outputTokens) }}</strong></span
-            >
-            <span
-              >cache read <strong>{{ formatNumber(usage.inputTokenDetails?.cacheReadTokens) }}</strong></span
-            >
-            <span
-              >cache write <strong>{{ formatNumber(usage.inputTokenDetails?.cacheWriteTokens) }}</strong></span
-            >
-            <span
-              >reasoning <strong>{{ formatNumber(usage.outputTokenDetails?.reasoningTokens) }}</strong></span
-            >
-            <span v-if="message?.finishReason"
-              >finish <strong>{{ message.finishReason }}</strong></span
+            <span v-if="finishReason !== undefined"
+              >finish <strong>{{ finishReason }}</strong></span
             >
           </div>
         </template>
 
-        <template v-else-if="role === 'tool'">
+        <template v-else-if="kind === 'tool'">
           <div v-for="result in toolResults" :key="result.id" class="tool-call">
             <div class="tool-call-head">
               <Icon :name="result.error ? 'alert' : 'check'" :size="13" />
@@ -321,30 +429,55 @@ function json(value: unknown): string {
               <pre class="json-block">{{ json(result.output) }}</pre>
             </details>
           </div>
+          <p v-if="toolResults.length === 0" class="muted small">没有工具结果内容。</p>
         </template>
 
         <template v-else-if="kind === 'event' || kind === 'state'">
           <div class="row row-wrap">
-            <span class="mono small">{{ eventType || entry.type }}</span>
-            <span v-if="entry.turnId" class="badge badge-outline mono">{{ entry.turnId }}</span>
+            <span class="mono small">{{ eventType || entryType }}</span>
+            <span v-if="entry.turnId !== undefined" class="badge badge-outline mono">{{ entry.turnId }}</span>
             <span
-              v-if="eventText"
+              v-if="eventText.length > 0"
               class="small"
               :style="{ color: eventType === 'turn.failed' || eventType === 'turn.aborted' ? 'var(--danger-ink)' : 'var(--muted)' }"
               >{{ eventText }}</span
             >
           </div>
-          <details v-if="kind === 'state'" style="margin-top: 8px">
-            <summary class="log-toggle" style="margin: 0">状态快照</summary>
+          <details style="margin-top: 8px">
+            <summary class="log-toggle" style="margin: 0">{{ kind === "state" ? "状态快照" : "事件数据" }}</summary>
             <pre class="json-block">{{ json(entry.data) }}</pre>
           </details>
         </template>
 
+        <template v-else-if="kind === 'unknown'">
+          <pre class="json-block">{{ json(entry.data) }}</pre>
+        </template>
+
         <template v-else>
-          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ text || json(entry.data) }}</div>
+          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ bodyText || json(entry.data) }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
         </template>
       </div>
     </div>
   </article>
 </template>
+
+<style scoped>
+.log-card-head {
+  flex-wrap: wrap;
+}
+
+.log-card-head .badge,
+.log-card-head .msg-target {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-call-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

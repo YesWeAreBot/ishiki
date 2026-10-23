@@ -175,6 +175,23 @@ workspace 提供文件与命令工具。MCP 接入、OneBot 协议操作等能�
 
 [编写扩展、引擎与资源 handler →](https://ishiki.js.org/docs/reference/api/)
 
+## 管理控制台
+
+同时启用 `@koishijs/plugin-console` 与本插件后，控制台只注册一个 Ishiki 入口。模型、Profile、会话、运行时、用量、审计与缓存页面在 Ishiki 内部侧栏切换。页面读取 `src/management/` 提供的快照，写入通过带权限校验的控制台接口完成。
+
+- 模型保存按文件摘要校验修订版本，先写临时文件再原子替换；密钥只回传配置状态，明文不会进入页面、日志或审计。
+- Profile 保存与应用分开：保存只改文件，应用会重新解析配置并重建运行实例。删除需要输入完整 Profile 标识。
+- 会话按字节游标分页读取 `events.jsonl`，损坏行单独报告，其余条目继续返回。
+- 用量与审计来自真实消息和生命周期事件，缓存缺失时显示明确的数据状态。
+
+构建控制台产物：
+
+```bash
+bun run --cwd packages/koishi-plugin-ishiki console:build
+```
+
+控制台入口加载构建后的 `dist` 目录，修改 `client/` 后需要重新构建。
+
 ## 启动问题
 
 | 现象                             | 检查与处理                                           |

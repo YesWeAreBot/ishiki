@@ -3,18 +3,23 @@ import path from "node:path";
 
 import type { AgentPlugin } from "@yesimagent/core";
 import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gateway";
-import { Context, Logger, Schema, Service, type Session } from "koishi";
-import { parse } from "yaml";
+import { Context, Service, type Session } from "koishi";
+import Logger from "reggol";
+import Schema from "schemastery";
+import { parse as parceYaml } from "yaml";
 
 import { loadCodemode } from "./builtin-tools/codemode.js";
 import { createFinish } from "./builtin-tools/finish.js";
 import { createReadTool } from "./builtin-tools/read.js";
 import { createSendMessage } from "./builtin-tools/send-message.js";
+import { installConsole } from "./console/index.js";
 import { ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
-import { renderInstructions, loadInstructionFiles } from "./instructions.js";
+import { loadInstructionFiles, renderInstructions } from "./instructions.js";
+import { Management } from "./management/index.js";
+import type { RuntimeMeta } from "./management/types.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
@@ -40,7 +45,7 @@ interface Route {
   readonly spawn: (key: string, domain: InstanceDomain) => AgentRuntime;
 }
 
-interface ProfileRecord {
+export interface ProfileRecord {
   readonly profile: Profile;
   readonly runtimes: Map<string, AgentRuntime>;
   readonly externalPlugins: readonly AgentPlugin[];
@@ -67,8 +72,9 @@ class Ishiki extends Service<Ishiki.Config> {
   private readonly handler = new StandardHandler();
   private readonly routes = new Map<string, Route[]>();
   private readonly active = new Set<Route>();
-  private readonly profiles = new Map<string, ProfileRecord>();
-  private readonly runtimes = new Map<string, AgentRuntime>();
+  public readonly profiles = new Map<string, ProfileRecord>();
+  public readonly runtimes = new Map<string, AgentRuntime>();
+  public readonly management: Management;
 
   constructor(ctx: Context, config: Ishiki.Config) {
     super(ctx, "ishiki");
@@ -83,7 +89,7 @@ class Ishiki extends Service<Ishiki.Config> {
       mkdirSync(path.dirname(modelConfigFile), { recursive: true });
       writeFileSync(modelConfigFile, "");
     }
-    const modelConfig = (parse(readFileSync(modelConfigFile, "utf-8")) as GatewayConfig) ?? {};
+    const modelConfig = (parceYaml(readFileSync(modelConfigFile, "utf-8")) as GatewayConfig) ?? {};
     this.gateway = createGateway({
       config: modelConfig,
       fetch: this.config.dumpRequests ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataPath, "requests") }) : undefined,
@@ -100,9 +106,13 @@ class Ishiki extends Service<Ishiki.Config> {
     ctx.plugin(MorphXmlToolcallEngine);
     ctx.plugin(YamlXmlToolcallEngine);
 
+    this.management = new Management(this, ctx, this.logger);
+    ctx.inject(["console"], (ctx) => installConsole(ctx, this));
+
     ctx.on("ready", () => void this.load());
     ctx.on("internal/session", (session) => void this.onSession(session));
     ctx.on("dispose", async () => {
+      this.management.dispose();
       await Promise.all([...this.profiles.keys()].map((profileId) => this.deactivate(profileId)));
       this.active.clear();
       this.routes.clear();
@@ -132,6 +142,7 @@ class Ishiki extends Service<Ishiki.Config> {
         this.logger.error(`[${profile.id}] profile loading failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    this.management.events.emit("profiles.changed", {});
   }
 
   public async activate(profile: Profile, externalPlugins: readonly AgentPlugin[] = []): Promise<void> {
@@ -226,6 +237,18 @@ class Ishiki extends Service<Ishiki.Config> {
           record.runtimes.set(key, runtime);
           domains.set(key, domain);
           this.runtimes.set(key, runtime);
+          const meta: RuntimeMeta = {
+            id: key,
+            profileId: profile.id,
+            domain:
+              domain.mode === "cross" ? { mode: "cross" } : { mode: "channel", platform: domain.platform, selfId: domain.selfId, channelId: domain.channelId },
+            createdAt: Date.now(),
+            home,
+            model: settings.model,
+            engines: { context: settings.context.engine, wakeup: settings.wakeup.engine, toolcall: settings.toolcall.engine },
+          };
+          writeFileSync(path.join(home, "runtime.json"), JSON.stringify(meta, null, 2));
+          this.management.runtimes.track(runtime);
           this.logger.info(`[${profile.id}] runtime created: ${key}`);
           return runtime;
         };
@@ -268,6 +291,7 @@ class Ishiki extends Service<Ishiki.Config> {
       throw error;
     }
     await activation.promise;
+    this.management.profiles.markApplied(profile.id);
   }
 
   public findProfile(profileId: string): Profile | undefined {
@@ -418,6 +442,7 @@ declare module "koishi" {
 export * from "@huggingface/jinja";
 export * from "@yesimagent/core";
 
+export * from "./debugger.js";
 export * from "./extension.js";
 export * from "./failover.js";
 export * from "./runtime.js";
@@ -429,7 +454,6 @@ export * from "./wakeup/index.js";
 
 export * from "./builtin-tools/index.js";
 export * from "./debug/agent-overlay.js";
-export * from "./debugger.js";
 export * from "./profile/index.js";
 export * from "./resource/index.js";
 

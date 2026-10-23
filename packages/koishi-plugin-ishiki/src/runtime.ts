@@ -18,7 +18,7 @@ import {
   type ToolResultOutput,
   type ToolSet,
 } from "@yesimagent/core";
-import type { Logger } from "koishi";
+import type Logger from "reggol";
 
 import { CODEMODE_TOOL, createCodemode, type CodemodeSurface } from "./builtin-tools/codemode.js";
 import { FINISH_TOOL } from "./builtin-tools/finish.js";

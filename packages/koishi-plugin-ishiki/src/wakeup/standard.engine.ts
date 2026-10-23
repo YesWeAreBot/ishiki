@@ -1,5 +1,6 @@
 import type { Agent } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
+import Schema from "schemastery";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
@@ -14,6 +15,13 @@ export interface StandardWakeupConfig {
   quoteSelf: boolean;
   keywords: string[];
 }
+
+export const StandardWakeupConfig = Schema.object({
+  direct: Schema.boolean().default(true).description("私聊消息直接唤醒"),
+  atSelf: Schema.boolean().default(true).description("提及机器人时唤醒"),
+  quoteSelf: Schema.boolean().default(true).description("引用机器人消息时唤醒"),
+  keywords: Schema.array(Schema.string()).default([]).description("包含任一关键词时唤醒"),
+});
 
 export class StandardWakeupInstance implements WakeupEngineInstance {
   public readonly config: StandardWakeupConfig;
@@ -46,6 +54,8 @@ declare module "./engine.js" {
 }
 
 export class StandardWakeupEngine extends WakeupEngine<"standard"> {
+  public readonly Schema = StandardWakeupConfig;
+
   constructor(ctx: Context) {
     super(ctx, "standard");
   }

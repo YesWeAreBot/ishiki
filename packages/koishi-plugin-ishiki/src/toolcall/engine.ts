@@ -1,8 +1,10 @@
 import type { LanguageModelV4, LanguageModelV4Middleware } from "@yesimagent/core";
 import { wrapLanguageModel } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
+import Schema from "schemastery";
 
 import type { EngineConfig } from "../profile/index.js";
+import { listServices, registerService } from "../registry.js";
 
 export interface ToolcallEngines {}
 
@@ -34,8 +36,15 @@ export abstract class ToolcallEngine<K extends keyof ToolcallEngines = keyof Too
     return provider;
   }
 
+  static list(ctx: Context): ToolcallEngine[] {
+    return listServices<ToolcallEngine>(ctx, "toolcall");
+  }
+
+  public Schema?: Schema<any>;
+
   public constructor(ctx: Context, name: K) {
     super(ctx, ToolcallEngine.GetName(String(name)));
+    registerService(ctx, "toolcall", String(name), this);
   }
 
   public abstract [Service.invoke](config: EngineConfig<Pick<ToolcallEngines, K>>): ToolcallEngineInstance;

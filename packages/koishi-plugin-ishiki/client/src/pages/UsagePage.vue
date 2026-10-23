@@ -1,336 +1,426 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 
+import { ApiError, call } from "../api";
 import EmptyState from "../components/EmptyState.vue";
 import Icon from "../components/Icon.vue";
 import PageHeader from "../components/PageHeader.vue";
-import { formatCompact, formatNumber, formatPercent, relativeTime } from "../lib/format";
-import { aggregateUsage, navigate, store } from "../store";
+import PageShell from "../components/PageShell.vue";
+import { formatDateTime, formatNumber, relativeTime } from "../lib/format";
+import { store, toast } from "../store";
+import type { UsageFilters, UsageSnapshot } from "../types";
 
-const range = ref<"24h" | "7d" | "all">("7d");
-const profileFilter = ref("all");
-const modelFilter = ref("all");
-const loading = ref(true);
+type RangeKey = "all" | "24h" | "7d" | "30d" | "custom";
 
-onMounted(() => {
-  window.setTimeout(() => {
-    loading.value = false;
-  }, 420);
-});
-
-const rangeStart = computed(() => {
-  if (range.value === "24h") return store.now - 24 * 60 * 60 * 1000;
-  if (range.value === "7d") return store.now - 7 * 24 * 60 * 60 * 1000;
-  return 0;
-});
-
-const ranges = [
-  { value: "24h" as const, label: "近 24 小时" },
-  { value: "7d" as const, label: "近 7 天" },
-  { value: "all" as const, label: "全部" },
+const rangeOptions: Array<{ value: RangeKey; label: string }> = [
+  { value: "all", label: "全部时间" },
+  { value: "24h", label: "近 24 小时" },
+  { value: "7d", label: "近 7 天" },
+  { value: "30d", label: "近 30 天" },
+  { value: "custom", label: "自定义区间" },
 ];
 
-const profileIds = computed(() => [...new Set(store.usageRecords.map((record) => record.profileId))].sort());
-const modelRefs = computed(() => [...new Set(store.usageRecords.map((record) => record.reference))].sort());
+const snapshot = ref<UsageSnapshot | undefined>(store.usage);
+const scoped = ref(false);
+const attempted = ref(false);
+const loading = ref(false);
+const errorText = ref("");
+const lastFilters = ref<UsageFilters>({});
 
-const filtered = computed(() =>
-  store.usageRecords.filter((record) => {
-    if (record.timestamp < rangeStart.value) return false;
-    if (profileFilter.value !== "all" && record.profileId !== profileFilter.value) return false;
-    if (modelFilter.value !== "all" && record.reference !== modelFilter.value) return false;
-    return true;
-  }),
+const range = ref<string>("all");
+const customFrom = ref("");
+const customTo = ref("");
+const profileFilter = ref("all");
+const modelFilter = ref("all");
+
+watch(
+  () => store.usage,
+  (value) => {
+    if (value !== undefined && !scoped.value) snapshot.value = value;
+  },
 );
 
-const totals = computed(() => aggregateUsage(filtered.value));
-const recorded = computed(() => filtered.value.filter((record) => record.source === "recorded"));
-const latest = computed(() => filtered.value.reduce((max, record) => Math.max(max, record.timestamp), 0));
-const hasRecords = computed(() => filtered.value.length > 0);
+const totals = computed(() => snapshot.value?.totals);
+const byModel = computed(() => snapshot.value?.byModel ?? []);
+const byDay = computed(() => snapshot.value?.byDay ?? []);
+const quality = computed(() => snapshot.value?.quality ?? []);
+const recordCount = computed(() => snapshot.value?.records.length ?? 0);
+const syncedAt = computed(() => snapshot.value?.syncedAt);
+const bootstrapped = computed(() => store.usage !== undefined || attempted.value);
+const appliedCount = computed(() => Object.keys(lastFilters.value).length);
 
-const byModel = computed(() => {
-  const map = new Map<
-    string,
-    {
-      reference: string;
-      calls: number;
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      reasoning: number;
-      total: number;
-      unavailable: number;
-    }
-  >();
-  for (const record of recorded.value) {
-    const row = map.get(record.reference) ?? {
-      reference: record.reference,
-      calls: 0,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      reasoning: 0,
-      total: 0,
-      unavailable: 0,
-    };
-    row.calls += 1;
-    row.input += record.input;
-    row.output += record.output;
-    row.cacheRead += record.cacheRead;
-    row.cacheWrite += record.cacheWrite;
-    row.reasoning += record.reasoning;
-    row.total += record.total;
-    if (!record.cacheReported) row.unavailable += 1;
-    map.set(record.reference, row);
-  }
-  return [...map.values()].sort((left, right) => right.total - left.total);
+const profileIds = computed(() => {
+  const ids = new Set(store.profiles.map((profile) => profile.id));
+  for (const record of snapshot.value?.records ?? []) ids.add(record.profileId);
+  return [...ids].sort();
 });
 
-const maxInput = computed(() => Math.max(1, ...byModel.value.map((row) => row.input)));
-
-const byProfile = computed(() => {
-  const map = new Map<string, { profileId: string; calls: number; total: number; input: number; cacheRead: number; missing: number }>();
-  for (const record of filtered.value) {
-    const row = map.get(record.profileId) ?? { profileId: record.profileId, calls: 0, total: 0, input: 0, cacheRead: 0, missing: 0 };
-    if (record.source === "missing") row.missing += 1;
-    else {
-      row.calls += 1;
-      row.total += record.total;
-      row.input += record.input;
-      row.cacheRead += record.cacheRead;
-    }
-    map.set(record.profileId, row);
+const modelOptions = computed(() => {
+  const labels = new Map<string, string>();
+  for (const option of store.options) {
+    if (option.kind === "model") labels.set(option.reference, option.label.length > 0 ? option.label : option.reference);
   }
-  return [...map.values()].sort((left, right) => right.total - left.total);
+  for (const row of byModel.value) {
+    if (!labels.has(row.reference)) labels.set(row.reference, row.reference);
+  }
+  return [...labels.entries()].map(([reference, label]) => ({ reference, label })).sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
 });
 
-const qualityFor = computed(() => new Map(store.dataQuality.map((row) => [row.profileId, row])));
-const empty = computed(() => !loading.value && filtered.value.length === 0);
-const callsPerProfile = computed(() => byProfile.value.reduce((sum, row) => sum + row.calls, 0));
-const cacheRate = computed(() => (totals.value.input === 0 ? null : totals.value.cacheRead / totals.value.input));
-
-function qualityLabel(state: string): string {
-  if (state === "recorded") return "完整";
-  if (state === "partial") return "部分缺失";
-  if (state === "missing") return "已停止";
-  return "读取失败";
+function describe(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  return error instanceof Error ? error.message : String(error);
 }
 
-function qualityTone(state: string): string {
-  if (state === "recorded") return "badge-success";
-  if (state === "partial") return "badge-warning";
-  if (state === "missing") return "badge-neutral";
-  return "badge-danger";
+function timeBounds(): { from?: number; to?: number } | undefined {
+  if (range.value === "all") return {};
+  if (range.value !== "custom") {
+    const days = range.value === "24h" ? 1 : range.value === "7d" ? 7 : 30;
+    return { from: Date.now() - days * 86_400_000 };
+  }
+  const from = customFrom.value.length > 0 ? Date.parse(customFrom.value) : undefined;
+  const to = customTo.value.length > 0 ? Date.parse(customTo.value) : undefined;
+  if (from !== undefined && Number.isNaN(from)) {
+    toast("error", "开始时间无效", "请选择有效的开始时间。");
+    return undefined;
+  }
+  if (to !== undefined && Number.isNaN(to)) {
+    toast("error", "结束时间无效", "请选择有效的结束时间。");
+    return undefined;
+  }
+  if (from !== undefined && to !== undefined && from > to) {
+    toast("error", "时间区间倒置", "开始时间晚于结束时间。");
+    return undefined;
+  }
+  const bounds: { from?: number; to?: number } = {};
+  if (from !== undefined) bounds.from = from;
+  if (to !== undefined) bounds.to = to;
+  return bounds;
 }
 
-function resetFilters(): void {
-  range.value = "7d";
+function buildFilters(): UsageFilters | undefined {
+  const bounds = timeBounds();
+  if (bounds === undefined) return undefined;
+  const filters: UsageFilters = {};
+  if (profileFilter.value !== "all") filters.profileId = profileFilter.value;
+  if (modelFilter.value !== "all") filters.model = modelFilter.value;
+  if (bounds.from !== undefined) filters.from = bounds.from;
+  if (bounds.to !== undefined) filters.to = bounds.to;
+  return filters;
+}
+
+async function run(filters: UsageFilters, silent: boolean): Promise<void> {
+  if (loading.value) return;
+  loading.value = true;
+  try {
+    const result = await call<UsageSnapshot>("ishiki/observability/usage", filters);
+    snapshot.value = result;
+    scoped.value = Object.keys(filters).length > 0;
+    lastFilters.value = filters;
+    errorText.value = "";
+    if (!silent) {
+      toast(
+        "success",
+        "用量已更新",
+        result.records.length === 0
+          ? "所选范围内没有记录。"
+          : `${formatNumber(result.records.length)} 条记录，合计 ${formatNumber(result.totals.total)} token。`,
+      );
+    }
+  } catch (error) {
+    errorText.value = describe(error);
+    toast("error", "用量读取失败", errorText.value);
+  } finally {
+    loading.value = false;
+    attempted.value = true;
+  }
+}
+
+async function apply(): Promise<void> {
+  const filters = buildFilters();
+  if (filters === undefined) return;
+  await run(filters, false);
+}
+
+async function refresh(): Promise<void> {
+  const filters = buildFilters();
+  if (filters === undefined) return;
+  await run(filters, false);
+}
+
+async function reset(): Promise<void> {
+  range.value = "all";
+  customFrom.value = "";
+  customTo.value = "";
   profileFilter.value = "all";
   modelFilter.value = "all";
+  await run({}, false);
 }
+
+onMounted(() => {
+  if (store.usage === undefined) void run({}, true);
+});
 </script>
 
 <template>
-  <PageHeader
-    title="用量"
-    desc="按 Profile、模型与时间范围汇总 assistant 消息中记录的 usage。缺失的 usage 不按 0 计入，并在数据质量中单独标注。"
-    eyebrow="观测 / 用量"
-  >
-    <template #actions>
-      <button type="button" class="btn" @click="navigate('/cost')"><Icon name="cost" :size="15" /> 查看成本</button>
-    </template>
-  </PageHeader>
-
-  <div class="panel" style="margin-bottom: 16px">
-    <div class="panel-body" style="padding: 13px 16px">
-      <div class="row row-wrap">
-        <div class="segmented" role="group" aria-label="时间范围">
-          <button v-for="item in ranges" :key="item.value" type="button" :aria-pressed="range === item.value" @click="range = item.value">
-            {{ item.label }}
-          </button>
-        </div>
-        <select v-model="profileFilter" class="select" aria-label="按 Profile 筛选" style="width: 150px">
-          <option value="all">全部 Profile</option>
-          <option v-for="id in profileIds" :key="id" :value="id">{{ id }}</option>
-        </select>
-        <select v-model="modelFilter" class="select" aria-label="按模型筛选" style="width: 220px">
-          <option value="all">全部模型</option>
-          <option v-for="reference in modelRefs" :key="reference" :value="reference">{{ reference }}</option>
-        </select>
-        <button type="button" class="btn btn-ghost btn-sm" @click="resetFilters">重置</button>
-        <span class="spacer"></span>
-        <span class="field-hint">最后活动 {{ relativeTime(latest === 0 ? undefined : latest) }}</span>
-      </div>
-    </div>
-  </div>
-
-  <div v-if="loading" class="metric-grid" style="margin-bottom: 16px">
-    <div v-for="index in 4" :key="index" class="metric">
-      <div class="skeleton skeleton-line" style="width: 40%"></div>
-      <div class="skeleton" style="height: 26px; width: 62%; margin-top: 8px"></div>
-    </div>
-  </div>
-  <div v-else class="metric-grid" style="margin-bottom: 16px">
-    <div class="metric">
-      <div class="metric-label">输入 tokens <span class="badge badge-outline">input</span></div>
-      <div class="metric-value">{{ hasRecords ? formatCompact(totals.input) : "无记录" }}</div>
-      <div class="metric-note">{{ hasRecords ? `${formatNumber(totals.input)} tokens · ${totals.calls} 次调用累加` : "当前时间范围没有调用" }}</div>
-    </div>
-    <div class="metric">
-      <div class="metric-label">输出 tokens <span class="badge badge-outline">output</span></div>
-      <div class="metric-value">{{ hasRecords ? formatCompact(totals.output) : "无记录" }}</div>
-      <div class="metric-note">{{ hasRecords ? `推理 ${formatCompact(totals.reasoning)} tokens` : "当前时间范围没有调用" }}</div>
-    </div>
-    <div class="metric">
-      <div class="metric-label">缓存读取 <span class="badge badge-outline">cache read</span></div>
-      <div class="metric-value">{{ hasRecords ? formatCompact(totals.cacheRead) : "无记录" }}</div>
-      <div class="metric-note">{{ hasRecords ? `占输入 ${cacheRate === null ? "—" : formatPercent(cacheRate)}` : "当前时间范围没有调用" }}</div>
-    </div>
-    <div class="metric">
-      <div class="metric-label">调用次数</div>
-      <div class="metric-value">{{ hasRecords ? formatNumber(totals.calls) : "无记录" }}</div>
-      <div class="metric-note">
-        <span v-if="hasRecords" :style="{ color: totals.missing > 0 ? 'var(--warning-ink)' : undefined }">缺失 usage {{ totals.missing }} 条</span>
-        <span v-else>没有可统计的调用</span>
-      </div>
-    </div>
-  </div>
-
-  <div v-if="empty" class="panel">
-    <EmptyState
-      title="当前筛选没有记录"
-      desc="时间范围、Profile 或模型组合没有已记录的 usage。会把「没有记录」与「数值为零」分开呈现，不会把缺失数据当成 0。"
-      icon="usage"
+  <PageShell>
+    <PageHeader
+      title="用量统计"
+      desc="用量账本记录每次模型调用的输入、输出、缓存与推理 token。页面只展示服务端汇总的数字与缺失原因，不把 token 换算成金额。"
+      eyebrow="观测 / 用量"
     >
-      <button type="button" class="btn btn-soft" @click="resetFilters">重置筛选</button>
-    </EmptyState>
-  </div>
+      <template #actions>
+        <span v-if="snapshot !== undefined" class="badge badge-outline"> 同步于 {{ formatDateTime(snapshot.syncedAt) }} </span>
+        <span v-if="appliedCount > 0" class="badge badge-info">{{ appliedCount }} 项筛选</span>
+        <button type="button" class="btn btn-sm" :disabled="loading" @click="refresh">
+          <span v-if="loading" class="spinner" aria-hidden="true"></span>
+          <Icon v-else name="refresh" :size="14" />
+          刷新
+        </button>
+      </template>
+    </PageHeader>
 
-  <div v-else class="stack">
-    <div class="panel">
-      <div class="panel-head">
-        <div>
-          <div class="panel-title">按模型</div>
-          <div class="panel-sub">按输入与输出 tokens 合计排序；条宽按输入 tokens 归一化。</div>
-        </div>
-        <div class="panel-actions">
-          <div class="legend">
-            <span><i></i>输入</span>
-            <span><i style="background: var(--info)"></i>缓存读取</span>
-          </div>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div v-if="byModel.length === 0" class="empty" style="padding: 24px">
-          <div class="empty-title">没有已记录的调用</div>
-          <p class="empty-desc">当前筛选只包含缺失 usage 的记录；这些记录无法参与 token 汇总。</p>
-        </div>
-        <div v-else class="stack-sm">
-          <div v-for="row in byModel" :key="row.reference" class="bar-row">
-            <span class="bar-label" :title="row.reference">{{ row.reference }}</span>
-            <div class="bar-track">
-              <div class="bar-fill" :style="{ width: `${Math.max(2, (row.input / maxInput) * 100)}%` }"></div>
-            </div>
-            <span class="bar-value">{{ formatCompact(row.input) }}</span>
-          </div>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table class="table table-compact">
-          <thead>
-            <tr>
-              <th scope="col">模型</th>
-              <th scope="col" class="num">调用</th>
-              <th scope="col" class="num">输入</th>
-              <th scope="col" class="num">输出</th>
-              <th scope="col" class="num">缓存读取</th>
-              <th scope="col" class="num">缓存写入</th>
-              <th scope="col" class="num">推理</th>
-              <th scope="col" class="num">合计</th>
-              <th scope="col">缓存明细</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in byModel" :key="row.reference">
-              <td class="mono">{{ row.reference }}</td>
-              <td class="num">{{ formatNumber(row.calls) }}</td>
-              <td class="num">{{ formatNumber(row.input) }}</td>
-              <td class="num">{{ formatNumber(row.output) }}</td>
-              <td class="num">{{ formatNumber(row.cacheRead) }}</td>
-              <td class="num">{{ formatNumber(row.cacheWrite) }}</td>
-              <td class="num">{{ formatNumber(row.reasoning) }}</td>
-              <td class="num strong">{{ formatNumber(row.total) }}</td>
-              <td>
-                <span v-if="row.unavailable > 0" class="badge badge-warning">provider 未提供</span>
-                <span v-else class="badge badge-success">已提供</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="form-grid">
+    <div class="stack">
       <div class="panel">
-        <div class="panel-head">
-          <div class="panel-title">按 Profile</div>
-          <div class="panel-actions">
-            <span class="panel-sub">{{ callsPerProfile }} 次已记录调用</span>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table class="table table-compact">
-            <thead>
-              <tr>
-                <th scope="col">Profile</th>
-                <th scope="col" class="num">调用</th>
-                <th scope="col" class="num">tokens</th>
-                <th scope="col" class="num">缓存命中</th>
-                <th scope="col">采集状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in byProfile" :key="row.profileId">
-                <td class="mono">{{ row.profileId }}</td>
-                <td class="num">{{ formatNumber(row.calls) }}</td>
-                <td class="num">{{ formatNumber(row.total) }}</td>
-                <td class="num">{{ row.input === 0 ? "—" : formatPercent(row.cacheRead / row.input) }}</td>
-                <td>
-                  <span class="badge" :class="qualityTone(qualityFor.get(row.profileId)?.state ?? 'recorded')">
-                    {{ qualityLabel(qualityFor.get(row.profileId)?.state ?? "recorded") }}
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head"><div class="panel-title">数据质量</div></div>
         <div class="panel-body">
-          <div class="quality-list">
-            <div v-for="row in store.dataQuality" :key="row.profileId" class="quality-row">
-              <Icon
-                :name="row.state === 'recorded' ? 'checkCircle' : row.state === 'partial' ? 'warningCircle' : row.state === 'missing' ? 'info' : 'xCircle'"
-                :size="15"
-              />
-              <div>
-                <div class="row" style="gap: 6px">
-                  <span class="quality-title">{{ row.label }}</span>
-                  <span class="badge" :class="qualityTone(row.state)">{{ qualityLabel(row.state) }}</span>
-                </div>
-                <div class="quality-note">{{ row.note }}</div>
+          <div class="form-grid three">
+            <label class="field">
+              <span class="field-label">时间范围</span>
+              <select v-model="range" class="select" :disabled="loading">
+                <option v-for="option in rangeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Profile</span>
+              <select v-model="profileFilter" class="select" :disabled="loading || profileIds.length === 0">
+                <option value="all">全部 Profile</option>
+                <option v-for="id in profileIds" :key="id" :value="id">{{ id }}</option>
+              </select>
+              <span v-if="profileIds.length === 0" class="field-hint">还没有可用的 Profile。</span>
+            </label>
+            <label class="field">
+              <span class="field-label">模型</span>
+              <select v-model="modelFilter" class="select" :disabled="loading || modelOptions.length === 0">
+                <option value="all">全部模型</option>
+                <option v-for="option in modelOptions" :key="option.reference" :value="option.reference">{{ option.label }}</option>
+              </select>
+              <span v-if="modelOptions.length === 0" class="field-hint">还没有出现过调用的模型。</span>
+            </label>
+          </div>
+
+          <div v-if="range === 'custom'" class="form-grid" style="margin-top: 12px">
+            <label class="field">
+              <span class="field-label">开始时间</span>
+              <input v-model="customFrom" class="input" type="datetime-local" step="1" :disabled="loading" />
+            </label>
+            <label class="field">
+              <span class="field-label">结束时间</span>
+              <input v-model="customTo" class="input" type="datetime-local" step="1" :disabled="loading" />
+            </label>
+          </div>
+
+          <div class="row row-wrap" style="margin-top: 12px">
+            <button type="button" class="btn btn-primary btn-sm" :disabled="loading" @click="apply">应用筛选</button>
+            <button type="button" class="btn btn-ghost btn-sm" :disabled="loading" @click="reset">重置</button>
+            <span class="spacer"></span>
+            <span class="muted small">缺失字段与推导来源按服务端判定原样列出。</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="errorText.length > 0" class="error-panel">
+        <Icon name="alert" :size="15" />
+        <div class="flex-1">
+          <div class="strong">用量读取失败</div>
+          <div class="mono">{{ errorText }}</div>
+        </div>
+        <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="refresh">重试</button>
+      </div>
+
+      <div v-if="!bootstrapped" class="panel">
+        <div class="loading-list">
+          <div v-for="index in 4" :key="index" class="skeleton skeleton-line" style="width: 100%"></div>
+          <div class="skeleton skeleton-line" style="width: 64%"></div>
+        </div>
+      </div>
+
+      <template v-else>
+        <div v-if="snapshot === undefined" class="panel">
+          <EmptyState title="用量数据尚不可用" desc="服务端还没有返回用量快照。确认控制台连接正常后重试，页面不会用示例数字填充。" icon="usage">
+            <button type="button" class="btn btn-sm btn-primary" :disabled="loading" @click="refresh">重新读取</button>
+          </EmptyState>
+        </div>
+
+        <template v-else>
+          <div v-if="totals !== undefined">
+            <div class="metric-grid">
+              <div class="metric">
+                <div class="metric-label"><Icon name="arrowDown" :size="13" /> 输入 token</div>
+                <div class="metric-value">{{ formatNumber(totals.input) }}</div>
+                <div class="metric-note">prompt 侧用量</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label"><Icon name="arrowUp" :size="13" /> 输出 token</div>
+                <div class="metric-value">{{ formatNumber(totals.output) }}</div>
+                <div class="metric-note">completion 侧用量</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label"><Icon name="memory" :size="13" /> 缓存读取</div>
+                <div class="metric-value">{{ formatNumber(totals.cacheRead) }}</div>
+                <div class="metric-note">仅在已上报时可信</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label"><Icon name="memory" :size="13" /> 缓存写入</div>
+                <div class="metric-value">{{ formatNumber(totals.cacheWrite) }}</div>
+                <div class="metric-note">仅在已上报时可信</div>
+              </div>
+            </div>
+
+            <div class="metric-grid three" style="margin-top: 10px">
+              <div class="metric">
+                <div class="metric-label"><Icon name="pulse" :size="13" /> 推理 token</div>
+                <div class="metric-value">{{ formatNumber(totals.reasoning) }}</div>
+                <div class="metric-note">reasoning 用量</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label"><Icon name="usage" :size="13" /> 合计 token</div>
+                <div class="metric-value">{{ formatNumber(totals.total) }}</div>
+                <div class="metric-note">服务端记录的总量</div>
+              </div>
+              <div class="metric">
+                <div class="metric-label"><Icon name="pulse" :size="13" /> 调用次数</div>
+                <div class="metric-value">{{ formatNumber(totals.calls) }}</div>
+                <div class="metric-note">{{ formatNumber(recordCount) }} 条用量记录</div>
               </div>
             </div>
           </div>
-          <div class="notice" style="margin-top: 12px">
-            <Icon name="info" :size="14" />
-            <span>数值为零表示已采集且确实为零；「无记录」表示时间范围内没有调用；「缺失」表示消息没有 usage；读取失败会单独标出。</span>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">按模型汇总</div>
+                <div class="panel-sub">调用次数与 token 均来自账本记录，按输入与输出之和降序。</div>
+              </div>
+              <div class="panel-actions">
+                <span class="badge badge-outline">{{ byModel.length }} 个模型</span>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="table table-compact">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th class="num">调用</th>
+                    <th class="num">输入</th>
+                    <th class="num">输出</th>
+                    <th class="num">缓存读取</th>
+                    <th class="num">缓存写入</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in byModel" :key="row.reference">
+                    <td class="mono">{{ row.reference }}</td>
+                    <td class="num">{{ formatNumber(row.calls) }}</td>
+                    <td class="num">{{ formatNumber(row.input) }}</td>
+                    <td class="num">{{ formatNumber(row.output) }}</td>
+                    <td class="num">{{ formatNumber(row.cacheRead) }}</td>
+                    <td class="num">{{ formatNumber(row.cacheWrite) }}</td>
+                  </tr>
+                  <tr v-if="byModel.length === 0">
+                    <td colspan="6" class="muted">所选范围内没有按模型汇总的数据。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">按天汇总</div>
+                <div class="panel-sub">日期按 UTC 归并，与服务端账本口径一致。</div>
+              </div>
+              <div class="panel-actions">
+                <span class="badge badge-outline">{{ byDay.length }} 天</span>
+              </div>
+            </div>
+            <div class="table-wrap day-scroll">
+              <table class="table table-compact">
+                <thead>
+                  <tr>
+                    <th>日期</th>
+                    <th class="num">调用</th>
+                    <th class="num">输入</th>
+                    <th class="num">输出</th>
+                    <th class="num">合计</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in byDay" :key="row.day">
+                    <td class="mono">{{ row.day }}</td>
+                    <td class="num">{{ formatNumber(row.calls) }}</td>
+                    <td class="num">{{ formatNumber(row.input) }}</td>
+                    <td class="num">{{ formatNumber(row.output) }}</td>
+                    <td class="num strong">{{ formatNumber(row.total) }}</td>
+                  </tr>
+                  <tr v-if="byDay.length === 0">
+                    <td colspan="5" class="muted">所选范围内没有按天汇总的数据。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">数据质量</div>
+                <div class="panel-sub">缺失或推导的原因原样展示，页面不会补齐缓存字段，也不会估算金额。</div>
+              </div>
+              <div class="panel-actions">
+                <span class="badge" :class="quality.length > 0 ? 'badge-warning' : 'badge-outline'"> {{ quality.length }} 类标记 </span>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div v-if="recordCount === 0" class="empty" style="padding: 24px 12px">
+                <div class="empty-title">所选范围内没有用量记录</div>
+                <p class="empty-desc">可以放宽时间范围或清除 Profile / 模型筛选后再试。</p>
+                <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="reset">重置筛选</button>
+              </div>
+              <div v-else-if="quality.length === 0" class="muted small">所选范围内没有触发数据质量标记。</div>
+              <div v-else class="quality-list">
+                <div v-for="row in quality" :key="row.reason" class="quality-row">
+                  <Icon name="warningCircle" :size="14" />
+                  <div>
+                    <div class="quality-title">{{ row.reason }}</div>
+                    <div class="quality-note">{{ formatNumber(row.count) }} 条记录带有该标记</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="notice notice-info">
+            <Icon name="info" :size="15" />
+            <span>
+              <strong>口径说明</strong>
+              调用次数等于账本记录条数；每次调用可能来自消息响应、轮次汇总或缺失回退，来源会体现在数据质量中。缓存读取与写入按服务端上报值展示，字段缺失的记录会进入数据质量，不能据此判断缓存是否命中。最近同步：{{
+                formatDateTime(syncedAt)
+              }}（{{ relativeTime(syncedAt) }}）。
+            </span>
+          </div>
+        </template>
+      </template>
     </div>
-  </div>
+  </PageShell>
 </template>
+
+<style scoped>
+.metric-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.day-scroll {
+  max-height: 340px;
+  overflow-y: auto;
+}
+</style>

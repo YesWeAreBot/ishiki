@@ -1,11 +1,13 @@
 import type { Agent, AgentEntry, AgentMessage, CustomMessages } from "@yesimagent/core";
-import { Service, type Context, type Logger } from "koishi";
+import { Service, type Context } from "koishi";
+import type Logger from "reggol";
+import Schema from "schemastery";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
 import type { IshikiMessageCreated } from "../types.js";
 import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
-import { StandardWakeupInstance, type StandardWakeupConfig } from "./standard.engine.js";
+import { StandardWakeupInstance, StandardWakeupConfig } from "./standard.engine.js";
 
 const DEFAULT_JEV_WAKEUP: Omit<JevWakeupConfig, "apiKey"> = {
   model: "jev-latest",
@@ -73,6 +75,26 @@ export interface JevWakeupConfig {
   interests: string[];
   rules: Partial<StandardWakeupConfig>;
 }
+
+export const JevWakeupConfig = Schema.object({
+  apiKey: Schema.string().role("secret").description("Typesafe API 密钥，留空读取 TYPESAFE_API_KEY"),
+  model: Schema.string().default("jev-latest").description("判定模型"),
+  endpoint: Schema.string().default("https://api.typesafe.ai/v1/systemone").description("判定接口地址"),
+  threshold: Schema.number().min(0).max(1).default(0.5).description("判定为需要回应的分数阈值"),
+  cooldownMs: Schema.number().min(0).default(30_000).description("两次判定之间的冷却时间"),
+  timeoutMs: Schema.number().min(100).default(1_500).description("判定请求超时时间"),
+  historyMessages: Schema.number().min(0).default(8).description("参与判定的历史消息数量"),
+  instruction: Schema.string().role("textarea").default("").description("附加判定说明"),
+  interests: Schema.array(Schema.string()).default([]).description("感兴趣的议题"),
+  rules: Schema.object({
+    direct: Schema.boolean().default(true).description("私聊消息直接唤醒"),
+    atSelf: Schema.boolean().default(true).description("提及机器人时唤醒"),
+    quoteSelf: Schema.boolean().default(false).description("引用机器人消息时唤醒"),
+    keywords: Schema.array(Schema.string()).default([]).description("包含任一关键词时唤醒"),
+  })
+    .required(false)
+    .description("不需要判定即可唤醒的规则"),
+});
 
 function atLeast(value: number | undefined, floor: number, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= floor ? value : fallback;
@@ -423,6 +445,8 @@ declare module "./engine.js" {
 }
 
 export class JevWakeupEngine extends WakeupEngine<"jev"> {
+  public readonly Schema = JevWakeupConfig;
+
   constructor(ctx: Context) {
     super(ctx, "jev");
   }

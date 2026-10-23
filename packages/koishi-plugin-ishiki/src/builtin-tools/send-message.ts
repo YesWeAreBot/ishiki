@@ -1,5 +1,6 @@
 import { jsonSchema, tool, type Tool } from "@yesimagent/core";
-import { Context, h, Logger, sleep } from "koishi";
+import { Context, h, sleep } from "koishi";
+import type Logger from "reggol";
 
 import { matchesChannel, type InstanceDomain, type TypingConfig } from "../profile/index.js";
 import type { ResourceCenter } from "../resource/center.js";
