@@ -3,6 +3,7 @@ import { computed } from "vue";
 
 import { schemaDefaults } from "../lib/schema";
 import type { SchemaNode } from "../types";
+import ModelReferenceSelect from "./ModelReferenceSelect.vue";
 import ToggleSwitch from "./ToggleSwitch.vue";
 
 defineOptions({ name: "SchemaForm" });
@@ -73,6 +74,14 @@ const dictEntries = computed<Array<[string, unknown]>>(() =>
     ? Object.entries(props.modelValue as Record<string, unknown>)
     : [],
 );
+
+/** 复杂控件独占整行，标量字段在宽屏下并排。 */
+function isWide(node: SchemaNode): boolean {
+  if (node.type === "object" || node.type === "intersect" || node.type === "array" || node.type === "dict" || node.type === "any") return true;
+  if (node.type === "string" && (node.meta.role === "textarea" || node.meta.role === "model")) return true;
+  if (node.type === "union") return (node.list ?? []).some((item) => item.type !== "const");
+  return false;
+}
 
 function updateField(key: string, value: unknown): void {
   emit("update:modelValue", { ...record.value, [key]: value });
@@ -145,7 +154,12 @@ function onJson(event: Event): void {
 
 <template>
   <div v-if="kind === 'object' || kind === 'intersect'" class="schema-object">
-    <div v-for="[key, child] in fields.filter(([, node]) => node.type !== 'const')" :key="key" class="schema-field">
+    <div
+      v-for="[key, child] in fields.filter(([, node]) => node.type !== 'const')"
+      :key="key"
+      class="schema-field"
+      :class="{ 'is-wide': isWide(child), 'is-inline': child.type === 'boolean' }"
+    >
       <span class="field-label">
         {{ typeof child.meta.description === "string" ? child.meta.description : key }}
         <span v-if="child.meta.required === true" class="required" aria-hidden="true">*</span>
@@ -176,6 +190,14 @@ function onJson(event: Event): void {
     :disabled="disabled"
     @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
   ></textarea>
+
+  <ModelReferenceSelect
+    v-else-if="kind === 'string' && meta.role === 'model'"
+    :model-value="textValue"
+    :disabled="disabled"
+    :required="required"
+    @update:model-value="emit('update:modelValue', $event)"
+  />
 
   <input
     v-else-if="kind === 'string'"
@@ -223,14 +245,22 @@ function onJson(event: Event): void {
   </div>
 
   <div v-else-if="kind === 'dict'" class="schema-list">
-    <div v-for="[key, value] in dictEntries" :key="key" class="schema-row">
-      <input class="input" :value="key" :disabled="disabled" @change="renameDictItem(key, ($event.target as HTMLInputElement).value)" />
-      <SchemaForm
-        :schema="schema.inner ?? { type: 'any', meta: {} }"
-        :model-value="value"
+    <div v-for="[key, value] in dictEntries" :key="key" class="schema-dict-row">
+      <input
+        class="input schema-dict-key"
+        :value="key"
         :disabled="disabled"
-        @update:model-value="setDictItem(key, $event)"
+        placeholder="键名"
+        @change="renameDictItem(key, ($event.target as HTMLInputElement).value)"
       />
+      <div class="schema-dict-value">
+        <SchemaForm
+          :schema="schema.inner ?? { type: 'any', meta: {} }"
+          :model-value="value"
+          :disabled="disabled"
+          @update:model-value="setDictItem(key, $event)"
+        />
+      </div>
       <button type="button" class="btn btn-ghost btn-sm" :disabled="disabled" @click="removeDictItem(key)">移除</button>
     </div>
     <button type="button" class="btn btn-soft btn-sm" :disabled="disabled" @click="addDictEntry">添加</button>

@@ -221,12 +221,7 @@ function openRuntimeSession(sessionId: string): void {
           </div>
         </div>
 
-        <div class="form-grid three" style="margin-top: 12px">
-          <div>
-            <div class="field-label">修订版本</div>
-            <div class="mono small" style="margin-top: 4px">{{ profile.revision }}</div>
-            <div class="field-hint">保存时用于冲突检测。</div>
-          </div>
+        <div class="form-grid" style="margin-top: 12px">
           <div>
             <div class="field-label">运行实例</div>
             <div class="mono small" style="margin-top: 4px">{{ runtimes.length }} 个</div>

@@ -463,7 +463,6 @@ const personaPath = computed(() => {
         </div>
         <div class="panel-actions">
           <span v-if="dirty" class="badge badge-warning">未保存</span>
-          <span class="badge badge-outline mono">修订 {{ profile.revision.slice(0, 12) }}</span>
         </div>
       </div>
 

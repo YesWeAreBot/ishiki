@@ -2,7 +2,6 @@
 import { computed, defineAsyncComponent, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import Icon from "./components/Icon.vue";
 import ToastHost from "./components/ToastHost.vue";
 import { useIshikiTheme } from "./lib/theme";
 
@@ -14,6 +13,13 @@ interface PageEntry {
   label: string;
   icon: string;
   component: Component;
+}
+
+interface NavNode {
+  id: string;
+  label: string;
+  page?: PageEntry;
+  children?: NavNode[];
 }
 
 const pages: PageEntry[] = [
@@ -30,6 +36,15 @@ const groups = [
   { label: "运行", ids: ["models", "profiles", "runtimes", "sessions"] },
   { label: "观测", ids: ["usage", "audit", "cache"] },
 ] as const;
+
+const navTree: NavNode[] = groups.map((group) => ({
+  id: `group:${group.label}`,
+  label: group.label,
+  children: group.ids.flatMap((id) => {
+    const page = pages.find((entry) => entry.id === id);
+    return page === undefined ? [] : [{ id: page.id, label: page.label, page }];
+  }),
+}));
 
 const route = useRoute();
 const router = useRouter();
@@ -52,54 +67,34 @@ function go(page: PageEntry): void {
   if (route.path === page.path) return;
   void router.push(page.path);
 }
+
+function onNodeClick(node: NavNode): void {
+  if (node.page !== undefined) go(node.page);
+}
 </script>
 
 <template>
   <k-layout main="darker">
+    <template #left>
+      <el-scrollbar>
+        <el-tree
+          :data="navTree"
+          node-key="id"
+          :default-expand-all="true"
+          :current-node-key="activeId"
+          :highlight-current="true"
+          :expand-on-click-node="true"
+          @node-click="onNodeClick"
+        >
+          <template #default="{ data }">
+            <span class="label" :class="{ active: data.page !== undefined && data.id === activeId }">{{ data.label }}</span>
+          </template>
+        </el-tree>
+      </el-scrollbar>
+    </template>
+
     <div class="ishiki-root console-root" :class="{ 'is-dark': isDark }">
-      <div class="app-shell">
-        <aside class="sidebar">
-          <div class="brand">
-            <div class="brand-mark" aria-hidden="true">
-              <Icon name="models" :size="17" />
-            </div>
-            <div class="brand-text">
-              <div class="brand-name">Ishiki</div>
-              <div class="brand-sub">管理控制台</div>
-            </div>
-          </div>
-
-          <nav class="nav" aria-label="Ishiki 页面">
-            <div v-for="group in groups" :key="group.label" class="nav-group">
-              <div class="nav-label">{{ group.label }}</div>
-              <a
-                v-for="id in group.ids"
-                :key="id"
-                :href="pages.find((page) => page.id === id)?.path"
-                class="nav-item"
-                :class="{ active: activeId === id }"
-                :aria-current="activeId === id ? 'page' : undefined"
-                @click.prevent="go(pages.find((page) => page.id === id)!)"
-              >
-                <Icon :name="pages.find((page) => page.id === id)!.icon" :size="16" />
-                <span>{{ pages.find((page) => page.id === id)!.label }}</span>
-              </a>
-            </div>
-          </nav>
-
-          <div class="sidebar-foot">
-            <div class="sidebar-note">
-              <span class="dot" aria-hidden="true"></span>
-              <span>实时数据服务</span>
-            </div>
-            <div class="sidebar-hint">保存会写入磁盘，运行状态随控制台推送刷新。</div>
-          </div>
-        </aside>
-
-        <div class="main">
-          <component :is="current.component" :key="activeId" />
-        </div>
-      </div>
+      <component :is="current.component" :key="activeId" />
       <ToastHost />
     </div>
   </k-layout>

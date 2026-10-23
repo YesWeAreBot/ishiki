@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
 - Per-profile `pacing` step budget: `maxSteps` caps one waking (default 20), `wrapUpSteps` (default 2) reminds the model before the cap so the last step sends something, and `progressAt` (default 8) asks once for a mid-task progress bubble. Both reminders ride only the affected request and never enter the stored transcript; `0` disables either one.
 - Image lifetimes for attachments: `once` (default; consumed only when the image-bearing response is persisted), `recent` (keep the latest viewed images, pruned in batches), and `retain` (stay eligible while the source record remains in context). `attachment.recentImageCount` (default 3) and `attachment.imagePruneBatchSize` (default 2) control pruning; final codemode `attachments[]` items and direct `read` calls under `imageInput` can override the lifetime.
 - Incremental tool catalogs with `catalogMode`, `fullSnapshotEvery`, and `knownIndex`; incremental updates send only new, changed, or removed tools, with catalog-version recovery after context compaction.
@@ -36,9 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Console broadcasts `models.changed`, `profiles.changed`, `runtimes.changed` and `sessions.appended`; clients refetch authoritative snapshots instead of merging event payloads.
 - Single-entry Ishiki console built into a package-local `dist` bundle by `yakumo-client`, with schema-driven forms and management snapshots
 - Revision-checked management interfaces for models, profiles, runtimes, sessions, usage and audit, with secret redaction and atomic saves
+- Ishiki console under `client/`, built by `yakumo-client`: one console entry hosts model, model-group, provider, profile, session, runtime, usage, audit and cache views. Pages read real runtime data through `@koishijs/client` data services and write through authority-checked RPC listeners
+- The console model field is a catalog-aware picker: choose a model or model group plus its thinking level, and references missing from the catalog survive edits to other fields
 
 ### Changed
-
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`.
 - Request projection tracks image delivery per item: `once` commits only when the image-bearing response is persisted (the ledger entry is appended with that response), `recent` keeps the latest viewed images and prunes the oldest viewed in batches, `retain` stays eligible while its source record survives, and failed or aborted steps do not consume. Terminal rejections are stated once, and projected message prefixes keep their order, IDs and timestamps until selection or pruning changes.
 - Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order.
@@ -65,9 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Runtime profile directories are flat: the remaining segments of a runtime key join with underscores instead of nesting, after unsafe filename characters are replaced
 - The plugin entrypoint no longer re-exports the debugger module
 - The console client build runs through the new `yakumo-client` yakumo plugin, replacing the package's own Vite config
+- The console drops its sidebar shell and revision badges, and schema forms span wide fields across both columns
 
 ### Removed
-
 - The `toolsearch` profile section, the standalone `search` tool, `ishiki.tools.catalog` messages, and the incremental catalog state machine. Discovery now lives inside codemode as the `searchTools` and `describeTool` globals, which never change the callable set or the model schema.
 - `codemode.maxToolInputBytes`, `codemode.maxToolOutputBytes` and `codemode.maxResultBytes`: the sandbox uses its own output and store limits, and the model preview budget is `codemode.maxOutputTokens`. Profiles that still set them fail activation with an explicit migration error.
 - The `@ai-sdk/code-mode` dependency and its `vendor/tool-prompt.ts` description builder; declarations come from `@earendil-works/pi-codemode`.
@@ -79,7 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `attachment.maxImageRenders`, replaced by image lifetimes; profiles that still set it fail activation with a migration error
 
 ### Fixed
-
 - Assets without a directly downloadable source return `resource_unavailable` with their metadata URL and platform-neutral recovery guidance. HTTP fetch errors retain status or network error codes without exposing source URLs.
 - Codemode instructions keep temporary download URLs in local variables across tool calls within one execution and return only the final operation's result.
 - Declared `msgs` wake windows count committed inbound input again: the wait machine subscribes to `message.appended` and `turn.start` to arm, count, and fire them.

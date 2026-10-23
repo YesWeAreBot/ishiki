@@ -148,7 +148,7 @@ export interface ProfileConfig {
 }
 
 export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
-  model: Schema.string().required().description("模型或模型组引用，Profile 的输入会发送到这里"),
+  model: Schema.string().required().role("model").description("模型或模型组引用，Profile 的输入会发送到这里"),
   instructions: Schema.array(Schema.string()).description("按顺序读取的指令文件，路径相对于 Profile 目录").default(["PERSONA.md"]),
   mode: Schema.union(["channel", "cross"]).description("channel 为每个频道创建独立实例，cross 在一个实例里汇合多个频道").default("channel"),
   channels: Schema.dict(Schema.array(Schema.string())).description("频道认领表，键为 platform:selfId，值为 include/exclude 模式"),
