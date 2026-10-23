@@ -107,9 +107,9 @@ channels:
 </Step>
 <Step>
 
-### 写下人格
+### 写下指令文件
 
-创建同目录下的 `persona.md`：
+创建同目录下的 `PERSONA.md`（`instructions` 的缺省值）：
 
 ```markdown
 你是小雪。表达清晰，保留自己的判断与好奇心。
@@ -117,7 +117,7 @@ channels:
 需要向对方表达时，直接说明结果。
 ```
 
-人格会进入系统提示词。同一 profile 派生的 runtime 使用同一份人格声明。
+`instructions` 列出注入系统提示词末尾的文件，按声明顺序拼接；相对路径以 profile 目录为准，也可以写绝对路径。文件缺失只记录日志警告，profile 仍会启动。
 
 </Step>
 <Step>
@@ -151,10 +151,10 @@ data/ishiki
 └── profiles
     └── my-first
         ├── profile.yml
-        └── persona.md
+        └── PERSONA.md
 ```
 
-runtime 创建后，profile 下会生成 `runtimes/`，保存实例的会话日志和资源。修改模型、profile 或人格文件后，需要重新加载插件；更新源码后，需要重新执行 `bun run build`。
+runtime 创建后，profile 下会生成 `runtimes/`，保存实例的会话日志和资源。修改模型、profile 或指令文件后，需要重新加载插件；更新源码后，需要重新执行 `bun run build`。
 
 ## 增加能力
 

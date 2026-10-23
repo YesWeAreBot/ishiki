@@ -125,7 +125,7 @@ bun install
 bun run build
 ```
 
-Then link the core plugin, configure `models.yaml`, and create your first `profile.yml` and `persona.md`:
+Then link the core plugin, configure `models.yaml`, and create your first `profile.yml` and the instruction files it references:
 
 - [Core runtime README](packages/koishi-plugin-ishiki/README.en.md): installation and minimal configuration.
 - [Quick start](https://ishiki.js.org/docs/tutorial/quickstart/): source setup through the first conversation.

@@ -224,7 +224,7 @@ async function run(): Promise<void> {
     enableCodemode: settings.codemode.enable,
     enableImageInput: settings.attachment.imageInput,
     enableReadLifetime: readLifetime,
-    persona,
+    instructions: persona,
   });
   const wake = wakeConfig(rawProfile);
   const runtime = new AgentRuntime({

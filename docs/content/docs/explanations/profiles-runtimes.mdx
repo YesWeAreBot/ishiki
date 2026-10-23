@@ -7,7 +7,7 @@ description: 稳定人格、实例派生与跨频道上下文的组织方式
 
 ## profile：稳定人格的声明
 
-每个 profile 位于 `profiles/<目录名>/`，由 `profile.yml` 或 `profile.yaml`、`persona.md` 及附属文件组成。它声明：
+每个 profile 位于 `profiles/<目录名>/`，由 `profile.yml` 或 `profile.yaml`、`instructions` 引用的文件及附属文件组成。它声明：
 
 - **身份**：人格与系统提示词。
 - **活动范围**：`channels` 中认领的账号、频道与排除项。
@@ -74,7 +74,7 @@ profile 加载与运行分成以下步骤：
 
 工具与提示词在轮次中重新收集。工具撞名等组装错误因此进入该轮次的失败处理。启用 toolsearch 时，初始化还会组装一次工具集并保存初始目录。
 
-profile 配置与人格文件在激活时读取。修改后需要重新加载插件。profile 所需服务被卸载时，对应 route 被移除，已有 runtime 停止；依赖恢复后重新激活，并在后续输入到来时创建实例。
+profile 配置与指令文件在激活时读取。修改后需要重新加载插件。profile 所需服务被卸载时，对应 route 被移除，已有 runtime 停止；依赖恢复后重新激活，并在后续输入到来时创建实例。
 
 ## 为多个 profile 分配频道
 
@@ -101,7 +101,7 @@ channels:
 ## 继续阅读
 
 <Cards>
-  <Card title="编写 profile" description="账号、频道模式、排除项与人格文件" href="/docs/guides/profile" />
+  <Card title="编写 profile" description="账号、频道模式、排除项与指令文件" href="/docs/guides/profile" />
   <Card title="引擎系统" description="选择上下文、模型交互与运行调度的实现" href="/docs/explanations/engines" />
   <Card title="扩展 API 参考" description="引擎、工具与资源的实例契约" href="/docs/reference/api" />
 </Cards>

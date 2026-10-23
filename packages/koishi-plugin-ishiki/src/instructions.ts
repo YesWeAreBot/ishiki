@@ -1,11 +1,30 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+
 import { Template } from "@huggingface/jinja";
 
 export type InstructionOptions = Record<string, unknown> & {
   enableCodemode: boolean;
   enableImageInput: boolean;
   enableReadLifetime: boolean;
-  persona: string;
+  instructions: string;
 };
+
+/** 按声明顺序读取指令文件；相对路径以 profile 目录为准。缺失的文件只记录，不影响其余文件。 */
+export function loadInstructionFiles(files: readonly string[], root: string): { text: string; missing: string[] } {
+  const missing: string[] = [];
+  const parts: string[] = [];
+  for (const file of files) {
+    const target = path.isAbsolute(file) ? file : path.resolve(root, file);
+    if (!existsSync(target)) {
+      missing.push(target);
+      continue;
+    }
+    const text = readFileSync(target, "utf8").trim();
+    if (text.length > 0) parts.push(text);
+  }
+  return { text: parts.join("\n\n"), missing };
+}
 
 export function renderInstructions(items: InstructionOptions): string {
   const system = `You are Ishiki.
@@ -98,8 +117,8 @@ Model-visible results share a 2000-line / 30000-character budget, including cont
 
 To send an existing image to the user, call send_message with mode:"element" and messages:['<img src="artifact://<tool>/<name>"/>']; asset:// URLs also work. Use the actual resource URL from the result. A screenshot or attachment return only makes it available to you; send_message is what sends the message.
 
-{% if persona %}
-{{persona}}
+{% if instructions %}
+{{instructions}}
 {% endif %}
 `;
 

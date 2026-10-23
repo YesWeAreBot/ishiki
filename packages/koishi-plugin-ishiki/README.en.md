@@ -89,9 +89,9 @@ Replace `onebot:BOT_ID` with the adapter's `platform:selfId`, and `CHANNEL_ID` w
 
 The example's engines are also the defaults, so these three sections may be omitted. Each family selects one variant through `engine`, with variant settings in a subsection of the same name.
 
-### 3. Write the persona
+### 3. Write the instruction files
 
-Create `persona.md` in the same profile directory:
+Create `PERSONA.md` in the same profile directory (the default value of `instructions`):
 
 ```markdown
 You are Yuki. Speak clearly, with your own judgment and curiosity.
@@ -99,7 +99,7 @@ Remember what you are working on, and use tools to carry out tasks.
 When you have something to communicate, explain the result directly.
 ```
 
-`persona.md` is included in the system instructions. All runtimes derived from the profile use this persona declaration.
+`instructions` takes a list of files, concatenated in declaration order and appended to the end of the system prompt. Relative paths resolve against the profile directory; absolute paths are also accepted. A missing file logs a warning and does not block startup.
 
 ### 4. Start and check
 

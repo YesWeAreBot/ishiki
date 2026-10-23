@@ -127,7 +127,7 @@ wakeup:
 - `attach` 返回的函数在 runtime 停止时执行。清除定时器、取消订阅、放弃未完成的判断都在这里完成。
 - runtime 按需创建；当前平台接入会在首次输入路由到该频道时创建实例。计时器从 `attach` 开始，随该 runtime 的停止结束。
 - 每次触发前检查 `agent.isIdle()`。忙碌时跳过当前检查，在下一个间隔继续。
-- `agent.continue()` 不带参数时，这一轮基于已有历史开始，不写占位消息。希望这一轮带上说明时，把说明写进 `persona.md` 或扩展的 `extendInstructions`；模型的系统提示词每轮都会读到。也可以调用 `agent.continue("...")`，这段文本会作为该轮开场的一条 user 消息写入事实流。
+- `agent.continue()` 不带参数时，这一轮基于已有历史开始，不写占位消息。希望这一轮带上说明时，把说明写进 `instructions` 引用的文件或扩展的 `extendInstructions`；模型的系统提示词每轮都会读到。也可以调用 `agent.continue("...")`，这段文本会作为该轮开场的一条 user 消息写入事实流。
 - 一个 runtime 在唤醒族只有一个实例，与其他唤醒变体互斥。需要同时响应输入和定时任务时，在同一个实例里组合订阅与计时器。
 
 上下文与工具调用引擎同样继承各自的基类并实现 `[Service.invoke]`，接口细节见[扩展 API 参考](/docs/reference/api)。

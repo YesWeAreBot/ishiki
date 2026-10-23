@@ -14,7 +14,7 @@ import { ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
-import { renderInstructions } from "./instructions.js";
+import { renderInstructions, loadInstructionFiles } from "./instructions.js";
 import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
@@ -177,14 +177,14 @@ class Ishiki extends Service<Ishiki.Config> {
         );
         const contextProvider = ContextEngine.GetService(fiber, settings.context.engine);
         const wakeupProvider = WakeupEngine.GetService(fiber, settings.wakeup.engine);
-        const personaFile = path.join(profile.root, "persona.md");
-        const persona = existsSync(personaFile) ? readFileSync(personaFile, "utf8").trim() : "";
+        const instructionFiles = loadInstructionFiles(settings.instructions, profile.root);
+        for (const file of instructionFiles.missing) this.logger.warn(`[${profile.id}] instruction file missing: ${file}`);
         const readLifetime = settings.attachment.imageInput && !settings.codemode.enable;
         const instructions = renderInstructions({
           enableCodemode: settings.codemode.enable,
           enableImageInput: settings.attachment.imageInput,
           enableReadLifetime: readLifetime,
-          persona,
+          instructions: instructionFiles.text,
         });
         const extensions = Object.entries(profile.extensions).map(([name, config]) => {
           const extension = Extension.GetService(fiber, name);

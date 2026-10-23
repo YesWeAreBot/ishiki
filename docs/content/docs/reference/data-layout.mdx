@@ -14,7 +14,7 @@ data/ishiki
 └── profiles
     └── <profile ID>
         ├── profile.yml
-        ├── persona.md
+        ├── PERSONA.md
         ├── mcp.json
         ├── memory
         └── runtimes
@@ -34,7 +34,7 @@ data/ishiki
 | --- | --- |
 | `models.yaml` | 见[参考：models.yaml](/docs/reference/models-yaml)；首次启动自动创建空文件 |
 | `profiles/<ID>/profile.yml` | 见[参考：插件与 profile 配置](/docs/reference/plugin-config) |
-| `profiles/<ID>/persona.md` | 人设，原样注入系统提示词 |
+| `profiles/<ID>/PERSONA.md` | `instructions` 的缺省文件；文件列表与顺序在 `profile.yml` 中声明 |
 | `profiles/<ID>/mcp.json` | 存在时**整体替换** `.mcp.json` 基线，不是合并 |
 | `profiles/<ID>/memory/*.md` | v3 上下文记忆块，frontmatter 格式见[管理上下文窗口](/docs/guides/context) |
 | `skills/` 与 profile 内技能目录 | workspace 扩展的技能库，格式见[启用工作区](/docs/guides/workspace) |

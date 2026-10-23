@@ -45,7 +45,7 @@ context:
 ```files
 profiles/my-first
 ├── profile.yml
-├── persona.md
+├── PERSONA.md
 └── memory
     ├── relationships.md
     └── projects.md
@@ -108,7 +108,7 @@ toolcall:
 
 ### 调整角色提示词
 
-在 `toolcall.narrative` 中可选配置 `narratorInstructions`、`decoderInstructions`、`replyerInstructions`，分别追加作者、执行解码和表达要求；人设仍来自 `persona.md`。角色继续遵循各自的输入输出约定与宿主权限。
+在 `toolcall.narrative` 中可选配置 `narratorInstructions`、`decoderInstructions`、`replyerInstructions`，分别追加作者、执行解码和表达要求；人设仍来自 `instructions` 引用的文件。角色继续遵循各自的输入输出约定与宿主权限。
 
 <Callout type="warn" title="两个引擎必须配套">
 `toolcall.engine: narrative` 必须搭配 `context.engine: narrative`，否则运行时找不到输入标记而报错；反过来，叙事上下文配普通工具引擎不会报错，但模型看不到剧本约定，叙事效果不成立。唤醒引擎可以独立选择，运行节律由对应的调度机制管理。

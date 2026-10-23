@@ -125,7 +125,7 @@ bun install
 bun run build
 ```
 
-随后链接核心插件，填写 `models.yaml`，创建第一份 `profile.yml` 与 `persona.md`：
+随后链接核心插件，填写 `models.yaml`，创建第一份 `profile.yml` 与它引用的指令文件：
 
 - [核心运行时 README](packages/koishi-plugin-ishiki/README.md)：安装与最小配置。
 - [快速上手](https://ishiki.js.org/docs/tutorial/quickstart/)：从源码接入到第一次对话。

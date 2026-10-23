@@ -44,7 +44,7 @@ description: 用于构建自主 Agent 的 Bot 开发元框架
 
 ## profile 与 runtime
 
-- **profile** 是人格、激活与依赖隔离的单位。一份 `profile.yml` 声明模型、频道认领、三族引擎与 `extends` 扩展，`persona.md` 存放人设。
+- **profile** 是人格、激活与依赖隔离的单位。一份 `profile.yml` 声明模型、频道认领、三族引擎与 `extends` 扩展，`instructions` 引用存放人设的文件。
 - **runtime** 是一个地址上的运行实例。channel 模式按频道各派生一份；cross 模式把认领的频道合流成一份，上下文跨频道共享。
 - 上下文与唤醒实例、事实日志、资源目录按 runtime 独立；模型与工具调用包装按 profile 共享。
 - runtime 按需创建：常见时机是第一条落到该地址的输入；创建后，后续输入与显式唤醒复用同一实例。

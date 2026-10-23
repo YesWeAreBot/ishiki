@@ -61,7 +61,7 @@ profile 激活时，主插件从三段配置里收集服务名，连同 `extends
 
 ## profile、route 与 runtime
 
-- **profile**：`profiles/<目录>/profile.yml`（也接受 `.yaml`）加 `persona.md`。`resolveProfile` 完成 Schema 校验、频道匹配器编译、`enable: false` 扩展剔除。坏掉的目录只跳过它自己。
+- **profile**：`profiles/<目录>/profile.yml`（也接受 `.yaml`）加 `instructions` 引用的文件。`resolveProfile` 完成 Schema 校验、频道匹配器编译、`enable: false` 扩展剔除。坏掉的目录只跳过它自己。
 - **route**：内存里的 `{ profile, runtimes, spawn }`，表示一个 profile 及其全部实例。消息按 `sid = platform:selfId` 找候选 route，再用频道认领名单选出唯一所有者。
 - **runtime**：一个地址上的运行态，key 为 `profile/sid/channel`，cross 模式为 `profile/main`。它持有 core Agent、JSONL 事实日志、资源中心、上下文与唤醒实例、扩展实例。
 
@@ -97,7 +97,7 @@ flowchart TB
     HANDLER --> ISHIKI["Ishiki 服务<br/>profile 加载 · 路由"]
     ISHIKI --> GATEWAY["models.yaml 网关<br/>供应商 · 模型组"]
     ISHIKI --> ROUTE["Route<br/>profile 及其 runtime 集合"]
-    PROFILE["profile.yml · persona.md"] -.->|"激活"| ROUTE
+    PROFILE["profile.yml · instruction files"] -.->|"激活"| ROUTE
 
     GATEWAY --> WRAP["工具调用包装<br/>每 profile 一份"]
     ROUTE -->|"事件投递"| DELIVER
@@ -143,7 +143,7 @@ flowchart TB
 | 事实日志 | 实例的 `events.jsonl`；历史投影的唯一事实来源 |
 | 工具面 | 每轮组装出的工具集合：内核、扩展、`wait`、codemode 与 toolsearch |
 | 资源中心 | 每个 runtime 一份，按 scheme 路由完整 URL |
-| persona | `persona.md`，注入内核提示词的角色描述 |
+| instructions | `profile.yml` 中声明的文件列表，内容按声明顺序注入内核提示词末尾 |
 
 ## 继续阅读
 

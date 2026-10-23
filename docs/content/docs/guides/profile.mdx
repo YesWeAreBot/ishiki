@@ -1,9 +1,9 @@
 ---
 title: 编写 profile
-description: 认领频道、选择运行模式与安置人设
+description: 认领频道、选择运行模式与安置指令文件
 ---
 
-profile 是 Ishiki 的生效单位：一个 profile 声明「用哪个模型、在哪些账号的哪些频道活动、以什么模式运行」。本文覆盖频道认领语法、两种运行模式的选择、多 profile 共存和人设写法。
+profile 是 Ishiki 的生效单位：一个 profile 声明「用哪个模型、在哪些账号的哪些频道活动、以什么模式运行」。本文覆盖频道认领语法、两种运行模式的选择、多 profile 共存和指令文件写法。
 
 文件位置：`<dataPath>/profiles/<目录名>/profile.yml`（`.yaml` 后缀也可以）。**目录名就是 profile ID**，出现在日志和运行时目录名里，建议用有意义的短名。
 
@@ -54,14 +54,20 @@ mode: cross
 
 模式只影响实例粒度，不改变认领规则本身；两种模式的唤醒、上下文、引擎配置完全一致。
 
-## 安置人设
+## 安置指令文件
 
-profile 目录下的 `persona.md` 是人设文件，内容原样注入系统提示词末尾。不写也可以运行，但 bot 会缺少身份感。
+profile 的 `instructions` 字段声明文件列表，文件内容按声明顺序拼接，附加到系统提示词末尾。相对路径以 profile 目录为准，也可以写绝对路径；缺省值为 `[PERSONA.md]`。
+
+```yaml
+instructions: [PERSONA.md, style.md]
+```
+
+文件缺失时只记录日志警告，profile 仍会启动。
 
 ```files
 profiles/my-first
 ├── profile.yml
-└── persona.md
+└── PERSONA.md
 ```
 
 写法没有固定格式，中文即可。两条经验：
@@ -77,10 +83,10 @@ profiles/my-first
 profiles/
 ├── main-bot/        # onebot:10000 的大部分群 + 私聊，channel 模式
 │   ├── profile.yml
-│   └── persona.md
+│   └── PERSONA.md
 ├── work-bot/        # onebot:10000 的某个工作群，cross 模式接另一批账号
 │   ├── profile.yml
-│   └── persona.md
+│   └── PERSONA.md
 └── test-bot/        # 测试号，单独认领
     └── profile.yml
 ```
@@ -91,4 +97,4 @@ profiles/
 
 ## profile 的其余配置去哪查
 
-本文只覆盖了结构性的字段（`model`、`mode`、`channels`、`persona.md`）。唤醒、上下文、工具调用引擎、打字延迟等段落是独立的配置面，各有一篇指南：[唤醒](/docs/guides/wakeup)、[上下文](/docs/guides/context)、[MCP](/docs/guides/mcp)、[工作区](/docs/guides/workspace)。全部字段的表格见[参考：插件与 profile 配置](/docs/reference/plugin-config)。
+本文只覆盖了结构性的字段（`model`、`mode`、`channels`、`instructions`）。唤醒、上下文、工具调用引擎、打字延迟等段落是独立的配置面，各有一篇指南：[唤醒](/docs/guides/wakeup)、[上下文](/docs/guides/context)、[MCP](/docs/guides/mcp)、[工作区](/docs/guides/workspace)。全部字段的表格见[参考：插件与 profile 配置](/docs/reference/plugin-config)。

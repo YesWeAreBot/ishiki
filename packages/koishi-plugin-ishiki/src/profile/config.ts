@@ -120,6 +120,7 @@ export const ProfileExtensionConfig: Schema<ProfileExtensionConfig> = Schema.obj
 
 export interface ProfileSettings {
   model: string;
+  instructions: string[];
   failover: FailoverConfig;
   context: ContextConfig;
   wakeup: WakeupConfig;
@@ -132,6 +133,7 @@ export interface ProfileSettings {
 
 export interface ProfileConfig {
   model: string;
+  instructions?: string[];
   mode: ProfileMode;
   channels?: Record<string, string[]>;
   extends?: Record<string, ProfileExtensionConfig>;
@@ -147,6 +149,7 @@ export interface ProfileConfig {
 
 export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   model: Schema.string().required(),
+  instructions: Schema.array(Schema.string()).default(["PERSONA.md"]),
   mode: Schema.union(["channel", "cross"]).default("channel"),
   channels: Schema.dict(Schema.array(Schema.string())),
   extends: Schema.dict(ProfileExtensionConfig),
@@ -200,6 +203,7 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
     channels: compileChannels(id, config.channels ?? {}),
     settings: {
       model: config.model,
+      instructions: config.instructions ?? ["PERSONA.md"],
       failover: FailoverConfig((config.failover ?? {}) as FailoverConfig),
       // Schema 对缺省段落会给出空对象而非 undefined，这里以 engine 兜底合并。
       context: fillEngine(config.context, "standard"),

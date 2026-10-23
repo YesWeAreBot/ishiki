@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - System prompt rendering moved to `renderInstructions()`, which plugin activation and the harness both reuse
 - Image delivery is tracked per projected item, so failed or aborted steps do not consume a lifetime and message prefixes keep their order, IDs, and timestamps
 - The system prompt states the step budget and the mid-task progress habit after the basic functions, and codemode instructions note the sandbox has no `fetch` or timers
+- Profile `instructions` lists files appended to the end of the system prompt in declaration order (relative to the profile root, or absolute). Missing files log a warning without blocking activation, and the default is `[PERSONA.md]`
 
 ### Removed
 - The `toolsearch` profile section, the standalone `search` tool, `ishiki.tools.catalog` messages, and the incremental catalog state machine. Discovery now lives inside codemode as the `searchTools` and `describeTool` globals, which never change the callable set or the model schema.

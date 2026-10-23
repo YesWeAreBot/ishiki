@@ -47,6 +47,11 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
       description: '模型引用：provider:model[:档位] 或组名',
       required: true,
     },
+    instructions: {
+      type: 'string[]',
+      default: '["PERSONA.md"]',
+      description: '追加到系统提示词末尾的文件，按声明顺序拼接；相对 profile 目录，可写绝对路径；缺失只警告',
+    },
     mode: {
       type: '"channel" | "cross"',
       default: 'channel',
@@ -104,7 +109,7 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
   }}
 />
 
-同目录 `persona.md`：人设，注入系统提示词；`memory/`（v3 上下文且 `memoryBlocks: true` 时）：记忆块；`mcp.json`（mcp-client 扩展）：见[参考：mcp.json](/docs/reference/mcp-json)。
+同目录 `instructions` 列出的文件：追加到系统提示词末尾；`memory/`（v3 上下文且 `memoryBlocks: true` 时）：记忆块；`mcp.json`（mcp-client 扩展）：见[参考：mcp.json](/docs/reference/mcp-json)。
 
 ### narrative 引擎配置
 
