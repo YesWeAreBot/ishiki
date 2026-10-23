@@ -23,9 +23,6 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "scripts": {
-    "console:build": "cd ../.. && yakumo client koishi-plugin-ishiki"
-  },
   "dependencies": {
     "@ai-sdk-tool/parser": "5.1.6",
     "@earendil-works/pi-codemode": "1.4.0",

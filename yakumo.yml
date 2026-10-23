@@ -7,6 +7,8 @@
         - client
       clean:
         - tsc --clean
+    exclude:
+      - docs
 - name: yakumo-tsc
 - name: yakumo-esbuild
 - name: yakumo-vitest
