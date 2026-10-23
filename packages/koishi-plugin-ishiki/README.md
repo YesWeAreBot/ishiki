@@ -126,18 +126,19 @@ cross 模式的上下文带有来源频道坐标。Agent 根据这些坐标选�
 
 [了解 profile 激活、实例派生与共享范围 →](https://ishiki.js.org/docs/explanations/profiles-runtimes/)
 
-## 启用工具编程与按需发现
+## 启用工具编程
 
 在 profile 中启用：
 
 ```yaml
 codemode:
   enable: true
-toolsearch:
-  enable: true
+  direct: []
 ```
 
-两项默认关闭。codemode 将业务工具组织到 QuickJS 程序调用入口；toolsearch 让非常驻工具经 `search` 发现，并从下一步加入可用目录。`send_message` 可直接调用或由程序调用，`finish`、`wait` 保持直接调用。
+默认开启。codemode 把业务工具收进 QuickJS 沙箱，模型写一段 JavaScript 调用它们，中间数据不进入上下文。`send_message` 可直接调用或由程序调用，`finish`、`wait` 保持直接调用；`direct` 列出的业务工具同时保留在模型目录里。
+
+沙箱里有一套确定的环境：`tools["原名"]` 调用宿主工具，`searchTools(query)` 与 `describeTool(name)` 按关键词检索工具声明，`text()` 与 `console.log()` 显式输出，`image()` 保存图片，`store()` 与 `load()` 在会话内保存小状态。脚本的执行结果按 STATUS、WALL TIME、RESULT、TEXT、CONSOLE、ATTACHMENTS、ERROR 分节返回；`// @options` 可以覆盖单次调用的超时与输出预算。
 
 工具结果中的资源可以通过 URL 引用。内核提供 `asset://`、`artifact://`、`local://`；扩展可以增加自己的 scheme，并使用已有的 `read` 读取。每个 runtime 拥有独立资源中心。
 

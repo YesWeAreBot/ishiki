@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createFinish } from "../src/builtin-tools/finish.js";
 import { collapse } from "../src/context/standard.engine.js";
 import type { PacingConfig } from "../src/profile/config.js";
+import { CodemodeConfig } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime, type AgentRuntimeConfig } from "../src/runtime.js";
 
@@ -122,9 +123,8 @@ async function makeRuntime(options: {
     context: { renderMessages: (messages) => collapse(messages) },
     // 主动开轮：本用例只关心步数，不需要消息投递。
     wakeup: { attach: () => () => {} },
-    codemode: { enable: false, direct: [], timeoutMs: 1000 },
+    codemode: CodemodeConfig({ enable: false }),
     pacing: options.pacing,
-    toolsearch: { enable: false, resident: [], maxResults: 5 },
     debugStream: false,
     logger: logger as never,
     resources: new ResourceCenter("pacing", home),

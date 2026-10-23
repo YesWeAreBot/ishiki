@@ -224,7 +224,6 @@ async function run(): Promise<void> {
     enableCodemode: settings.codemode.enable,
     enableImageInput: settings.attachment.imageInput,
     enableReadLifetime: readLifetime,
-    enableToolsearch: settings.toolsearch.enable,
     persona,
   });
   const wake = wakeConfig(rawProfile);
@@ -250,7 +249,6 @@ async function run(): Promise<void> {
     wakeup: new StandardWakeupInstance(wake),
     codemode: settings.codemode,
     pacing: settings.pacing,
-    toolsearch: settings.toolsearch,
     debugStream: false,
     logger: logger as never,
     resources,

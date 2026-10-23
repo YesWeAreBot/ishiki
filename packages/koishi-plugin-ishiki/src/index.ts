@@ -184,7 +184,6 @@ class Ishiki extends Service<Ishiki.Config> {
           enableCodemode: settings.codemode.enable,
           enableImageInput: settings.attachment.imageInput,
           enableReadLifetime: readLifetime,
-          enableToolsearch: settings.toolsearch.enable,
           persona,
         });
         const extensions = Object.entries(profile.extensions).map(([name, config]) => {
@@ -218,7 +217,6 @@ class Ishiki extends Service<Ishiki.Config> {
             wakeup: wakeupProvider(settings.wakeup, context),
             codemode: settings.codemode,
             pacing: settings.pacing,
-            toolsearch: settings.toolsearch,
             debugStream: this.config.debugStream,
             logger: this.logger,
             resources,

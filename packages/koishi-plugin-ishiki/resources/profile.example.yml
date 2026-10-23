@@ -55,20 +55,18 @@ toolcall:
   # hermes / qwen3coder / morph-xml / yaml-xml
   engine: native
 
-# 代码模式：模型改写一段程序，程序在沙箱里调工具，中间数据不出上下文。
-# 与 toolcall 正交——toolcall 管输出协议，这里管工具面。默认关闭。
+# 代码模式：模型写一段 JavaScript，程序在沙箱里调工具，中间数据不出上下文。
+# 与 toolcall 正交——toolcall 管输出协议，这里管工具面。默认开启。
 codemode:
-  enable: false
-  # 哪些工具能被谁调。没写进 direct 的工具收进沙箱、从模型目录里消失，
-  # 只有程序调得到；写进 direct 的工具只留模型目录，程序够不着它。
-  # send_message 固定两处都可达（直调发言省一层程序，程序里也要能说话），
-  # finish 固定只留目录（收尾由模型直调发起，程序里的收尾不该结束轮次）。
+  enable: true
+  # 哪些业务工具还能被模型直接调用。send_message 固定两处都可达（直调发言省一层程序，
+  # 程序里也要能说话），finish 与 wait 固定只留目录（收尾与等待由模型直调发起）。
+  # 这里列出的业务工具同时留在模型目录里，程序里也仍然够得着；没列出的业务工具收进沙箱、
+  # 从模型目录里消失，只有程序的 tools 里调得到。
   direct: []
-  timeoutMs: 30000 # 单次沙箱执行的总时限（毫秒）
-  maxToolInputBytes: 33554432 # 32 MiB，内部 JSON（含 base64）的有限执行预算
-  maxToolOutputBytes: 33554432
-  maxResultBytes: 33554432 # 最终结果先穿过沙箱边界，再由统一出口处理
+  timeoutMs: 30000 # 单次沙箱执行的总时限（毫秒），程序可用 // @options 覆盖
   memoryLimitBytes: 268435456 # 256 MiB，QuickJS 内存预算
+  maxOutputTokens: 10000 # 工具结果里 RESULT / TEXT / CONSOLE 预览的预算，按 4 字符 ≈ 1 token 折算
 
 # 一次唤醒（一轮）的步数预算。maxSteps 是硬上限：走到这一步 runtime 直接结束这一轮，
 # 所以剩下的步数不够时，程序会在每次请求前附一句「还剩几步」的提醒，
@@ -93,7 +91,7 @@ typing:
 # 来源记录被移除时同样释放（含已持久化的交付状态）。
 # retain 在来源记录仍处活动上下文时每轮都可嵌入，由上下文移除来源记录决定何时释放（含已持久化的交付状态）；
 # 本次请求预算不足时暂不携带。
-# 改写生命周期只有两个入口：codemode 最终 attachments[] 的媒体项，或 imageInput 开启时直接 read 的 lifetime 参数。
+# 改写生命周期只有两个入口：codemode 程序通过 image() 保存的图片项，或 imageInput 开启时直接 read 的 lifetime 参数。
 # 工具原始媒体在最终输出阶段归档为 artifact；下一 step 以带来源说明的 user/file 消息加载。
 # codemode 内 read 始终返回 JSON-safe base64，纯文本模型也可将图片传给后续工具。
 # 不自动缩放；超过预算的图片等待容量，不能加载或不支持的媒体逐轮重试并保留 URL 与原因说明。

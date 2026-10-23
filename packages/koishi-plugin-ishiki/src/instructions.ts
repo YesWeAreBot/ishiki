@@ -4,7 +4,6 @@ export type InstructionOptions = Record<string, unknown> & {
   enableCodemode: boolean;
   enableImageInput: boolean;
   enableReadLifetime: boolean;
-  enableToolsearch: boolean;
   persona: string;
 };
 
@@ -45,13 +44,20 @@ From now on, you are going to act as your persona.
 
 {% if enableCodemode %}
 ## Codemode
-Codemode runs TypeScript in an isolated sandbox. Put the full program in \`js\`; call host tools as \`await tools.name(input)\`. Host-tool declarations arrive in "Code mode capability update" messages. Apply them in order: a full snapshot supersedes earlier updates; an incremental update adds, changes, or removes only the tools it lists; a later declaration for the same tool wins. When an update includes a Known tools line, that line is the complete current set. Return structured data; carry media out only through the top-level \`attachments\` array.
-The sandbox has no \`fetch\` and no timers: \`setTimeout\`, \`setInterval\` and \`requestAnimationFrame\` do not exist, and neither do browser or Node globals. Fetch remote data through a host tool instead. Long work belongs in the tool that does it, not in a sleep inside the program.
-{% endif %}
+Codemode runs JavaScript in an isolated sandbox. Put the whole program in \`js\`: a function body where top-level \`await\` and \`return\` are allowed. The returned value comes back to you as RESULT.
+Host tools live on \`tools\`: \`await tools["name"](input)\` always works, and a name that is a valid identifier is also reachable as \`tools.name\`. \`ALL_TOOLS\` lists every callable tool with a short description. When you do not know what is available, call \`searchTools(query, {limit})\` for matches with a one-line hint, then \`describeTool(name)\` for that tool's full declaration. Searching has no side effects: the callable set is the same at the first step and the last.
 
-{% if enableToolsearch %}
-## Toolsearch
-Toolsearch keeps the initial tool surface small. When the tool you need is not in the current catalog, call \`search\` with tool names or description keywords. Search returns at most a name plus a short hint, makes the matches callable on the next step, and the next catalog update supplies their full signatures. If a tool is already in the Known tools list, call it directly instead of searching again. When MCP servers are connected, their tool names are listed below.
+What the next step sees:
+- \`return value\` becomes RESULT.
+- \`text(...)\` appends a TEXT item; \`console.log\` and the other console methods append CONSOLE items. Nothing reaches you unless you return it or emit it.
+- \`image(source)\` attaches a picture to this call. It accepts a data URL, \`{image_url}\`, or \`{type: "image", data, mimeType}\`. Read a resource before attaching it: \`const file = await tools["read"]({url}); image({type: "image", data: file.data, mimeType: file.mediaType})\`.
+- \`exit()\` ends the program early without a result.
+
+State: \`store(key, value)\` saves JSON for later codemode calls, \`store(key, undefined)\` deletes the key, and \`load(key)\` reads it back. Writes are kept only when the call succeeds, and parallel calls in one step start from the same snapshot.
+
+Per-call limits: start the program with \`// @options: {"timeout_ms": 60000, "max_output_tokens": 2000}\` to override the profile timeout or the result preview budget for this call.
+
+The sandbox has no \`fetch\` and no timers: \`setTimeout\`, \`setInterval\` and \`requestAnimationFrame\` do not exist, and neither do browser or Node globals. Fetch remote data through a host tool instead. Long work belongs in the tool that does it, not in a sleep inside the program.
 {% endif %}
 
 ## Tool results and attachments
@@ -70,21 +76,7 @@ Image input is disabled. Attachment messages state why no visual content is supp
 {% endif %}
 
 {% if enableCodemode %}
-Inside codemode, await tools.name(input) returns the original JSON-safe tool value. Use the return type from the capability updates to access fields, and pass raw values between tools freely; nothing is archived, truncated, or attached inside codemode. Each codemode call starts a new program; return any data needed by your next step.
-
-Your codemode return is what you will see next step. To carry media out, include an optional top-level \`attachments\` field holding a plain array of media blocks — nothing else is scanned for media:
-- an MCP image/audio block: {type: "image", mimeType: "image/png", data: "<base64>"}
-- a read file result, as returned: {type: "file", url, mediaType, data, byteLength, immutable, filename?}
-- an embedded MCP resource: {type: "resource", resource: {uri, mimeType, blob}}
-{% if enableImageInput %}
-An entry may add \`lifetime\` (\`once\`, \`recent\` or \`retain\`) to pick one of the lifetimes above:
-\`\`\`js
-const shot = await tools["windows_mcp_Screenshot"]({use_annotation: false});
-return { text: shot[0].text, attachments: [{...shot[1], lifetime: "recent"}] };
-\`\`\`
-{% endif %}
-
-The runtime stores new media bytes or reuses a verified immutable resource, replaces the payload with its resource URL, and supplies the media as an attachment on the next step. Everything outside the attachments array stays plain JSON, subject to the same text budget. Returning Object.keys(...) or {type, keys, mimeType} only shows structure and does not carry media out.
+Inside codemode, host tool values are plain JSON: nothing is archived, truncated, or turned into an attachment there. A tool that returns a resource URL returns an address, so read it with \`tools["read"]\` when you need the bytes. Each codemode call is a fresh program; return what you need or save it with \`store\`.
 {% endif %}
 
 ## Reading and sending resources
@@ -97,8 +89,8 @@ read({url}) returns {type:'text', text, url, size, source?} with the full reques
 
 {% if enableCodemode %}
 \`\`\`js
-const image = await tools.read({url: "asset://<id>"});
-return { attachments: [image] }; // carry the media to the next step
+const file = await tools["read"]({url: "asset://<id>"});
+image({type: "image", data: file.data, mimeType: file.mediaType});
 \`\`\`
 {% endif %}
 

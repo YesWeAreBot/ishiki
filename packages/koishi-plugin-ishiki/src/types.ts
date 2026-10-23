@@ -1,3 +1,4 @@
+import type { CodemodeStoreWrites } from "@earendil-works/pi-codemode";
 import type { CustomMessages } from "@yesimagent/core";
 
 declare module "@yesimagent/core" {
@@ -5,7 +6,10 @@ declare module "@yesimagent/core" {
     "ishiki.message.created": IshikiMessageCreated;
     "ishiki.message.deleted": IshikiMessageDeleted;
     "ishiki.attachment": IshikiAttachment;
-    "ishiki.tools.catalog": IshikiToolsCatalog;
+  }
+
+  interface AgentCustomEntry {
+    "ishiki.codemode.store": IshikiCodemodeStore;
   }
 }
 
@@ -24,6 +28,9 @@ export interface AttachmentItem {
 export type IshikiAttachment =
   | { source: "tool"; toolName: string; toolCallId: string; items: AttachmentItem[] }
   | { source: "platform"; platform: string; selfId: string; channelId: string; messageId: string; items: AttachmentItem[] };
+
+/** Store writes of one codemode call, replayed in entry order to rebuild `store`/`load` state. */
+export type IshikiCodemodeStore = CodemodeStoreWrites & { toolCallId: string };
 
 export interface IshikiEventBase {
   timestamp: number;
@@ -51,24 +58,4 @@ export interface IshikiMessageDeleted extends IshikiEventBase {
   messageId: string;
   userId?: string;
   operatorId?: string;
-}
-
-/**
- * Tool catalog update, persisted into the conversation by the toolsearch
- * runtime. A full snapshot replaces every earlier catalog; an incremental
- * update adds, changes, or removes only the tools it lists.
- */
-export interface IshikiToolsCatalog {
-  /** Catalog text rendered at write time (vendored code-mode renderer). */
-  text: string;
-  /** Visible tool names at write time; informational, for inspection and debugging. */
-  tools: readonly string[];
-  /** Update shape; absent on catalogs written before this field existed. */
-  mode?: "full" | "incremental";
-  /** Monotonic version within one runtime. */
-  version?: number;
-  /** Complete visible tool-name set at write time. */
-  known?: readonly string[];
-  /** Tools removed by this update. */
-  removed?: readonly string[];
 }

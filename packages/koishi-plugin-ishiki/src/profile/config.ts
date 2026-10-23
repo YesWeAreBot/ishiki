@@ -54,28 +54,19 @@ export interface CodemodeConfig {
   enable: boolean;
   direct: string[];
   timeoutMs: number;
-  maxToolInputBytes?: number;
-  maxToolOutputBytes?: number;
-  maxResultBytes?: number;
-  memoryLimitBytes?: number;
+  memoryLimitBytes: number;
+  maxOutputTokens: number;
 }
 
 export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
-  enable: Schema.boolean().default(false),
+  enable: Schema.boolean().default(true),
   direct: Schema.array(Schema.string()).default([]),
-  timeoutMs: Schema.number().min(1).default(30_000),
-  maxToolInputBytes: Schema.number()
-    .min(1)
-    .default(32 * 1024 * 1024),
-  maxToolOutputBytes: Schema.number()
-    .min(1)
-    .default(32 * 1024 * 1024),
-  maxResultBytes: Schema.number()
-    .min(1)
-    .default(32 * 1024 * 1024),
+  timeoutMs: Schema.number().min(1).description("单次执行的超时时间（毫秒），脚本里的 @options 可以覆盖").default(30_000),
   memoryLimitBytes: Schema.number()
     .min(1)
+    .description("沙箱内存上限（字节），创建时固定")
     .default(256 * 1024 * 1024),
+  maxOutputTokens: Schema.number().min(0).description("工具结果里 RESULT/TEXT/CONSOLE 预览的字符预算（按每 token 4 字符折算），0 表示省略预览").default(10_000),
 });
 
 export interface PacingConfig {
@@ -91,29 +82,6 @@ export const PacingConfig: Schema<PacingConfig> = Schema.object({
   maxSteps: Schema.number().min(1).default(20),
   wrapUpSteps: Schema.number().min(0).default(2),
   progressAt: Schema.number().min(0).default(8),
-});
-
-export interface ToolsearchConfig {
-  enable: boolean;
-  /** 额外常驻工具名；未列出的工具（builtin 保底之外）进入延迟池 */
-  resident: string[];
-  /** 单次 search 最多加载的工具数 */
-  maxResults: number;
-  /** catalog 更新策略：incremental 只发新增/变更/删除，replace 每次发完整快照 */
-  catalogMode?: "incremental" | "replace";
-  /** incremental 模式下每隔多少次更新补一份完整快照；0 表示不按次数补 */
-  fullSnapshotEvery?: number;
-  /** incremental 模式下是否在更新末尾附带当前完整工具名列表 */
-  knownIndex?: boolean;
-}
-
-export const ToolsearchConfig: Schema<ToolsearchConfig> = Schema.object({
-  enable: Schema.boolean().default(false),
-  resident: Schema.array(Schema.string()).default([]),
-  maxResults: Schema.number().default(5),
-  catalogMode: Schema.union(["incremental", "replace"]).default("incremental"),
-  fullSnapshotEvery: Schema.number().min(0).default(8),
-  knownIndex: Schema.boolean().default(true),
 });
 
 export interface FailoverConfig {
@@ -158,7 +126,6 @@ export interface ProfileSettings {
   toolcall: ToolcallConfig;
   codemode: CodemodeConfig;
   pacing: PacingConfig;
-  toolsearch: ToolsearchConfig;
   typing: TypingConfig;
   attachment: AttachmentConfig;
 }
@@ -174,7 +141,6 @@ export interface ProfileConfig {
   toolcall?: ToolcallConfig;
   codemode?: CodemodeConfig;
   pacing?: PacingConfig;
-  toolsearch?: ToolsearchConfig;
   typing?: TypingConfig;
   attachment?: AttachmentConfig;
 }
@@ -190,7 +156,6 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   toolcall: Schema.union([ToolcallConfig, Schema.any()]),
   codemode: CodemodeConfig,
   pacing: PacingConfig,
-  toolsearch: ToolsearchConfig,
   typing: TypingConfig,
   attachment: AttachmentConfig,
 });
@@ -205,13 +170,28 @@ export interface Profile {
   readonly extensions: Readonly<Record<string, unknown>>;
 }
 
-export function resolveProfile(raw: unknown, id: string, root: string): Profile {
-  if (raw !== null && typeof raw === "object" && "attachment" in raw) {
-    const attachment = raw.attachment;
-    if (attachment !== null && typeof attachment === "object" && "maxImageRenders" in attachment) {
-      throw new Error("attachment.maxImageRenders was removed; use image lifetimes (once, recent, retain) and attachment.recentImageCount/imagePruneBatchSize");
+/** 已删除的配置项必须报错，不能悄悄忽略：旧 profile 里的它们代表一整套旧运行时语义。 */
+function assertSupportedFields(raw: unknown): void {
+  if (typeof raw !== "object" || raw === null) return;
+  const config = raw as Record<string, unknown>;
+  const attachment = config.attachment;
+  if (typeof attachment === "object" && attachment !== null && "maxImageRenders" in attachment) {
+    throw new Error("attachment.maxImageRenders was removed; use image lifetimes (once, recent, retain) and attachment.recentImageCount/imagePruneBatchSize");
+  }
+  if ("toolsearch" in config) {
+    throw new Error("toolsearch was removed; codemode scripts search host tools with the searchTools/describeTool globals, delete the toolsearch section");
+  }
+  const codemode = config.codemode;
+  if (typeof codemode === "object" && codemode !== null) {
+    const removed = ["maxToolInputBytes", "maxToolOutputBytes", "maxResultBytes"].filter((key) => key in codemode);
+    if (removed.length > 0) {
+      throw new Error(`codemode.${removed.join("/")} were removed; use codemode.timeoutMs, codemode.memoryLimitBytes and codemode.maxOutputTokens`);
     }
   }
+}
+
+export function resolveProfile(raw: unknown, id: string, root: string): Profile {
+  assertSupportedFields(raw);
   const config = ProfileConfig(raw as ProfileConfig);
   return {
     id,
@@ -227,7 +207,6 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       toolcall: fillEngine(config.toolcall, "native"),
       codemode: CodemodeConfig((config.codemode ?? {}) as CodemodeConfig),
       pacing: PacingConfig((config.pacing ?? {}) as PacingConfig),
-      toolsearch: ToolsearchConfig((config.toolsearch ?? {}) as ToolsearchConfig),
       typing: TypingConfig((config.typing ?? {}) as TypingConfig),
       attachment: AttachmentConfig((config.attachment ?? {}) as AttachmentConfig),
     },

@@ -126,18 +126,19 @@ Cross-mode context includes source-channel coordinates. The Agent uses them to c
 
 [Profile activation, runtime creation, and sharing →](https://ishiki.js.org/docs/explanations/profiles-runtimes/)
 
-## Enable code and on-demand tool discovery
+## Enable code tool programming
 
 Add to the profile:
 
 ```yaml
 codemode:
   enable: true
-toolsearch:
-  enable: true
+  direct: []
 ```
 
-Both features are disabled by default. codemode exposes business tools through a QuickJS program entry point. toolsearch makes non-resident tools discoverable through `search`, with matches entering the available catalog from the next step. `send_message` supports direct and programmatic calls; `finish` and `wait` stay directly callable.
+It is on by default. codemode moves business tools into a QuickJS sandbox: the model writes a JavaScript program that calls them, and intermediate data never enters the context. `send_message` works both directly and from a program; `finish` and `wait` stay directly callable. Tools listed in `direct` also remain in the model catalog.
+
+The sandbox exposes a fixed environment: `tools["name"]` calls host tools, `searchTools(query)` and `describeTool(name)` look declarations up by keyword, `text()` and `console.log()` emit output, `image()` stores images, and `store()`/`load()` keep small session state. Results come back in STATUS, WALL TIME, RESULT, TEXT, CONSOLE, ATTACHMENTS and ERROR sections, and `// @options` overrides the timeout and output budget for one call.
 
 Resources in tool results can be carried as URLs. The core provides `asset://`, `artifact://`, and `local://`. Extensions can add schemes that use the same `read` interface. Each runtime has its own resource center.
 

@@ -25,7 +25,7 @@ import { createReadTool } from "../src/builtin-tools/read.js";
 import { createSendMessage } from "../src/builtin-tools/send-message.js";
 import { collapse } from "../src/context/standard.engine.js";
 import { FailoverModel } from "../src/failover.js";
-import { CodemodeConfig, resolveProfile, ToolsearchConfig, TypingConfig } from "../src/profile/config.js";
+import { CodemodeConfig, resolveProfile, TypingConfig } from "../src/profile/config.js";
 import { supportsImageInput } from "../src/resource/capabilities.js";
 import { captureResources } from "../src/resource/capture.js";
 import { ResourceCenter } from "../src/resource/center.js";
@@ -678,11 +678,9 @@ function imageUrls(body: ProviderBody): string[] {
 async function scenario(options: {
   codemode?: boolean;
   visual?: boolean;
-  search?: boolean;
   failover?: boolean;
   maxImageBytes?: number;
   maxImageCount?: number;
-  maxToolOutputBytes?: number;
   direct?: string[];
   steps: (index: number, bodies: ProviderBody[]) => Call[];
   tools?: ToolSet;
@@ -728,9 +726,8 @@ async function scenario(options: {
     },
     // 真实 standard 引擎：run() 投递的 created 事实都是私聊，逐条开轮。
     wakeup: new StandardWakeupInstance(),
-    codemode: CodemodeConfig({ enable: options.codemode ?? true, direct: options.direct ?? [], maxToolOutputBytes: options.maxToolOutputBytes } as never),
+    codemode: CodemodeConfig({ enable: options.codemode ?? true, direct: options.direct ?? [] } as never),
     pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0 },
-    toolsearch: ToolsearchConfig({ enable: options.search ?? false, resident: options.search ? Object.keys(options.tools ?? {}) : [] } as never),
     debugStream: false,
     logger,
     attachment: AttachmentConfig({
@@ -801,35 +798,44 @@ function screenshotTool(blocks: () => ScreenshotBlock[]) {
 const emptyInput = jsonSchema({ type: "object", properties: {} });
 
 describe("real Agent / codemode / provider smoke", () => {
-  it("keeps a field inspection return as plain JSON with no media side effects", async () => {
+  it("reports a script return as text sections with no media side effects", async () => {
     const blocks: ScreenshotBlock[] = [
       { type: "text", text: "fixture" },
       { type: "image", mimeType: "image/png", data: PNG },
     ];
-    const metadata = blocks.map((x) => ({ type: x.type, keys: Object.keys(x), mimeType: x.type === "image" ? x.mimeType : undefined }));
     const probe = await scenario({
-      direct: ["inspect"],
       tools: {
         Screenshot: tool({ inputSchema: emptyInput, execute: async () => blocks }),
-        inspect: tool({ inputSchema: emptyInput, execute: async () => metadata }),
       },
-      steps: (index) => (index === 0 ? [{ name: "inspect", id: "inspection", input: {} }] : [{ name: "finish", input: {} }]),
+      steps: (index) =>
+        index === 0
+          ? [
+              {
+                name: "codemode",
+                id: "inspection",
+                input: { js: "const shot = await tools.Screenshot({}); return shot.map((block) => ({ type: block.type, keys: Object.keys(block) }));" },
+              },
+            ]
+          : [{ name: "finish", input: {} }],
     });
     const messages = await probe.run();
-    expect(results(messages)[0]?.output).toEqual({ type: "json", value: metadata });
-    expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toEqual([]);
+    const output = results(messages)[0]!.output;
+    expect(output.type).toBe("text");
+    expect(textOf(output)).toContain("=== STATUS ===\ncompleted");
+    expect(textOf(output)).toContain('{"type":"text","keys":["type","text"]}');
+    expect(textOf(output)).not.toContain("=== ATTACHMENTS ===");
     expect(await probe.resources.store.namespaces("artifact")).toEqual([]);
+    expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toEqual([]);
     expect(probe.bodies).toHaveLength(2);
     expect(imageUrls(probe.bodies[1]!)).toHaveLength(0);
   });
 
-  it("passes a result over 1 MiB to a second host tool, archives only the outer return, then sends a user image", async () => {
+  it("passes a result over 1 MiB to a second host tool, then attaches an explicit image", async () => {
     const bytes = Buffer.concat([PNG_BUFFER, Buffer.alloc(900000)]);
     const base64 = bytes.toString("base64");
     let nativeCalls = 0;
     let received = "";
     const probe = await scenario({
-      search: true,
       tools: {
         Screenshot: tool({
           inputSchema: emptyInput,
@@ -857,7 +863,7 @@ describe("real Agent / codemode / provider smoke", () => {
                 name: "codemode",
                 id: "outer",
                 input: {
-                  js: "const shot = await tools.Screenshot({}); const processed = await tools.process_image({data: shot[1].data}); return {text: shot[0].text, attachments: [shot[1]], processed};",
+                  js: 'const shot = await tools.Screenshot({}); const processed = await tools.process_image({data: shot[1].data}); image({type: "image", data: shot[1].data, mimeType: "image/png"}); return {text: shot[0].text, processed};',
                 },
               },
             ]
@@ -883,31 +889,7 @@ describe("real Agent / codemode / provider smoke", () => {
     expect(JSON.stringify(probe.bodies[1]!.messages.filter((m) => m.role === "tool"))).not.toContain(base64.slice(0, 200));
   }, 20000);
 
-  it("preserves SDK host-output limits without an automatic resource fallback", async () => {
-    let nativeCalls = 0;
-    const probe = await scenario({
-      maxToolOutputBytes: 1024,
-      tools: {
-        large: tool({
-          inputSchema: emptyInput,
-          execute: async () => "x".repeat(8000),
-          toModelOutput: () => {
-            nativeCalls++;
-            throw new Error("internal conversion ran");
-          },
-        }),
-      },
-      steps: (index) => (index === 0 ? [{ name: "codemode", input: { js: "await tools.large({}); return {ok:true};" } }] : [{ name: "finish", input: {} }]),
-    });
-    const messages = await probe.run();
-    const result = results(messages).find((part) => part.toolName === "codemode");
-    expect(["error-text", "error-json"]).toContain(result?.output.type);
-    expect(nativeCalls).toBe(0);
-    expect(await probe.resources.store.namespaces("artifact")).toEqual([]);
-    expect(messages.filter((message) => message.role === "custom" && message.type === "ishiki.attachment")).toEqual([]);
-  });
-
-  it("does not archive or project internal media when the outer return contains only status", async () => {
+  it("does not archive or project internal media when the script returns only status", async () => {
     const probe = await scenario({
       tools: { Screenshot: tool({ inputSchema: emptyInput, execute: async () => [{ type: "image", mimeType: "image/png", data: PNG }] }) },
       steps: (index) =>
@@ -986,20 +968,28 @@ describe("real Agent / codemode / provider smoke", () => {
     expect(imageUrls(probe.bodies[3]!)).toHaveLength(0);
   });
 
-  it("lets read reuse platform media through the attachments array without artifact chains", async () => {
+  it("turns a host read result into an attachment through the native image helper", async () => {
     const probe = await scenario({
       steps: (index, bodies) => {
         if (index > 0) return [{ name: "finish", input: {} }];
         const match = /asset:\/\/[a-f0-9]{32}/.exec(JSON.stringify(bodies[0]));
-        return [{ name: "codemode", input: { js: `const image = await tools.read({url:${JSON.stringify(match![0])}}); return {attachments: [image]};` } }];
+        return [
+          {
+            name: "codemode",
+            id: "attach",
+            input: {
+              js: `const file = await tools.read({url:${JSON.stringify(match![0])}}); image({type: "image", data: file.data, mimeType: file.mediaType}); return {byteLength: file.byteLength};`,
+            },
+          },
+        ];
       },
     });
     const messages = await probe.run(`<img src="data:image/png;base64,${PNG}"/>`);
     expect(imageUrls(probe.bodies[0]!)).toHaveLength(1);
-    expect(imageUrls(probe.bodies[1]!)).toHaveLength(1);
-    expect(await probe.resources.store.names("artifact", "codemode")).toEqual([]);
+    expect(imageUrls(probe.bodies[1]!)).toEqual([`data:image/png;base64,${PNG}`]);
     expect(await probe.resources.store.names("artifact", "read")).toEqual([]);
-    expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toHaveLength(2); // platform + read
+    expect(await probe.resources.store.names("artifact", "codemode")).toHaveLength(1);
+    expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toHaveLength(2); // 平台图 + codemode 图
   });
 
   it("keeps send_message ok/ids and delivers artifact media to the adapter payload", async () => {
@@ -1041,23 +1031,23 @@ describe("real Agent / codemode / provider smoke", () => {
     expect(results(messages)[0]?.output).toMatchObject({ type: "json", value: { ok: true, ids: ["sent-1"] } });
   });
 
-  it("archives a long outer text result and replays a read page without another artifact", async () => {
+  it("pages a long script result and replays it through a host read", async () => {
     const raw = ["first line", ...Array.from({ length: 6000 }, (_, i) => "row" + i)].join("\n");
     const probe = await scenario({
       tools: { logs: tool({ inputSchema: emptyInput, execute: async () => raw }) },
       steps: (index, bodies) => {
         if (index === 0) return [{ name: "codemode", id: "logs", input: { js: "return await tools.logs({});" } }];
         if (index === 1) {
-          const toolResult = bodies[1]!.messages.find((message) => message.role === "tool");
-          const content = typeof toolResult?.content === "string" ? toolResult.content : "";
-          const url = /Full result: (artifact:\/\/\S+)/.exec(content)?.[1] ?? "";
+          const content = bodies[1]!.messages
+            .filter((message) => message.role === "tool")
+            .map((message) => (typeof message.content === "string" ? message.content : ""))
+            .join("\n");
+          const next = /Continue: read\((\{"url":"[^"]*"\})\)/.exec(content)?.[1] ?? "";
           return [
             {
               name: "codemode",
               id: "read",
-              input: {
-                js: `const page = await tools.read({url:${JSON.stringify(`${url}:2+2000`)}}); return { length: page.text.length, head: page.text.slice(0, 4) };`,
-              },
+              input: { js: `const page = await tools.read(${next}); return { length: page.text.length, head: page.text.slice(0, 6) };` },
             },
           ];
         }
@@ -1067,17 +1057,21 @@ describe("real Agent / codemode / provider smoke", () => {
     const messages = await probe.run();
     const outputs = results(messages);
     const first = outputs[0]!.output;
-    expect(first).toMatchObject({ type: "text", value: expect.stringContaining("first line") });
-    const url = /Full result: (artifact:\/\/\S+)/.exec(textOf(first))?.[1] ?? "";
+    expect(first.type).toBe("text");
+    const text = textOf(first);
+    expect(text).toContain("=== STATUS ===\ncompleted");
+    expect(text).toContain("first line");
+    expect(text).toContain("[truncated: showing lines");
+    const url = /Full result: (artifact:\/\/\S+)/.exec(text)?.[1] ?? "";
     const stored = await probe.resources.resolve(url);
-    expect(stored.type === "text" && stored.text === raw).toBe(true);
-    expect(outputs[1]?.output).toMatchObject({ type: "json", value: { length: expect.any(Number), head: "row0" } });
-    const second = jsonValue(outputs[1]!.output);
-    if (second === null || typeof second !== "object" || !("length" in second) || typeof second.length !== "number") throw new Error("expected length");
-    expect(second.length).toBeGreaterThan(1900);
+    expect(stored.type === "text" && stored.text === JSON.stringify(raw)).toBe(true);
+    const second = textOf(outputs[1]!.output);
+    expect(second).toContain("=== RESULT ===");
+    expect(second).not.toContain("=== ERROR ===");
+    expect(second).toContain('"length":');
     expect(await probe.resources.store.names("artifact", "codemode")).toHaveLength(1);
     expect(probe.bodies).toHaveLength(3);
-    // Reassemble tools for another turn: the wrapper does not stack or duplicate attachment messages.
+    // 换一轮重新装配工具：持久化文本与附件不会重复生成。
     await probe.run("again", "m2");
     expect(await probe.resources.store.names("artifact", "codemode")).toHaveLength(1);
   }, 20000);
@@ -1105,7 +1099,7 @@ describe("real Agent / codemode / provider smoke", () => {
     expect(imageUrls(probe.bodies[1]!)).toHaveLength(0);
   });
 
-  it("preserves thrown errors and host diagnostics without attachment messages", async () => {
+  it("reports a script failure with its error section and no attachment message", async () => {
     const probe = await scenario({
       tools: {
         fail: tool({
@@ -1115,11 +1109,38 @@ describe("real Agent / codemode / provider smoke", () => {
           },
         }),
       },
-      steps: (index) => (index === 0 ? [{ name: "codemode", input: { js: "return await tools.fail({});" } }] : [{ name: "finish", input: {} }]),
+      steps: (index) =>
+        index === 0 ? [{ name: "codemode", input: { js: "text('before the failure'); return await tools.fail({});" } }] : [{ name: "finish", input: {} }],
     });
     const messages = await probe.run();
-    expect(JSON.stringify(results(messages))).toContain("fixture failure");
-    expect(JSON.stringify(results(messages))).toContain("error-text");
+    const output = results(messages)[0]!.output;
+    expect(output.type).toBe("text");
+    expect(textOf(output)).toContain("=== STATUS ===\nfailed");
+    expect(textOf(output)).toContain("=== TEXT ===\nbefore the failure");
+    expect(textOf(output)).toContain("=== ERROR ===\nscript: Error: fixture failure");
     expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toEqual([]);
+    expect(await probe.resources.store.namespaces("artifact")).toEqual([]);
+  });
+
+  it("keeps an attached image when the script fails afterwards", async () => {
+    const probe = await scenario({
+      steps: (index) =>
+        index === 0
+          ? [
+              {
+                name: "codemode",
+                id: "fail-image",
+                input: { js: `image({type: "image", data: "${PNG}", mimeType: "image/png"}); throw new Error("after the image");` },
+              },
+            ]
+          : [{ name: "finish", input: {} }],
+    });
+    const messages = await probe.run();
+    const output = results(messages)[0]!.output;
+    expect(textOf(output)).toContain("=== STATUS ===\nfailed");
+    expect(textOf(output)).toContain("=== ATTACHMENTS ===");
+    const attachments = messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment");
+    expect(attachments).toHaveLength(1);
+    expect(imageUrls(probe.bodies[1]!)).toEqual([`data:image/png;base64,${PNG}`]);
   });
 });

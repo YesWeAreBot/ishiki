@@ -396,10 +396,7 @@ export class NarrativeContextInstance implements ContextEngineInstance {
     if (pieces.length > 0) head.push(createEntry("message", createUserMessage(`<established_story>\n${pieces.join("\n\n")}\n</established_story>`)));
     head.push(createEntry("message", createUserMessage([{ type: "text", text: NEW_INPUT, providerOptions: narrativeOptions(marker) }])));
 
-    const kept = entries.filter((entry) => {
-      if (entry.type === "message" && entry.data.role === "custom" && entry.data.type === "ishiki.tools.catalog") return true;
-      return isSourceEntry(entry) && keep.has(entry.id);
-    });
+    const kept = entries.filter((entry) => isSourceEntry(entry) && keep.has(entry.id));
     return [...head, ...kept];
   }
 
@@ -422,7 +419,7 @@ export class NarrativeContextInstance implements ContextEngineInstance {
     const passThrough: AgentMessage[] = [];
     const records: AgentMessage[] = [];
     for (const message of rest) {
-      if (message.role === "custom" && (message.type === "ishiki.attachment" || message.type === "ishiki.tools.catalog")) passThrough.push(message);
+      if (message.role === "custom" && message.type === "ishiki.attachment") passThrough.push(message);
       else records.push(message);
     }
 

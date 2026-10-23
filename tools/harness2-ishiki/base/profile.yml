@@ -24,14 +24,9 @@ toolcall:
   engine: native
 
 codemode:
-  enable: false
+  enable: true
   direct: []
   timeoutMs: 30000
-
-toolsearch:
-  enable: false
-  resident: []
-  maxResults: 5
 
 typing:
   baseDelay: 0

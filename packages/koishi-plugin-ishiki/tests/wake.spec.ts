@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFinish } from "../src/builtin-tools/finish.js";
 import { collapse } from "../src/context/standard.engine.js";
 import type { ExtensionInstance } from "../src/extension.js";
+import { CodemodeConfig } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime } from "../src/runtime.js";
 import type { IshikiMessageCreated } from "../src/types.js";
@@ -186,7 +187,6 @@ async function makeRuntime(options: {
   gate?: (call: number) => Promise<void>;
   extensions?: ExtensionInstance[];
   externalPlugins?: readonly AgentPlugin[];
-  toolsearch?: { enable: boolean; resident: string[]; maxResults: number };
 }): Promise<{ runtime: AgentRuntime; bodies: unknown[] }> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-wake-"));
   homes.push(home);
@@ -219,12 +219,11 @@ async function makeRuntime(options: {
     tools: { finish: createFinish(), ...speakTool },
     extensions: options.extensions ?? [],
     externalPlugins: options.externalPlugins,
-    // 真实 standard 引擎的投影：created 折成 user 行，catalog 留给 toModelMessages。
+    // 真实 standard 引擎的投影：created 折成 user 行。
     context: { renderMessages: (messages) => collapse(messages) },
     wakeup: options.wakeup ?? judgeWakeup(() => false),
-    codemode: { enable: false, direct: [], timeoutMs: 1000 },
+    codemode: CodemodeConfig({ enable: false }),
     pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0 },
-    toolsearch: options.toolsearch ?? { enable: false, resident: [], maxResults: 5 },
     debugStream: false,
     logger: logger as never,
     resources: new ResourceCenter("wake", home),
@@ -329,16 +328,14 @@ describe("AgentRuntime wakeup subscription", () => {
     const { runtime, bodies } = await makeRuntime({
       steps: () => [],
       wakeup: new StandardWakeupInstance({ direct: false, atSelf: false, quoteSelf: false, keywords: ["ishiki-ping"] }),
-      toolsearch: { enable: true, resident: [], maxResults: 5 },
     });
 
-    // init 落盘的 catalog、deliver 落盘的平台附件都是内部附加消息：既不该开轮，也必须照常存储。
+    // init 与 deliver 落盘的内部附加消息既不该开轮，也必须照常存储。
     await runtime.deliver(created("m1", `<img src="data:image/png;base64,${PNG}"/>`));
     await until(async () => (await storedMessages(runtime)).some((message) => message.role === "custom" && message.type === "ishiki.attachment"));
     await sleep(50);
     expect(await terminalTurns(runtime)).toBe(0);
     const internal = await storedMessages(runtime);
-    expect(internal.some((message) => message.role === "custom" && message.type === "ishiki.tools.catalog")).toBe(true);
     expect(createdIds(internal)).toEqual(["m1"]);
 
     await runtime.deliver(created("m2", "ishiki-ping"));

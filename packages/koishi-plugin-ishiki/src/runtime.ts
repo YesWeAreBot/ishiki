@@ -20,16 +20,15 @@ import {
 } from "@yesimagent/core";
 import type { Logger } from "koishi";
 
-import { CODEMODE_TOOL, createCodemode } from "./builtin-tools/codemode.js";
+import { CODEMODE_TOOL, createCodemode, type CodemodeSurface } from "./builtin-tools/codemode.js";
 import { FINISH_TOOL } from "./builtin-tools/finish.js";
 import { SEND_MESSAGE_TOOL } from "./builtin-tools/send-message.js";
-import { createSearchTool, SEARCH_TOOL, ToolsearchState } from "./builtin-tools/toolsearch.js";
 import { createWaitTool, WAIT_TOOL, WaitConditionMachine } from "./builtin-tools/wait.js";
 import type { ContextEngineInstance } from "./context/index.js";
 import { createDebugPlugin } from "./debugger.js";
 import { ExtensionInstance } from "./extension.js";
 import { appendReminder, PacingState } from "./pacing.js";
-import type { CodemodeConfig, PacingConfig, ToolsearchConfig } from "./profile/index.js";
+import type { CodemodeConfig, PacingConfig } from "./profile/index.js";
 import { captureResources } from "./resource/capture.js";
 import type { ResourceCenter } from "./resource/center.js";
 import { type AttachmentConfig } from "./resource/config.js";
@@ -53,7 +52,6 @@ export interface AgentRuntimeConfig {
   wakeup: WakeupEngineInstance;
   codemode: CodemodeConfig;
   pacing: PacingConfig;
-  toolsearch: ToolsearchConfig;
   debugStream: boolean;
   logger: Logger;
   resources: ResourceCenter;
@@ -96,8 +94,9 @@ export class AgentRuntime {
   private readonly logger: Logger;
   private readonly wakeup: WakeupEngineInstance;
   private readonly extensions: ExtensionInstance[];
-  private readonly toolsearch: ToolsearchState;
+  private readonly codemode?: Promise<CodemodeSurface>;
   private readonly pacing = new PacingState();
+  private toolsContext: Record<string, unknown> = {};
 
   private disposeContext?: () => void;
   private disposeWakeup?: () => void;
@@ -118,12 +117,20 @@ export class AgentRuntime {
     this.extensions = config.extensions;
     this.resources = config.resources;
     this.attachments = new AttachmentProjection(config.resources, config.attachment);
-    this.toolsearch = new ToolsearchState(config.toolsearch);
     this.initTools = config.tools;
     this.condition = new WaitConditionMachine(config.logger);
 
     mkdirSync(this.home, { recursive: true });
     this.storage = createJsonlStorage(path.join(this.home, "events.jsonl"));
+
+    if (config.codemode.enable) {
+      this.codemode = createCodemode({
+        config: config.codemode,
+        resources: config.resources,
+        imageInput: config.attachment.imageInput,
+        contextOf: (name) => this.toolsContext[name],
+      });
+    }
 
     this.agent = createAgent({
       id: this.id,
@@ -136,45 +143,30 @@ export class AgentRuntime {
           init: async (agent) => {
             this.disposeContext = this.context.attach?.(agent);
             this.disposeWakeup = this.wakeup.attach(agent);
-            this.toolsearch.bind(agent);
-            // Assemble the toolset now so the baseline catalog persists before
-            // any user message: the core writes turn input only after init
-            // resolves, so storage order — and therefore every request's
-            // catalog slot, the first request included — is [catalog, user...].
-            if (config.toolsearch.enable) {
-              await this.assembleTools();
-              await this.toolsearch.ensureBaselineCatalog();
-            }
           },
           stop: () => {
             this.disposeWakeup?.();
             this.disposeContext?.();
           },
-          onAppend: (entries) => this.attachments.append(entries),
+          onAppend: async (entries) => {
+            const committed = this.codemode === undefined ? entries : (await this.codemode).commit(entries);
+            return this.attachments.append(committed);
+          },
           transformEntries: async (entries, options) => {
-            const filtered = this.toolsearch.filterEntries(entries);
-            const prepared = await (this.context.prepareEntries?.(filtered, { turnId: options.turnId, signal: options.signal }) ?? filtered);
+            // Store state is rebuilt from the full session log before any
+            // compaction, so a compacted history never changes what `load()` sees.
+            if (this.codemode !== undefined) (await this.codemode).restore(entries);
+            const prepared = await (this.context.prepareEntries?.(entries, { turnId: options.turnId, signal: options.signal }) ?? entries);
             this.attachments.restore(
               entries,
               prepared.flatMap((entry) => (entry.type === "message" ? [entry.data] : [])),
             );
-            this.toolsearch.observeEntries(prepared);
-            const repair = this.toolsearch.repairCatalog();
-            if (repair === undefined) return prepared;
-            await this.agent.storage.append(repair);
-            return [...prepared, repair];
+            return prepared;
           },
           transformMessages: async (messages, options) => {
             const associated = attachmentMessages(messages);
             const rendered = (await this.context.renderMessages?.(associated, options)) ?? associated;
             return this.attachments.project(rendered, options.turnId);
-          },
-          toModelMessages: (message: unknown) => {
-            if (message === null || typeof message !== "object" || !("role" in message) || message.role !== "custom") return undefined;
-            if (!("type" in message) || message.type !== "ishiki.tools.catalog" || !("data" in message)) return undefined;
-            const data = message.data;
-            if (data === null || typeof data !== "object" || !("text" in data) || typeof data.text !== "string") return undefined;
-            return [{ role: "user" as const, content: data.text }];
           },
           extendInstructions: async () => {
             const parts = [config.instructions];
@@ -190,23 +182,13 @@ export class AgentRuntime {
             return this.assembleTools();
           },
           prepareStep: (options) => {
-            let prepared = options;
-            if (config.toolsearch.enable) {
-              const visible = this.toolsearch.visibleTools();
-              const prior = options.activeTools;
-              const activeTools = prior === undefined ? visible : [...new Set([...prior, ...visible])];
-              prepared = { ...options, activeTools };
-            }
+            this.toolsContext = options.toolsContext;
             // 提醒只进本次请求：core 用 prepareStep 返回的 messages 组装当前调用，
             // 不写回事实流，所以模型看到的是剩余步数，历史里不留噪声。
             const reminder = this.pacing.take(options.turnId, options.stepNumber, config.pacing);
-            return reminder === undefined ? prepared : appendReminder(prepared, reminder);
+            return reminder === undefined ? options : appendReminder(options, reminder);
           },
           onStepFinish: (info) => {
-            // Emit at most one catalog per step, after the step's search results
-            // are persisted and before the next model call; parallel searches
-            // within the step coalesce into a single catalog update.
-            this.toolsearch.flushCatalog();
             const calls = new Set<string>();
             let sending = false;
             let continueRequested = false;
@@ -236,7 +218,8 @@ export class AgentRuntime {
             if (!continueRequested && sending && sendSucceeded(info.result.messages)) return { continue: false };
             return undefined;
           },
-          onTurnFinish: (result) => {
+          onTurnFinish: async (result) => {
+            if (this.codemode !== undefined) (await this.codemode).reset();
             this.condition.onTurnEnd(result.status);
           },
         },
@@ -250,12 +233,6 @@ export class AgentRuntime {
     for (const ext of this.extensions) this.attachExtension(ext);
   }
 
-  /**
-   * Merge base tools with extension contributions and builtin routing, then
-   * sync the toolsearch state with the final set. Runs on every turn (core
-   * `assemblePrompt`) and once at init, so both see the same assembled toolset;
-   * re-entry rebuilds the routing tables instead of accumulating wrappers.
-   */
   private async transformTools(tools: ToolSet, stage: ToolTransformStage): Promise<ToolSet> {
     let current = tools;
     for (const plugin of this.config.externalPlugins ?? []) {
@@ -270,6 +247,11 @@ export class AgentRuntime {
     return current;
   }
 
+  /**
+   * Merge base tools with extension contributions and builtin routing, then
+   * wrap every result. Runs on every turn (core `assemblePrompt`), so routing
+   * tables are rebuilt instead of accumulating wrappers.
+   */
   private async assembleTools(): Promise<ToolSet> {
     let merged: ToolSet = { ...this.initTools };
     for (const ext of this.extensions) {
@@ -285,12 +267,11 @@ export class AgentRuntime {
     if (WAIT_TOOL in merged) throw new ToolConflictError(WAIT_TOOL);
     final[WAIT_TOOL] = createWaitTool(this.condition);
     for (const name of Object.keys(this.toolCallers)) delete this.toolCallers[name];
-    if (this.config.codemode.enable) {
-      const sandbox = createCodemode(this.config.codemode, merged, this.config.toolsearch.enable);
-      Object.assign(this.toolCallers, sandbox.callers);
-      final[CODEMODE_TOOL] = sandbox.tool;
+    if (this.codemode !== undefined) {
+      const surface = await this.codemode;
+      Object.assign(this.toolCallers, surface.route(Object.keys(merged)));
+      final[CODEMODE_TOOL] = surface.tool;
     }
-    if (this.config.toolsearch.enable) final[SEARCH_TOOL] = createSearchTool(this.toolsearch);
     const transformed = await this.transformTools(final, "complete");
     const transformedNames = Object.keys(transformed);
     const finalNames = Object.keys(final);
@@ -299,6 +280,12 @@ export class AgentRuntime {
     }
     const wrapped: ToolSet = {};
     for (const [name, original] of Object.entries(transformed)) {
+      // codemode renders its own tool result (sections, artifacts, attachments);
+      // the generic resource wrapper must not re-render it.
+      if (name === CODEMODE_TOOL) {
+        wrapped[name] = original;
+        continue;
+      }
       const descriptors = Object.getOwnPropertyDescriptors(original);
       descriptors.toModelOutput = {
         enumerable: true,
@@ -322,10 +309,6 @@ export class AgentRuntime {
         },
       };
       wrapped[name] = Object.defineProperties({}, descriptors) as Tool;
-    }
-    if (this.config.toolsearch.enable) {
-      this.toolsearch.codemodeEnabled = this.config.codemode.enable;
-      this.toolsearch.refresh(transformed, new Set(this.toolsearch.residentNames()), new Set(Object.keys(this.toolCallers)));
     }
     return wrapped;
   }
@@ -384,6 +367,7 @@ export class AgentRuntime {
         this.logger.warn(`[${this.id}] extension dispose failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    if (this.codemode !== undefined) await (await this.codemode).dispose();
     await this.agent.stop();
   }
 }

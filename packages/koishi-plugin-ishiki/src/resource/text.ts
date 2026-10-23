@@ -1,6 +1,11 @@
 import { ResourceError } from "./errors.js";
 
-export const TEXT_BUDGET = { maxLines: 2000, maxChars: 30_000 } as const;
+export interface TextBudget {
+  maxLines: number;
+  maxChars: number;
+}
+
+export const TEXT_BUDGET: TextBudget = { maxLines: 2000, maxChars: 30_000 };
 
 /** Position within the original selected representation, not within a displayed page. */
 export interface FileTextSource {
@@ -10,11 +15,11 @@ export interface FileTextSource {
   column: number;
 }
 
-export function textFits(text: string): boolean {
-  if (text.length > TEXT_BUDGET.maxChars) return false;
+export function textFits(text: string, budget: TextBudget = TEXT_BUDGET): boolean {
+  if (text.length > budget.maxChars) return false;
   let lines = 1;
   for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) {
-    if (++lines > TEXT_BUDGET.maxLines) return false;
+    if (++lines > budget.maxLines) return false;
   }
   return true;
 }
@@ -42,9 +47,9 @@ function prefixEnd(text: string, chars: number, lines: number): number {
 }
 
 /** The body and the complete continuation footer share one budget. */
-export function renderTextPage(text: string, source: FileTextSource): string {
-  if (textFits(text)) return text;
-  let end = prefixEnd(text, TEXT_BUDGET.maxChars, TEXT_BUDGET.maxLines);
+export function renderTextPage(text: string, source: FileTextSource, budget: TextBudget = TEXT_BUDGET): string {
+  if (textFits(text, budget)) return text;
+  let end = prefixEnd(text, budget.maxChars, budget.maxLines);
   for (;;) {
     let line = source.line;
     let column = source.column;
@@ -58,7 +63,7 @@ export function renderTextPage(text: string, source: FileTextSource): string {
     const nextUrl = `${source.url}${source.url.includes("?") ? "&" : "?"}offset=${source.offset + end}`;
     const lastLine = end > 0 && text.charCodeAt(end - 1) === 10 ? line - 1 : line;
     const footer = `\n[truncated: showing lines ${source.line}-${lastLine}; next ${line}:${column}]\nFull result: ${source.url}\nContinue: read(${JSON.stringify({ url: nextUrl })})`;
-    const nextEnd = prefixEnd(text, TEXT_BUDGET.maxChars - footer.length, TEXT_BUDGET.maxLines - 3);
+    const nextEnd = prefixEnd(text, budget.maxChars - footer.length, budget.maxLines - 3);
     if (end > 0 && end <= nextEnd) return text.slice(0, end) + footer;
     if (nextEnd === 0) throw new ResourceError("resource_too_large", "resource URL leaves no room for a progressing text page");
     end = Math.min(end, nextEnd);

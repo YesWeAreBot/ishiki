@@ -71,7 +71,7 @@ uv run --project D:/Codespace/references/harness2 python tools/harness2-ishiki/r
 
 ## Measurement limits
 
-The current scenarios are a smoke benchmark, not a comprehensive Ishiki evaluation. They measure wakeup precision for one unaddressed group message, one addressed group reply, and one private reply. They do not measure multi-turn memory, context compaction, `wait` scheduling, cross-channel routing, tool failures, attachments, codemode, toolsearch, extensions, rate limits, latency, cost, or persona quality beyond exact response text.
+The current scenarios are a smoke benchmark, not a comprehensive Ishiki evaluation. They measure wakeup precision for one unaddressed group message, one addressed group reply, and one private reply. They do not measure multi-turn memory, context compaction, `wait` scheduling, cross-channel routing, tool failures, attachments, codemode program quality, extensions, rate limits, latency, cost, or persona quality beyond exact response text.
 
 Their useful result is a regression signal for prompt and wakeup changes: reply count, exact response content, stored event trajectory, and whether a candidate preserves silence. They cannot establish general conversational quality or prove that an optimization improves real deployments. A serious benchmark should add paired positive/negative wakeup cases, multi-turn memory and compaction cases, wait/reawaken cases, cross-channel target cases, tool and attachment cases, and robustness variants with paraphrased inputs.
 
@@ -79,4 +79,4 @@ Their useful result is a regression signal for prompt and wakeup changes: reply 
 
 Harness2 candidates may edit `profile.yml`, `persona.md`, `prompts/instructions.md`, and `skills/<name>/SKILL.md`. Skill names must match their directory names and must be named from persistent instructions. Subagents, plugins, hooks, and scripts are rejected because this headless runner does not expose those Ishiki capabilities.
 
-The headless runner accepts channel profiles with the standard context and wakeup engines, native tool calls, text-only input, no codemode, and no profile extensions. It rejects other profile modes instead of silently measuring a different runtime.
+The headless runner accepts channel profiles with the standard context and wakeup engines, native tool calls, text-only input, codemode, and no profile extensions. It rejects other profile modes instead of silently measuring a different runtime.

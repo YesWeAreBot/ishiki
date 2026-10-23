@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@ai-sdk-tool/parser": "5.1.6",
-    "@ai-sdk/code-mode": "1.0.94",
+    "@earendil-works/pi-codemode": "1.4.0",
     "@huggingface/jinja": "^0.5.10",
     "@yesimagent/core": "0.0.9",
     "@yesimagent/gateway": "0.0.9",
