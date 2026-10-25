@@ -3,9 +3,11 @@ import { computed, onMounted, ref, watch } from "vue";
 
 import { ApiError, call } from "../api";
 import EmptyState from "../components/EmptyState.vue";
+import ExpandableText from "../components/ExpandableText.vue";
 import Icon from "../components/Icon.vue";
 import PageHeader from "../components/PageHeader.vue";
 import PageShell from "../components/PageShell.vue";
+import { classifyReference, entityBadge } from "../lib/entities";
 import { formatBytes, formatDateTime, formatNumber, relativeTime } from "../lib/format";
 import { store, toast } from "../store";
 import type { CacheSnapshot, ResourceCacheRow } from "../types";
@@ -48,6 +50,11 @@ function resourceStatus(row: ResourceCacheRow): { tone: string; label: string } 
   if (row.status === "ok") return { tone: "badge-success", label: "可用" };
   if (row.status === "empty") return { tone: "badge-neutral", label: "无资源" };
   return { tone: "badge-danger", label: "读取失败" };
+}
+
+/** prompt 缓存行的引用与用量页同一套实体分类，模型组不会混进模型。 */
+function referenceBadge(reference: string): { tone: string; label: string } {
+  return entityBadge(classifyReference(reference, store.providers, store.groups));
 }
 
 async function refresh(silent = false): Promise<void> {
@@ -172,6 +179,7 @@ onMounted(() => {
               <table class="table table-compact">
                 <thead>
                   <tr>
+                    <th>类型</th>
                     <th>引用</th>
                     <th>模型</th>
                     <th class="num">调用</th>
@@ -182,8 +190,15 @@ onMounted(() => {
                 </thead>
                 <tbody>
                   <tr v-for="row in promptRows" :key="`${row.reference}:${row.modelId}`">
-                    <td class="mono">{{ row.reference }}</td>
-                    <td class="mono">{{ row.modelId }}</td>
+                    <td>
+                      <span class="badge" :class="referenceBadge(row.reference).tone">{{ referenceBadge(row.reference).label }}</span>
+                    </td>
+                    <td>
+                      <ExpandableText :value="row.reference" mode="ends" mono copy-label="对象引用" />
+                    </td>
+                    <td>
+                      <ExpandableText :value="row.modelId" mode="ends" mono :copyable="row.modelId !== 'unknown'" copy-label="模型标识" />
+                    </td>
                     <td class="num">{{ formatNumber(row.calls) }}</td>
                     <td class="num">{{ formatNumber(row.cacheRead) }}</td>
                     <td class="num">{{ formatNumber(row.cacheWrite) }}</td>
@@ -254,14 +269,6 @@ onMounted(() => {
             <Icon name="warningCircle" :size="15" />
             <span>
               <strong>尚未采集</strong> 服务端已建立缓存观测，但还没有采集到 prompt 或资源数据。缺失状态会单独标记，页面不会把缺失数据当作空缓存展示。
-            </span>
-          </div>
-
-          <div v-else class="notice notice-info">
-            <Icon name="info" :size="15" />
-            <span>
-              <strong>口径说明</strong> 缓存读取与写入是模型响应里上报的 token 计数，与磁盘缓存大小无关。资源的字节数来自会话资源目录扫描，
-              资产与工件数为目录中的文件计数。
             </span>
           </div>
         </template>

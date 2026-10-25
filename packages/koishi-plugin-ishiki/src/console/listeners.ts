@@ -5,7 +5,7 @@ import type { Context } from "koishi";
 
 import type Ishiki from "../index.js";
 import { ManagementError, describeError } from "../management/errors.js";
-import { AuditProvider, CacheProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
+import { CacheProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
 import type { ConsoleResult } from "./types.js";
 
 const READ = 1;
@@ -34,7 +34,6 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   ctx.plugin(RuntimesProvider, host);
   ctx.plugin(SessionsProvider, host);
   ctx.plugin(UsageProvider, host);
-  ctx.plugin(AuditProvider, host);
   ctx.plugin(CacheProvider, host);
 
   management.events.on("models.changed", (payload) => {
@@ -59,6 +58,7 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   });
 
   ctx.console.addListener("ishiki/models/validate", (input) => run(() => host.management.models.validate(input)), { authority: READ });
+  ctx.console.addListener("ishiki/models/remote", (query) => run(() => host.management.models.listRemote(query)), { authority: READ });
   ctx.console.addListener(
     "ishiki/models/save",
     function (this: Client, input) {
@@ -73,6 +73,13 @@ export function installConsole(ctx: Context, host: Ishiki): void {
     "ishiki/profiles/save",
     async function (this: Client, id, input, revision) {
       return run(() => host.management.profiles.save(id, input, revision, operator(this)));
+    },
+    { authority: WRITE },
+  );
+  ctx.console.addListener(
+    "ishiki/profiles/create",
+    async function (this: Client, id, input) {
+      return run(() => host.management.profiles.createFromInput(id, input, operator(this)));
     },
     { authority: WRITE },
   );
@@ -144,7 +151,6 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   });
 
   ctx.console.addListener("ishiki/observability/usage", (filters) => run(() => host.management.usage.snapshot(filters)), { authority: READ });
-  ctx.console.addListener("ishiki/observability/audit", (filters) => run(() => host.management.audit.query(filters)), { authority: READ });
   ctx.console.addListener("ishiki/observability/cache", () => run(() => host.management.cache.read()), { authority: READ });
 
   ctx.console.addEntry(path.join(ctx.baseDir, "node_modules", "koishi-plugin-ishiki", "dist"));

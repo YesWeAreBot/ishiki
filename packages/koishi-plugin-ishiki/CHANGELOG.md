@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Model editor switches fields by model type and imports declarations from a provider's remote model list through a server-side proxy
+- Model and Profile editors sync between form and YAML RAW mode and validate input before saving
+- Profile creation wizard steps through base info, model, channel claims, instructions, and engine, then creates the profile in one step
+- Usage page renders daily line charts from raw usage records
+
 ### Changed
 - Downstream engine and tool packs reach agent types, runtime helpers, and the gateway type through the plugin's re-exports instead of `@yesimagent/core` and `@yesimagent/gateway`
 - Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares the `ishiki` service it implements together with the optional `console` service, so npm and the Koishi market can present it
+- README describes the new console editing and wizard flow
 
+### Removed
+- Audit page and its console endpoint
 ## [0.0.1] - 2026-10-25
 
 ### Added

@@ -2,12 +2,14 @@
 import { computed, reactive, ref, watch } from "vue";
 
 import { ApiError, call } from "../api";
+import { formatRawIssues, inspectProfileConfig, parseRaw, serializeRaw } from "../lib/rawConfig";
 import { schemaDefaults, type SchemaNode } from "../lib/schema";
 import { store, toast } from "../store";
 import type { EngineDescriptor, ExtensionDescriptor, ProfileView } from "../types";
 import BaseModal from "./BaseModal.vue";
 import FormField from "./FormField.vue";
 import Icon from "./Icon.vue";
+import RawEditor from "./RawEditor.vue";
 import SchemaForm from "./SchemaForm.vue";
 import ToggleSwitch from "./ToggleSwitch.vue";
 
@@ -67,6 +69,8 @@ const error = ref("");
 const conflict = ref(false);
 const confirmOpen = ref(false);
 const rawDrafts = reactive<Record<string, RawDraft>>({});
+const mode = ref<"form" | "raw">("form");
+const rawDoc = ref("");
 
 const baseSchema = computed<SchemaNode | undefined>(() => store.extensions?.schemas.base);
 let seeded = false;
@@ -176,11 +180,52 @@ const rawIssue = computed(() => {
 });
 
 const validationIssue = computed(() => {
+  if (mode.value === "raw") {
+    return rawReport.value.issues.length > 0 ? `RAW 配置校验未通过：${rawReport.value.issues[0]}` : "";
+  }
   if (rawIssue.value !== "") return rawIssue.value;
   const model = draft.value.model;
   if (typeof model !== "string" || model.trim() === "") return "基础配置中的 model 不能为空。";
   return "";
 });
+
+/* RAW 模式：与表单共用 draft 这一份状态；校验失败时禁止回切与保存，原文保留。 */
+
+const knownConfigKeys = computed<string[]>(() => {
+  const keys = new Set<string>(Object.keys(store.extensions?.schemas.base.dict ?? {}));
+  for (const descriptor of store.extensions?.extensions ?? []) keys.add(descriptor.name);
+  return [...keys];
+});
+
+const rawReport = computed<{ issues: string[]; line: number | undefined; value: JsonRecord | undefined }>(() => {
+  if (mode.value !== "raw") return { issues: [], line: undefined, value: undefined };
+  const parsed = parseRaw(rawDoc.value);
+  if (!parsed.ok) return { issues: formatRawIssues(parsed.issues), line: parsed.issues[0]?.line, value: undefined };
+  return { issues: formatRawIssues(inspectProfileConfig(parsed.value, knownConfigKeys.value)), line: undefined, value: parsed.value };
+});
+
+function enterRaw(): void {
+  rawDoc.value = serializeRaw(draft.value);
+  mode.value = "raw";
+}
+
+function applyRaw(): boolean {
+  const value = rawReport.value.value;
+  if (value === undefined) return false;
+  draft.value = cloneRecord(value);
+  dirty.value = true;
+  return true;
+}
+
+function switchMode(next: "form" | "raw"): void {
+  if (next === mode.value) return;
+  if (next === "raw") {
+    enterRaw();
+    return;
+  }
+  if (rawReport.value.issues.length > 0 || !applyRaw()) return;
+  mode.value = "form";
+}
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -405,6 +450,10 @@ function describeError(caught: unknown): string {
 
 async function save(): Promise<void> {
   if (saving.value || validationIssue.value !== "") return;
+  if (mode.value === "raw") {
+    if (rawReport.value.issues.length > 0 || !applyRaw()) return;
+    mode.value = "form";
+  }
   saving.value = true;
   error.value = "";
   conflict.value = false;
@@ -463,6 +512,10 @@ const personaPath = computed(() => {
         </div>
         <div class="panel-actions">
           <span v-if="dirty" class="badge badge-warning">未保存</span>
+          <div class="segmented" role="group" aria-label="编辑模式">
+            <button type="button" :aria-pressed="mode === 'form'" @click="switchMode('form')">表单</button>
+            <button type="button" :aria-pressed="mode === 'raw'" @click="switchMode('raw')">RAW</button>
+          </div>
         </div>
       </div>
 
@@ -478,157 +531,173 @@ const personaPath = computed(() => {
           <button v-if="conflict" type="button" class="btn btn-sm" @click="requestReload"><Icon name="refresh" :size="13" /> 重新读取</button>
         </div>
 
-        <div class="tabs" role="tablist" aria-label="Profile 编辑分区">
-          <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'base'" @click="activeTab = 'base'">基础配置</button>
-          <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'engines'" @click="activeTab = 'engines'">
-            引擎<span class="tab-count">3</span>
-          </button>
-          <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'extensions'" @click="activeTab = 'extensions'">
-            扩展<span class="tab-count">{{ enabledExtensions }}</span>
-          </button>
-          <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'persona'" @click="activeTab = 'persona'">人格与指令</button>
-        </div>
-
-        <div v-if="activeTab === 'base'" class="stack">
-          <div class="form-section">
-            <div class="form-section-head">
-              <div class="form-section-title">基础配置</div>
-              <div class="form-section-desc">模型、频道认领与运行策略，字段由服务端 Schema 驱动。</div>
+        <div v-if="mode === 'raw'" class="stack-sm">
+          <p class="field-hint">直接编辑 profile 配置（YAML）。人格文本仍在表单模式的「人格与指令」分区维护；校验失败时无法切回表单或保存，原文会保留。</p>
+          <RawEditor :model-value="rawDoc" :error-line="rawReport.line" :aria-label="`RAW Profile 配置 ${profile.id}`" @update:model-value="rawDoc = $event" />
+          <div v-if="rawReport.issues.length > 0" class="error-panel" role="alert">
+            <Icon name="alert" :size="15" />
+            <div class="flex-1">
+              <strong>RAW 配置校验未通过</strong>
+              <ul class="raw-issue-list">
+                <li v-for="issue in rawReport.issues" :key="issue">{{ issue }}</li>
+              </ul>
             </div>
-            <SchemaForm v-if="baseSchema !== undefined" :schema="baseSchema" :model-value="baseValue" @update:model-value="updateBase" />
-            <FormField v-else label="基础配置（JSON）" hint="服务端尚未提供基础 Schema，直接编辑原始 JSON。" :error="rawError('base')">
-              <textarea
-                class="textarea input-mono"
-                rows="14"
-                spellcheck="false"
-                :value="rawText('base', baseValue)"
-                @input="updateBaseRaw(($event.target as HTMLTextAreaElement).value)"
-              ></textarea>
-            </FormField>
           </div>
         </div>
 
-        <div v-else-if="activeTab === 'engines'" class="stack">
-          <div v-for="section in engineSections" :key="section.kind" class="form-section">
-            <div class="form-section-head">
-              <div class="form-section-title">{{ section.label }}</div>
-              <span v-if="section.current === ''" class="badge badge-neutral">未配置</span>
-              <span v-else-if="section.descriptor?.available === false" class="badge badge-warning">不可用</span>
-              <div class="form-section-desc">{{ section.hint }}</div>
-            </div>
+        <template v-else>
+          <div class="tabs" role="tablist" aria-label="Profile 编辑分区">
+            <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'base'" @click="activeTab = 'base'">基础配置</button>
+            <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'engines'" @click="activeTab = 'engines'">
+              引擎<span class="tab-count">3</span>
+            </button>
+            <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'extensions'" @click="activeTab = 'extensions'">
+              扩展<span class="tab-count">{{ enabledExtensions }}</span>
+            </button>
+            <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'persona'" @click="activeTab = 'persona'">人格与指令</button>
+          </div>
 
-            <FormField label="引擎" hint="选择后配置会写入该 Profile 的对应引擎键。">
-              <select class="select" :value="section.current" @change="selectEngine(section.kind, ($event.target as HTMLSelectElement).value)">
-                <option value="">未配置</option>
-                <option v-for="option in section.options" :key="option.name" :value="option.name">
-                  {{ engineOptionLabel(option) }}
-                </option>
-              </select>
-            </FormField>
-
-            <template v-if="section.current !== ''">
-              <SchemaForm
-                v-if="section.schema !== undefined"
-                :schema="section.schema"
-                :model-value="section.value"
-                @update:model-value="setEngineValue(section.kind, $event)"
-              />
-              <FormField
-                v-else
-                label="引擎配置（JSON）"
-                hint="该引擎没有可用 Schema，直接编辑原始 JSON；配置会原样保存。"
-                :error="rawError(`engine:${section.kind}`)"
-              >
+          <div v-if="activeTab === 'base'" class="stack">
+            <div class="form-section">
+              <div class="form-section-head">
+                <div class="form-section-title">基础配置</div>
+                <div class="form-section-desc">模型、频道认领与运行策略，字段由服务端 Schema 驱动。</div>
+              </div>
+              <SchemaForm v-if="baseSchema !== undefined" :schema="baseSchema" :model-value="baseValue" @update:model-value="updateBase" />
+              <FormField v-else label="基础配置（JSON）" hint="服务端尚未提供基础 Schema，直接编辑原始 JSON。" :error="rawError('base')">
                 <textarea
                   class="textarea input-mono"
-                  rows="10"
+                  rows="14"
                   spellcheck="false"
-                  :value="rawText(`engine:${section.kind}`, section.value)"
-                  @input="updateEngineRaw(section.kind, ($event.target as HTMLTextAreaElement).value)"
+                  :value="rawText('base', baseValue)"
+                  @input="updateBaseRaw(($event.target as HTMLTextAreaElement).value)"
                 ></textarea>
               </FormField>
-            </template>
-            <p v-else class="field-hint">未配置时使用服务端默认引擎。</p>
-          </div>
-        </div>
-
-        <div v-else-if="activeTab === 'extensions'" class="stack">
-          <template v-if="extensionRows.length === 0">
-            <div class="empty">
-              <div class="empty-mark"><Icon name="settings" :size="20" /></div>
-              <div class="empty-title">没有可配置的扩展</div>
-              <p class="empty-desc">服务端尚未注册扩展，或该 Profile 的配置中没有扩展条目。</p>
             </div>
-          </template>
+          </div>
 
-          <template v-else>
-            <div v-for="row in extensionRows" :key="row.name" class="form-section">
+          <div v-else-if="activeTab === 'engines'" class="stack">
+            <div v-for="section in engineSections" :key="section.kind" class="form-section">
               <div class="form-section-head">
-                <div class="form-section-title mono">{{ row.name }}</div>
-                <span class="badge" :class="row.known ? 'badge-outline' : 'badge-warning'">
-                  {{ row.known ? "已知扩展" : "未知扩展" }}
-                </span>
-                <span v-if="row.descriptor === undefined" class="badge badge-neutral">未注册</span>
-                <span class="spacer"></span>
-                <ToggleSwitch :checked="row.enabled" :label="row.enabled ? '启用' : '停用'" @update:checked="toggleExtension(row.name, $event)" />
+                <div class="form-section-title">{{ section.label }}</div>
+                <span v-if="section.current === ''" class="badge badge-neutral">未配置</span>
+                <span v-else-if="section.descriptor?.available === false" class="badge badge-warning">不可用</span>
+                <div class="form-section-desc">{{ section.hint }}</div>
               </div>
 
-              <template v-if="row.enabled">
+              <FormField label="引擎" hint="选择后配置会写入该 Profile 的对应引擎键。">
+                <select class="select" :value="section.current" @change="selectEngine(section.kind, ($event.target as HTMLSelectElement).value)">
+                  <option value="">未配置</option>
+                  <option v-for="option in section.options" :key="option.name" :value="option.name">
+                    {{ engineOptionLabel(option) }}
+                  </option>
+                </select>
+              </FormField>
+
+              <template v-if="section.current !== ''">
                 <SchemaForm
-                  v-if="row.schema !== undefined"
-                  :schema="row.schema"
-                  :model-value="row.config"
-                  @update:model-value="setExtensionConfig(row.name, $event)"
+                  v-if="section.schema !== undefined"
+                  :schema="section.schema"
+                  :model-value="section.value"
+                  @update:model-value="setEngineValue(section.kind, $event)"
                 />
                 <FormField
                   v-else
-                  label="扩展配置（JSON）"
-                  hint="该扩展没有可用的 Schema，直接编辑原始 JSON；内容会原样保存。"
-                  :error="rawError(`ext:${row.name}`)"
+                  label="引擎配置（JSON）"
+                  hint="该引擎没有可用 Schema，直接编辑原始 JSON；配置会原样保存。"
+                  :error="rawError(`engine:${section.kind}`)"
                 >
                   <textarea
                     class="textarea input-mono"
                     rows="10"
                     spellcheck="false"
-                    :value="rawText(`ext:${row.name}`, row.config)"
-                    @input="updateExtensionRaw(row.name, ($event.target as HTMLTextAreaElement).value)"
+                    :value="rawText(`engine:${section.kind}`, section.value)"
+                    @input="updateEngineRaw(section.kind, ($event.target as HTMLTextAreaElement).value)"
                   ></textarea>
                 </FormField>
               </template>
-              <p v-else class="field-hint">已停用，配置会保留，重新启用后恢复使用。</p>
+              <p v-else class="field-hint">未配置时使用服务端默认引擎。</p>
             </div>
-          </template>
-        </div>
-
-        <div v-else class="stack">
-          <div class="form-section">
-            <div class="form-section-head">
-              <div class="form-section-title">人格文本</div>
-              <div class="form-section-desc">保存时写入第一个指令文件；读取时使用第一个未缺失的指令文件。</div>
-            </div>
-            <textarea class="textarea profile-persona-editor" rows="16" spellcheck="false" :value="personaText" @input="onPersonaInput"></textarea>
-            <p class="field-hint">
-              当前人格文件：<span class="mono">{{ personaPath ?? "未找到可用文件" }}</span>
-            </p>
           </div>
 
-          <div class="form-section">
-            <div class="form-section-head">
-              <div class="form-section-title">指令文件</div>
-              <div class="form-section-desc">路径来自 Profile 配置，绝对路径只读展示。</div>
-            </div>
-            <div class="kv-list">
-              <div v-for="file in profile.instructions" :key="file.path" class="kv">
-                <span class="mono">{{ file.path }}</span>
-                <span class="row">
-                  <span v-if="file.missing" class="badge badge-danger">缺失</span>
-                  <span v-if="file.path === personaPath" class="badge badge-info">人格文件</span>
-                </span>
+          <div v-else-if="activeTab === 'extensions'" class="stack">
+            <template v-if="extensionRows.length === 0">
+              <div class="empty">
+                <div class="empty-mark"><Icon name="settings" :size="20" /></div>
+                <div class="empty-title">没有可配置的扩展</div>
+                <p class="empty-desc">服务端尚未注册扩展，或该 Profile 的配置中没有扩展条目。</p>
               </div>
-              <p v-if="profile.instructions.length === 0" class="field-hint">未配置指令文件，保存人格时默认写入 PERSONA.md。</p>
+            </template>
+
+            <template v-else>
+              <div v-for="row in extensionRows" :key="row.name" class="form-section">
+                <div class="form-section-head">
+                  <div class="form-section-title mono">{{ row.name }}</div>
+                  <span class="badge" :class="row.known ? 'badge-outline' : 'badge-warning'">
+                    {{ row.known ? "已知扩展" : "未知扩展" }}
+                  </span>
+                  <span v-if="row.descriptor === undefined" class="badge badge-neutral">未注册</span>
+                  <span class="spacer"></span>
+                  <ToggleSwitch :checked="row.enabled" :label="row.enabled ? '启用' : '停用'" @update:checked="toggleExtension(row.name, $event)" />
+                </div>
+
+                <template v-if="row.enabled">
+                  <SchemaForm
+                    v-if="row.schema !== undefined"
+                    :schema="row.schema"
+                    :model-value="row.config"
+                    @update:model-value="setExtensionConfig(row.name, $event)"
+                  />
+                  <FormField
+                    v-else
+                    label="扩展配置（JSON）"
+                    hint="该扩展没有可用的 Schema，直接编辑原始 JSON；内容会原样保存。"
+                    :error="rawError(`ext:${row.name}`)"
+                  >
+                    <textarea
+                      class="textarea input-mono"
+                      rows="10"
+                      spellcheck="false"
+                      :value="rawText(`ext:${row.name}`, row.config)"
+                      @input="updateExtensionRaw(row.name, ($event.target as HTMLTextAreaElement).value)"
+                    ></textarea>
+                  </FormField>
+                </template>
+                <p v-else class="field-hint">已停用，配置会保留，重新启用后恢复使用。</p>
+              </div>
+            </template>
+          </div>
+
+          <div v-else class="stack">
+            <div class="form-section">
+              <div class="form-section-head">
+                <div class="form-section-title">人格文本</div>
+                <div class="form-section-desc">保存时写入第一个指令文件；读取时使用第一个未缺失的指令文件。</div>
+              </div>
+              <textarea class="textarea profile-persona-editor" rows="16" spellcheck="false" :value="personaText" @input="onPersonaInput"></textarea>
+              <p class="field-hint">
+                当前人格文件：<span class="mono">{{ personaPath ?? "未找到可用文件" }}</span>
+              </p>
+            </div>
+
+            <div class="form-section">
+              <div class="form-section-head">
+                <div class="form-section-title">指令文件</div>
+                <div class="form-section-desc">路径来自 Profile 配置，绝对路径只读展示。</div>
+              </div>
+              <div class="kv-list">
+                <div v-for="file in profile.instructions" :key="file.path" class="kv">
+                  <span class="mono">{{ file.path }}</span>
+                  <span class="row">
+                    <span v-if="file.missing" class="badge badge-danger">缺失</span>
+                    <span v-if="file.path === personaPath" class="badge badge-info">人格文件</span>
+                  </span>
+                </div>
+                <p v-if="profile.instructions.length === 0" class="field-hint">未配置指令文件，保存人格时默认写入 PERSONA.md。</p>
+              </div>
             </div>
           </div>
-        </div>
+        </template>
 
         <div v-if="validationIssue !== ''" class="field-error" role="alert">
           {{ validationIssue }}
@@ -662,5 +731,16 @@ const personaPath = computed(() => {
   min-height: 320px;
   line-height: 1.65;
   resize: vertical;
+}
+
+.raw-issue-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.raw-issue-list li {
+  overflow-wrap: anywhere;
 }
 </style>

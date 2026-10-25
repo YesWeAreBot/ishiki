@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import { ApiError, call } from "../api";
 import BaseModal from "../components/BaseModal.vue";
 import EmptyState from "../components/EmptyState.vue";
+import ExpandableText from "../components/ExpandableText.vue";
 import GroupEditor from "../components/GroupEditor.vue";
 import Icon from "../components/Icon.vue";
 import ModelEditor from "../components/ModelEditor.vue";
@@ -573,7 +574,9 @@ function asRecord(value: unknown): Record<string, unknown> {
                   <div class="model-card-top">
                     <div class="flex-1">
                       <div class="model-name">{{ row.model.name ?? row.model.id }}</div>
-                      <div class="model-ref">{{ row.reference }}</div>
+                      <div class="model-ref">
+                        <ExpandableText :value="row.reference" mode="ends" mono :head="26" :tail="12" copy-label="模型引用" />
+                      </div>
                     </div>
                     <div class="model-card-actions">
                       <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="`编辑 ${row.reference}`" @click="openEditModel(row.reference)">
@@ -652,8 +655,11 @@ function asRecord(value: unknown): Record<string, unknown> {
               <div class="group-members">
                 <div v-for="(member, index) in groupMembers(group)" :key="member.reference" class="member-row">
                   <span class="member-index">{{ index + 1 }}</span>
-                  <span class="flex-1">{{ member.label }}</span>
-                  <span v-if="member.level !== undefined" class="badge badge-outline">{{ levelLabel(member.level) }}</span>
+                  <span class="flex-1 member-reference">
+                    {{ member.label }}
+                    <span v-if="member.level !== undefined" class="badge badge-outline">{{ levelLabel(member.level) }}</span>
+                    <ExpandableText :value="member.reference" mode="ends" mono :head="20" :tail="10" copy-label="候选引用" />
+                  </span>
                 </div>
                 <div v-if="group.models.length === 0" class="field-hint">还没有候选成员。</div>
               </div>

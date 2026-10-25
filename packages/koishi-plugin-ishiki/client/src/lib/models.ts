@@ -122,3 +122,17 @@ export function modelCapabilitySummary(model: ModelDecl): string[] {
   if (model.type === "embedding" && model.dimensions !== undefined) result.push(`${model.dimensions} 维`);
   return result;
 }
+
+/** 目录视图还原为可提交的模型声明；编辑器与向导共用，保证提交口径一致。 */
+export function toModelDecl(view: ModelDeclView): ModelDecl {
+  const decl: ModelDecl = { id: view.id, type: view.type };
+  if (view.name !== undefined) decl.name = view.name;
+  if (view.toolCall !== undefined) decl.toolCall = view.toolCall;
+  if (view.reasoning !== undefined) decl.reasoning = view.reasoning;
+  if (view.input !== undefined) decl.input = [...view.input];
+  if (view.thinking !== undefined) decl.thinking = { mode: view.thinking.mode, efforts: [...view.thinking.efforts] };
+  if (view.contextWindow !== undefined) decl.contextWindow = view.contextWindow;
+  if (view.maxTokens !== undefined) decl.maxTokens = view.maxTokens;
+  if (view.dimensions !== undefined) decl.dimensions = view.dimensions;
+  return decl;
+}

@@ -5,6 +5,7 @@ import { RouterLink } from "vue-router";
 import { ApiError, call } from "../api";
 import BaseModal from "../components/BaseModal.vue";
 import EmptyState from "../components/EmptyState.vue";
+import ExpandableText from "../components/ExpandableText.vue";
 import Icon from "../components/Icon.vue";
 import PageHeader from "../components/PageHeader.vue";
 import PageShell from "../components/PageShell.vue";
@@ -335,7 +336,9 @@ async function confirmAction(): Promise<void> {
                 <dd class="mono">{{ selected.engines.toolcall.length > 0 ? selected.engines.toolcall : "未配置" }}</dd>
 
                 <dt>工作目录</dt>
-                <dd class="mono wrap">{{ selected.home }}</dd>
+                <dd>
+                  <ExpandableText :value="selected.home" mode="ends" mono :head="30" :tail="14" copy-label="工作目录" />
+                </dd>
 
                 <dt>会话</dt>
                 <dd>
@@ -352,9 +355,9 @@ async function confirmAction(): Promise<void> {
 
           <div v-if="selected.error !== undefined" class="error-panel">
             <Icon name="alert" :size="15" />
-            <div>
+            <div class="flex-1">
               <div class="strong">最近一次错误</div>
-              <div class="mono wrap">{{ selected.error }}</div>
+              <ExpandableText :value="selected.error" mode="clamp" mono copy-label="错误详情" />
             </div>
           </div>
 

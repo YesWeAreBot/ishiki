@@ -16,7 +16,7 @@ const props = withDefaults(
   { busy: null },
 );
 
-const emit = defineEmits<{ edit: []; apply: []; reload: []; stop: []; delete: [] }>();
+const emit = defineEmits<{ edit: []; wizard: []; apply: []; reload: []; stop: []; delete: [] }>();
 const router = useRouter();
 
 type BadgeState = "active" | "stopped" | "activating" | "error" | "idle" | "running";
@@ -130,6 +130,9 @@ function openRuntimeSession(sessionId: string): void {
         </div>
         <div class="panel-actions profile-actions">
           <button type="button" class="btn btn-sm" :disabled="busy !== null" @click="emit('edit')"><Icon name="edit" :size="14" /> 编辑</button>
+          <button type="button" class="btn btn-sm" :disabled="busy !== null" title="按步骤重新核对基础配置" @click="emit('wizard')">
+            <Icon name="settings" :size="14" /> 配置向导
+          </button>
           <button
             type="button"
             class="btn btn-sm btn-primary"

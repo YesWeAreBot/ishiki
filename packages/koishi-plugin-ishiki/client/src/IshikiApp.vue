@@ -28,13 +28,12 @@ const pages: PageEntry[] = [
   { id: "runtimes", path: "/ishiki/runtimes", label: "运行实例", icon: "runtimes", component: defineAsyncComponent(() => import("./pages/RuntimesPage.vue")) },
   { id: "sessions", path: "/ishiki/sessions", label: "会话日志", icon: "sessions", component: defineAsyncComponent(() => import("./pages/SessionsPage.vue")) },
   { id: "usage", path: "/ishiki/usage", label: "用量统计", icon: "usage", component: defineAsyncComponent(() => import("./pages/UsagePage.vue")) },
-  { id: "audit", path: "/ishiki/audit", label: "审计记录", icon: "audit", component: defineAsyncComponent(() => import("./pages/AuditPage.vue")) },
   { id: "cache", path: "/ishiki/cache", label: "缓存状态", icon: "cache", component: defineAsyncComponent(() => import("./pages/CachePage.vue")) },
 ];
 
 const groups = [
   { label: "运行", ids: ["models", "profiles", "runtimes", "sessions"] },
-  { label: "观测", ids: ["usage", "audit", "cache"] },
+  { label: "观测", ids: ["usage", "cache"] },
 ] as const;
 
 const navTree: NavNode[] = groups.map((group) => ({

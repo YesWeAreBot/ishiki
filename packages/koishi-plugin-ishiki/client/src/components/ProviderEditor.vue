@@ -55,7 +55,9 @@ function hydrate(): void {
   formError.value = "";
   baseline.value = "";
   providerId.value = props.provider?.id ?? "";
-  const values = schemaDefaults(fields.value);
+  const defaults = schemaDefaults(fields.value);
+  const values: Record<string, unknown> =
+    defaults !== null && typeof defaults === "object" && !Array.isArray(defaults) ? { ...(defaults as Record<string, unknown>) } : {};
   if (props.provider !== undefined) {
     values.api = props.provider.api;
     values.baseUrl = props.provider.baseUrl;

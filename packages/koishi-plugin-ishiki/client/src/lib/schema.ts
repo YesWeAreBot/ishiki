@@ -8,8 +8,19 @@ export function schemaDefaults(node: SchemaNode | undefined): unknown {
   const structural = structuralDefaults(node);
   const explicit = node.meta.default;
   if (explicit === undefined) return structural;
+  // 字符串与数字的显式默认值只用 placeholder 提示，不预填；
+  // 用户未填写时提交由服务端 Schema 补默认值，已保存的实际值仍显示在输入框里。
+  if (node.type === "string" || node.type === "number") return structural === undefined ? undefined : structural;
   if (isRecord(structural) && isRecord(explicit)) return mergeDefaults(structural, explicit);
   return cloneValue(explicit);
+}
+
+/** 适合作为 placeholder 展示的默认值；布尔、对象与空值不适用。 */
+export function schemaPlaceholder(node: SchemaNode | undefined): string | undefined {
+  const value = node?.meta.default;
+  if (value === undefined || value === null || typeof value === "boolean" || typeof value === "object") return undefined;
+  const text = String(value);
+  return text.length === 0 ? undefined : text;
 }
 
 /** 默认值可能来自 Vue 响应式代理，structuredClone 会拒绝；逐层复制普通数据。 */

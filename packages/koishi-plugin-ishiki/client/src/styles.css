@@ -2190,6 +2190,25 @@
     font-size: 11px;
   }
 
+  .wrap {
+    overflow-wrap: anywhere;
+  }
+
+  .member-reference {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    font-family: var(--sans);
+    font-size: 11px;
+  }
+
+  .member-reference.mono,
+  .member-reference .mono {
+    font-family: var(--mono);
+  }
+
   .link {
     color: var(--accent-ink);
     text-decoration: underline;

@@ -86,6 +86,28 @@ export interface ProviderInput {
   models?: ModelDecl[];
 }
 
+/* 在线模型名单 */
+
+/** 提供商 /models 接口返回的一个可用模型。 */
+export interface RemoteModelInfo {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
+export interface RemoteModelsQuery {
+  /** 已保存供应商的 id；与 draft 二选一。 */
+  providerId?: string;
+  /** 尚未保存的供应商草稿，密钥只在服务端内存中停留。 */
+  draft?: { api: string; baseUrl?: string; apiKey: string; headers?: Record<string, string> };
+}
+
+export interface RemoteModelsDocument {
+  provider: string;
+  models: RemoteModelInfo[];
+}
+
 /* Profile */
 
 export type ProfileState = "active" | "inactive" | "failed" | "loading";

@@ -10,6 +10,7 @@ import PageHeader from "../components/PageHeader.vue";
 import PageShell from "../components/PageShell.vue";
 import ProfileDetail from "../components/ProfileDetail.vue";
 import ProfileEditor from "../components/ProfileEditor.vue";
+import ProfileWizard from "../components/ProfileWizard.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { formatDateTime, relativeTime, truncate } from "../lib/format";
 import { store, toast } from "../store";
@@ -28,6 +29,7 @@ const detail = ref<ProfileView | null>(null);
 const detailLoading = ref(false);
 const detailError = ref("");
 const busy = ref<BusyAction | null>(null);
+const wizardOpen = ref(false);
 
 const action = reactive<{
   kind: "stop" | "delete" | null;
@@ -263,6 +265,11 @@ function onSaved(view: ProfileView): void {
   editing.value = false;
 }
 
+function onWizardCreated(view: ProfileView): void {
+  wizardOpen.value = false;
+  void router.push(`/ishiki/profiles/${encodeURIComponent(view.id)}`);
+}
+
 function clearFilters(): void {
   query.value = "";
   statusFilter.value = "all";
@@ -277,6 +284,7 @@ function clearFilters(): void {
       eyebrow="运行 / Profile"
     >
       <template #actions>
+        <button type="button" class="btn btn-primary" @click="wizardOpen = true"><Icon name="plus" :size="15" /> 新建 Profile</button>
         <button v-if="!editing && profileId !== ''" type="button" class="btn" :disabled="detailLoading" @click="load(profileId)">
           <span v-if="detailLoading" class="spinner" aria-hidden="true"></span>
           <Icon v-else name="refresh" :size="15" /> 刷新详情
@@ -322,7 +330,7 @@ function clearFilters(): void {
           <div class="empty-mark"><Icon name="profile" :size="20" /></div>
           <div class="empty-title">{{ store.profiles.length === 0 ? "还没有 Profile" : "没有匹配的 Profile" }}</div>
           <p class="empty-desc">
-            {{ store.profiles.length === 0 ? "在服务端的 profiles 目录下创建 Profile 配置后，列表会自动更新。" : "清除搜索或切换状态筛选后再试。" }}
+            {{ store.profiles.length === 0 ? "点击「新建 Profile」通过配置向导创建第一个 Profile。" : "清除搜索或切换状态筛选后再试。" }}
           </p>
           <button v-if="store.profiles.length > 0" type="button" class="btn btn-soft" @click="clearFilters">清除筛选</button>
         </div>
@@ -397,6 +405,7 @@ function clearFilters(): void {
           :profile="detail"
           :busy="busy"
           @edit="editing = true"
+          @wizard="wizardOpen = true"
           @apply="run('apply')"
           @reload="run('reload')"
           @stop="ask('stop', detail)"
@@ -404,6 +413,8 @@ function clearFilters(): void {
         />
       </div>
     </div>
+
+    <ProfileWizard :open="wizardOpen" :profile="detail ?? undefined" @close="wizardOpen = false" @created="onWizardCreated" />
 
     <BaseModal
       :open="action.kind !== null"

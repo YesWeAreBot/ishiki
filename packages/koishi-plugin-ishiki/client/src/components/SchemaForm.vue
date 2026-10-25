@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import { schemaDefaults } from "../lib/schema";
+import { schemaDefaults, schemaPlaceholder } from "../lib/schema";
 import type { SchemaNode } from "../types";
 import ModelReferenceSelect from "./ModelReferenceSelect.vue";
 import ToggleSwitch from "./ToggleSwitch.vue";
@@ -206,7 +206,7 @@ function onJson(event: Event): void {
     :type="secret ? 'password' : 'text'"
     :value="textValue"
     :disabled="disabled"
-    :placeholder="secret && meta.configured === true ? '已配置，留空保持原值' : undefined"
+    :placeholder="secret && meta.configured === true ? '已配置，留空保持原值' : schemaPlaceholder(schema)"
     autocomplete="off"
     @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
   />
@@ -218,6 +218,7 @@ function onJson(event: Event): void {
     :value="numberValue"
     :min="typeof meta.min === 'number' ? meta.min : undefined"
     :max="typeof meta.max === 'number' ? meta.max : undefined"
+    :placeholder="schemaPlaceholder(schema)"
     :disabled="disabled"
     @input="onNumber"
   />

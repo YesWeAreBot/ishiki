@@ -178,8 +178,13 @@ function submit(): void {
   const breaker = asRecord(draft.circuitBreaker);
   const failureThreshold = positiveInteger(breaker.failureThreshold);
   const cooldownSeconds = positiveInteger(breaker.cooldownSeconds);
-  if (failureThreshold === undefined) errors.push("失败阈值需要大于 0 的整数。");
-  if (cooldownSeconds === undefined) errors.push("冷却时间需要大于 0 的整数。");
+  // 留空的熔断字段按服务端默认处理，只校验已填写的值。
+  if (breaker.failureThreshold !== undefined && breaker.failureThreshold !== null && failureThreshold === undefined) {
+    errors.push("失败阈值需要大于 0 的整数。");
+  }
+  if (breaker.cooldownSeconds !== undefined && breaker.cooldownSeconds !== null && cooldownSeconds === undefined) {
+    errors.push("冷却时间需要大于 0 的整数。");
+  }
   if (errors.length > 0) {
     formError.value = errors.join(" ");
     return;
@@ -187,7 +192,10 @@ function submit(): void {
 
   const group: GroupView = { name, models: [...members.value] };
   if (strategy !== undefined) group.strategy = strategy;
-  if (failureThreshold !== undefined && cooldownSeconds !== undefined) group.circuitBreaker = { failureThreshold, cooldownSeconds };
+  const breakerValue: NonNullable<GroupView["circuitBreaker"]> = {};
+  if (failureThreshold !== undefined) breakerValue.failureThreshold = failureThreshold;
+  if (cooldownSeconds !== undefined) breakerValue.cooldownSeconds = cooldownSeconds;
+  if (Object.keys(breakerValue).length > 0) group.circuitBreaker = breakerValue;
   emit("save", { name, group, isNewGroup: !editing.value });
 }
 

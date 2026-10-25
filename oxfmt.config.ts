@@ -13,6 +13,7 @@ export default defineConfig({
     "**/dist/**",
     "**/lib/**",
     "**/node_modules/**",
+    "**/CHANGELOG.md",
     "packages/onebot-actions/src/catalog/generated.ts",
     "docs/**",
   ],

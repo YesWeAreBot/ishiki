@@ -1,6 +1,4 @@
 import type {
-  AuditFilters,
-  AuditSnapshot,
   CacheSnapshot,
   EnginesDirectory,
   ExtensionsDirectory,
@@ -12,6 +10,8 @@ import type {
   ProfileStatus,
   ProfileSummary,
   ProfileView,
+  RemoteModelsDocument,
+  RemoteModelsQuery,
   RuntimeView,
   RuntimeWakeResult,
   SessionEntries,
@@ -37,12 +37,6 @@ export interface SessionsSnapshot {
   sessions: SessionSummary[];
 }
 
-export interface ObservabilitySnapshot {
-  usage: UsageSnapshot;
-  audit: AuditSnapshot;
-  cache: CacheSnapshot;
-}
-
 export type ConsoleFailure = {
   ok: false;
   error: { code: string; message: string; details?: unknown };
@@ -58,7 +52,6 @@ declare module "@koishijs/console" {
       ishikiRuntimes: RuntimesSnapshot;
       ishikiSessions: SessionsSnapshot;
       ishikiUsage: UsageSnapshot;
-      ishikiAudit: AuditSnapshot;
       ishikiCache: CacheSnapshot;
     }
   }
@@ -66,10 +59,12 @@ declare module "@koishijs/console" {
   interface Events {
     "ishiki/models/validate": (input: ModelsConfigInput) => Promise<ConsoleResult<{ config: ModelsConfigInput; options: ModelOption[] }>>;
     "ishiki/models/save": (input: ModelsSaveInput) => Promise<ConsoleResult<ModelsDocument>>;
+    "ishiki/models/remote": (query: RemoteModelsQuery) => Promise<ConsoleResult<RemoteModelsDocument>>;
 
     "ishiki/profiles/read": (id: string) => Promise<ConsoleResult<ProfileView>>;
     "ishiki/profiles/status": (id: string) => Promise<ConsoleResult<ProfileStatus>>;
     "ishiki/profiles/save": (id: string, input: ProfileSaveInput, revision: string) => Promise<ConsoleResult<ProfileView>>;
+    "ishiki/profiles/create": (id: string, input: ProfileSaveInput) => Promise<ConsoleResult<ProfileView>>;
     "ishiki/profiles/apply": (id: string) => Promise<ConsoleResult<ProfileView>>;
     "ishiki/profiles/reload": (id: string) => Promise<ConsoleResult<ProfileView>>;
     "ishiki/profiles/stop": (id: string) => Promise<ConsoleResult<ProfileStatus>>;
@@ -85,7 +80,6 @@ declare module "@koishijs/console" {
     "ishiki/sessions/entries": (id: string, cursor: string | undefined, limit: number, filters?: SessionEntryFilters) => Promise<ConsoleResult<SessionEntries>>;
 
     "ishiki/observability/usage": (filters?: UsageFilters) => Promise<ConsoleResult<UsageSnapshot>>;
-    "ishiki/observability/audit": (filters?: AuditFilters) => Promise<ConsoleResult<AuditSnapshot>>;
     "ishiki/observability/cache": () => Promise<ConsoleResult<CacheSnapshot>>;
   }
 }

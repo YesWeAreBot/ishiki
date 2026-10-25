@@ -14,7 +14,20 @@ import { collectSecrets, describeError, ManagementError, redact } from "./errors
 import type { ManagementEventBus } from "./events.js";
 import type { AuditLog } from "./observability.js";
 import type { RuntimesManager } from "./runtimes.js";
-import type { GroupView, ModelDecl, ModelDeclView, ModelOption, ModelsConfigInput, ModelsDocument, ProviderInput, ProviderView, SecretState } from "./types.js";
+import type {
+  GroupView,
+  ModelDecl,
+  ModelDeclView,
+  ModelOption,
+  ModelsConfigInput,
+  ModelsDocument,
+  ProviderInput,
+  ProviderView,
+  RemoteModelInfo,
+  RemoteModelsDocument,
+  RemoteModelsQuery,
+  SecretState,
+} from "./types.js";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -45,6 +58,90 @@ function secretOf(apiKey: string | undefined): SecretState {
   if (typeof apiKey !== "string" || apiKey.length === 0) return { configured: false };
   if (apiKey.startsWith("${") && apiKey.endsWith("}")) return { configured: true, reference: apiKey };
   return { configured: true };
+}
+
+/** 网关用 `${NAME}` 引用环境变量；在线名单请求需要同样的展开规则。 */
+function expandReference(value: string, where: string): string {
+  if (!value.startsWith("${") || !value.endsWith("}")) return value;
+  const name = value.slice(2, -1);
+  const resolved = process.env[name];
+  if (resolved === undefined || resolved.length === 0) {
+    throw new ManagementError("invalid", `${where}: 环境变量 ${name} 未设置`);
+  }
+  return resolved;
+}
+
+interface RemoteEndpoint {
+  url: string;
+  headers: Record<string, string>;
+}
+
+/** 各接口方言对应的 /models 端点；baseUrl 缺省时使用该方言的默认地址。 */
+function remoteEndpoint(api: string, baseUrl: string | undefined, apiKey: string): RemoteEndpoint {
+  switch (api) {
+    case "openai-completions":
+    case "openai-responses":
+      return { url: `${baseUrl ?? "https://api.openai.com/v1"}/models`, headers: { Authorization: `Bearer ${apiKey}` } };
+    case "typesafe-ai":
+      if (baseUrl === undefined) throw new ManagementError("invalid", "typesafe-ai 需要填写 baseUrl 才能获取在线模型名单");
+      return { url: `${baseUrl.replace(/\/$/, "")}/models`, headers: { Authorization: `Bearer ${apiKey}` } };
+    case "anthropic-messages":
+      return {
+        url: `${baseUrl ?? "https://api.anthropic.com/v1"}/models?limit=1000`,
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      };
+    case "google-generative-ai":
+      return {
+        url: `${baseUrl ?? "https://generativelanguage.googleapis.com/v1beta"}/models?pageSize=1000&key=${encodeURIComponent(apiKey)}`,
+        headers: {},
+      };
+    default:
+      throw new ManagementError("invalid", `接口类型 ${api} 不支持在线模型名单`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** 把各家 /models 响应映射为统一的 RemoteModelInfo；字段缺失时原样省略。 */
+function parseRemoteModels(api: string, payload: unknown): RemoteModelInfo[] {
+  if (!isRecord(payload)) throw new ManagementError("failed", "模型名单响应不是 JSON 对象");
+  const rows: RemoteModelInfo[] = [];
+  if (api === "google-generative-ai") {
+    const models = payload.models;
+    if (!Array.isArray(models)) throw new ManagementError("failed", "模型名单响应缺少 models 数组");
+    for (const item of models) {
+      if (!isRecord(item)) continue;
+      const raw = text(item.name);
+      if (raw === undefined) continue;
+      rows.push({
+        id: raw.replace(/^models\//, ""),
+        name: text(item.displayName),
+        contextWindow: positiveNumber(item.inputTokenLimit),
+        maxTokens: positiveNumber(item.outputTokenLimit),
+      });
+    }
+    return rows;
+  }
+  const data = payload.data;
+  if (!Array.isArray(data)) throw new ManagementError("failed", "模型名单响应缺少 data 数组");
+  for (const item of data) {
+    if (!isRecord(item)) continue;
+    const id = text(item.id);
+    if (id === undefined) continue;
+    if (text(item.type) !== undefined && text(item.type) !== "model") continue;
+    rows.push({ id, name: text(item.display_name) });
+  }
+  return rows;
 }
 
 function modelViews(providerId: string, models: readonly ModelDecl[] | undefined): ModelDeclView[] {
@@ -349,6 +446,70 @@ export class ModelsManager {
       detail: { latencyMs: result.latencyMs },
     });
     return result;
+  }
+
+  /**
+   * 拉取提供商的在线模型名单。凭据只在服务端展开与使用，明文不会进入返回值或日志。
+   * providerId 与 draft 二选一：前者使用已保存配置，后者用于尚未落盘的供应商草稿。
+   */
+  async listRemote(query: RemoteModelsQuery): Promise<RemoteModelsDocument> {
+    let provider: string;
+    let api: string;
+    let baseUrl: string | undefined;
+    let apiKey: string;
+    let extraHeaders: Record<string, string> = {};
+
+    if (query.providerId !== undefined) {
+      const saved = this.parse(await this.readText()).providers?.[query.providerId];
+      if (saved === undefined) throw new ManagementError("not-found", `供应商 ${query.providerId} 不存在`);
+      provider = query.providerId;
+      api = saved.api;
+      baseUrl = saved.baseUrl;
+      apiKey = saved.apiKey;
+      extraHeaders = { ...saved.headers };
+    } else if (query.draft !== undefined) {
+      if (query.draft.api.length === 0) throw new ManagementError("invalid", "供应商草稿缺少接口类型");
+      if (query.draft.apiKey.length === 0) throw new ManagementError("invalid", "供应商草稿缺少 API 密钥");
+      provider = "draft";
+      api = query.draft.api;
+      baseUrl = query.draft.baseUrl;
+      apiKey = query.draft.apiKey;
+      extraHeaders = { ...query.draft.headers };
+    } else {
+      throw new ManagementError("invalid", "缺少 providerId 或供应商草稿");
+    }
+
+    apiKey = expandReference(apiKey, `providers.${provider}.apiKey`);
+    for (const [name, value] of Object.entries(extraHeaders)) {
+      extraHeaders[name] = expandReference(value, `providers.${provider}.headers.${name}`);
+    }
+    const endpoint = remoteEndpoint(api, baseUrl?.replace(/\/$/, ""), apiKey);
+    let response: Response;
+    try {
+      response = await fetch(endpoint.url, { headers: { ...extraHeaders, ...endpoint.headers }, signal: AbortSignal.timeout(15_000) });
+    } catch (error) {
+      // 端点 URL 可能内嵌凭据，错误信息不回显 URL。
+      throw new ManagementError("failed", `请求模型名单接口失败: ${describeError(error).message}`);
+    }
+    if (!response.ok) {
+      const body = (await response.text().catch(() => "")).slice(0, 200);
+      throw new ManagementError("failed", `获取模型名单失败: HTTP ${response.status}${body.length > 0 ? ` ${body}` : ""}`);
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw new ManagementError("failed", `模型名单响应无法解析为 JSON: ${describeError(error).message}`);
+    }
+    const seen = new Set<string>();
+    const models = parseRemoteModels(api, payload)
+      .filter((model) => {
+        if (seen.has(model.id)) return false;
+        seen.add(model.id);
+        return true;
+      })
+      .sort((left, right) => left.id.localeCompare(right.id));
+    return { provider, models };
   }
 
   private async saveNow(input: ModelsConfigInput, revision: string, operator: string): Promise<ModelsDocument> {

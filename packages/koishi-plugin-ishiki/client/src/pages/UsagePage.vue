@@ -3,10 +3,14 @@ import { computed, onMounted, ref, watch } from "vue";
 
 import { ApiError, call } from "../api";
 import EmptyState from "../components/EmptyState.vue";
+import ExpandableText from "../components/ExpandableText.vue";
 import Icon from "../components/Icon.vue";
+import LineChart from "../components/LineChart.vue";
 import PageHeader from "../components/PageHeader.vue";
 import PageShell from "../components/PageShell.vue";
-import { formatDateTime, formatNumber, relativeTime } from "../lib/format";
+import { classifyReference, entityBadge, entityLabel } from "../lib/entities";
+import { formatDateTime, formatNumber } from "../lib/format";
+import { bucketUsageByDay, USAGE_METRICS, type UsageMetricKey } from "../lib/usageSeries";
 import { store, toast } from "../store";
 import type { UsageFilters, UsageSnapshot } from "../types";
 
@@ -20,18 +24,21 @@ const rangeOptions: Array<{ value: RangeKey; label: string }> = [
   { value: "custom", label: "自定义区间" },
 ];
 
+const DEFAULT_METRICS: UsageMetricKey[] = ["calls", "input", "output"];
+
 const snapshot = ref<UsageSnapshot | undefined>(store.usage);
 const scoped = ref(false);
 const attempted = ref(false);
 const loading = ref(false);
 const errorText = ref("");
 const lastFilters = ref<UsageFilters>({});
+const selectedMetrics = ref<UsageMetricKey[]>([...DEFAULT_METRICS]);
 
 const range = ref<string>("all");
 const customFrom = ref("");
 const customTo = ref("");
 const profileFilter = ref("all");
-const modelFilter = ref("all");
+const targetFilter = ref("all");
 
 watch(
   () => store.usage,
@@ -42,8 +49,8 @@ watch(
 
 const totals = computed(() => snapshot.value?.totals);
 const byModel = computed(() => snapshot.value?.byModel ?? []);
-const byDay = computed(() => snapshot.value?.byDay ?? []);
 const quality = computed(() => snapshot.value?.quality ?? []);
+const records = computed(() => snapshot.value?.records ?? []);
 const recordCount = computed(() => snapshot.value?.records.length ?? 0);
 const syncedAt = computed(() => snapshot.value?.syncedAt);
 const bootstrapped = computed(() => store.usage !== undefined || attempted.value);
@@ -55,16 +62,41 @@ const profileIds = computed(() => {
   return [...ids].sort();
 });
 
-const modelOptions = computed(() => {
-  const labels = new Map<string, string>();
-  for (const option of store.options) {
-    if (option.kind === "model") labels.set(option.reference, option.label.length > 0 ? option.label : option.reference);
-  }
-  for (const row of byModel.value) {
-    if (!labels.has(row.reference)) labels.set(row.reference, row.reference);
-  }
-  return [...labels.entries()].map(([reference, label]) => ({ reference, label })).sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+/**
+ * 统计对象 = 具体模型 + 模型组 + 缺少映射的历史引用，三者明确分开；
+ * 模型组名不作为模型名展示，缺映射的引用保留原值并标记。
+ */
+const entityOptions = computed<Array<{ reference: string; kind: "model" | "group" | "unmapped"; label: string }>>(() => {
+  const references = new Set<string>();
+  for (const option of store.options) references.add(option.reference);
+  for (const row of byModel.value) references.add(row.reference);
+  const kindOrder = { model: 0, group: 1, unmapped: 2 } as const;
+  return [...references]
+    .map((reference) => {
+      const entity = classifyReference(reference, store.providers, store.groups);
+      return { reference, kind: entity.kind, label: entityLabel(entity) };
+    })
+    .sort((left, right) => kindOrder[left.kind] - kindOrder[right.kind] || left.reference.localeCompare(right.reference));
 });
+
+const entityGroups = computed(() => [
+  { key: "model" as const, label: "模型", items: entityOptions.value.filter((item) => item.kind === "model") },
+  { key: "group" as const, label: "模型组", items: entityOptions.value.filter((item) => item.kind === "group") },
+  { key: "unmapped" as const, label: "缺少映射", items: entityOptions.value.filter((item) => item.kind === "unmapped") },
+]);
+
+function badgeOf(reference: string): { label: string; tone: string } {
+  return entityBadge(classifyReference(reference, store.providers, store.groups));
+}
+
+const chartSeries = computed(() => bucketUsageByDay(records.value, selectedMetrics.value));
+
+function toggleMetric(key: UsageMetricKey): void {
+  const current = selectedMetrics.value;
+  selectedMetrics.value = current.includes(key)
+    ? current.filter((item) => item !== key)
+    : USAGE_METRICS.filter((metric) => current.includes(metric.key) || metric.key === key).map((metric) => metric.key);
+}
 
 function describe(error: unknown): string {
   if (error instanceof ApiError) return error.message;
@@ -102,7 +134,7 @@ function buildFilters(): UsageFilters | undefined {
   if (bounds === undefined) return undefined;
   const filters: UsageFilters = {};
   if (profileFilter.value !== "all") filters.profileId = profileFilter.value;
-  if (modelFilter.value !== "all") filters.model = modelFilter.value;
+  if (targetFilter.value !== "all") filters.model = targetFilter.value;
   if (bounds.from !== undefined) filters.from = bounds.from;
   if (bounds.to !== undefined) filters.to = bounds.to;
   return filters;
@@ -152,7 +184,7 @@ async function reset(): Promise<void> {
   customFrom.value = "";
   customTo.value = "";
   profileFilter.value = "all";
-  modelFilter.value = "all";
+  targetFilter.value = "all";
   await run({}, false);
 }
 
@@ -165,7 +197,7 @@ onMounted(() => {
   <PageShell>
     <PageHeader
       title="用量统计"
-      desc="用量账本记录每次模型调用的输入、输出、缓存与推理 token。页面只展示服务端汇总的数字与缺失原因，不把 token 换算成金额。"
+      desc="用量账本记录每次模型调用的输入、输出、缓存与推理 token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。"
       eyebrow="观测 / 用量"
     >
       <template #actions>
@@ -198,12 +230,14 @@ onMounted(() => {
               <span v-if="profileIds.length === 0" class="field-hint">还没有可用的 Profile。</span>
             </label>
             <label class="field">
-              <span class="field-label">模型</span>
-              <select v-model="modelFilter" class="select" :disabled="loading || modelOptions.length === 0">
-                <option value="all">全部模型</option>
-                <option v-for="option in modelOptions" :key="option.reference" :value="option.reference">{{ option.label }}</option>
+              <span class="field-label">统计对象</span>
+              <select v-model="targetFilter" class="select" :disabled="loading || entityOptions.length === 0">
+                <option value="all">全部模型与模型组</option>
+                <optgroup v-for="group in entityGroups" :key="group.key" :label="group.label">
+                  <option v-for="item in group.items" :key="item.reference" :value="item.reference">{{ item.label }}</option>
+                </optgroup>
               </select>
-              <span v-if="modelOptions.length === 0" class="field-hint">还没有出现过调用的模型。</span>
+              <span v-if="entityOptions.length === 0" class="field-hint">还没有出现过调用的模型或模型组。</span>
             </label>
           </div>
 
@@ -221,8 +255,6 @@ onMounted(() => {
           <div class="row row-wrap" style="margin-top: 12px">
             <button type="button" class="btn btn-primary btn-sm" :disabled="loading" @click="apply">应用筛选</button>
             <button type="button" class="btn btn-ghost btn-sm" :disabled="loading" @click="reset">重置</button>
-            <span class="spacer"></span>
-            <span class="muted small">缺失字段与推导来源按服务端判定原样列出。</span>
           </div>
         </div>
       </div>
@@ -275,7 +307,7 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="metric-grid three" style="margin-top: 10px">
+            <div class="metric-grid three usage-metric-second" style="margin-top: 10px">
               <div class="metric">
                 <div class="metric-label"><Icon name="pulse" :size="13" /> 推理 token</div>
                 <div class="metric-value">{{ formatNumber(totals.reasoning) }}</div>
@@ -297,18 +329,53 @@ onMounted(() => {
           <div class="panel">
             <div class="panel-head">
               <div>
-                <div class="panel-title">按模型汇总</div>
-                <div class="panel-sub">调用次数与 token 均来自账本记录，按输入与输出之和降序。</div>
+                <div class="panel-title">时间序列</div>
+                <div class="panel-sub">按天汇总原始用量记录；点击指标增减曲线，悬停或用方向键查看具体数据点。</div>
               </div>
               <div class="panel-actions">
-                <span class="badge badge-outline">{{ byModel.length }} 个模型</span>
+                <span class="badge badge-outline">{{ records.length }} 条记录</span>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div v-if="recordCount === 0" class="empty" style="padding: 28px 12px">
+                <div class="empty-title">所选范围内没有用量记录</div>
+                <p class="empty-desc">放宽时间范围或清除筛选后再试。</p>
+                <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="reset">重置筛选</button>
+              </div>
+              <template v-else>
+                <div class="chip-set" role="group" aria-label="选择图表指标" style="margin-bottom: 14px">
+                  <button
+                    v-for="metric in USAGE_METRICS"
+                    :key="metric.key"
+                    type="button"
+                    class="chip-toggle"
+                    :aria-pressed="selectedMetrics.includes(metric.key)"
+                    @click="toggleMetric(metric.key)"
+                  >
+                    {{ metric.label }}（{{ metric.unit }}）
+                  </button>
+                </div>
+                <LineChart :series="chartSeries" />
+              </template>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">按统计对象汇总</div>
+                <div class="panel-sub">模型组按组维度聚合，具体模型按模型引用聚合；缺少映射的引用原样列出。</div>
+              </div>
+              <div class="panel-actions">
+                <span class="badge badge-outline">{{ byModel.length }} 个对象</span>
               </div>
             </div>
             <div class="table-wrap">
               <table class="table table-compact">
                 <thead>
                   <tr>
-                    <th>模型</th>
+                    <th>类型</th>
+                    <th>对象</th>
                     <th class="num">调用</th>
                     <th class="num">输入</th>
                     <th class="num">输出</th>
@@ -318,7 +385,12 @@ onMounted(() => {
                 </thead>
                 <tbody>
                   <tr v-for="row in byModel" :key="row.reference">
-                    <td class="mono">{{ row.reference }}</td>
+                    <td>
+                      <span class="badge" :class="badgeOf(row.reference).tone">{{ badgeOf(row.reference).label }}</span>
+                    </td>
+                    <td>
+                      <ExpandableText :value="row.reference" mode="ends" mono copy-label="对象引用" />
+                    </td>
                     <td class="num">{{ formatNumber(row.calls) }}</td>
                     <td class="num">{{ formatNumber(row.input) }}</td>
                     <td class="num">{{ formatNumber(row.output) }}</td>
@@ -326,7 +398,7 @@ onMounted(() => {
                     <td class="num">{{ formatNumber(row.cacheWrite) }}</td>
                   </tr>
                   <tr v-if="byModel.length === 0">
-                    <td colspan="6" class="muted">所选范围内没有按模型汇总的数据。</td>
+                    <td colspan="7" class="muted">所选范围内没有按对象汇总的数据。</td>
                   </tr>
                 </tbody>
               </table>
@@ -340,7 +412,7 @@ onMounted(() => {
                 <div class="panel-sub">日期按 UTC 归并，与服务端账本口径一致。</div>
               </div>
               <div class="panel-actions">
-                <span class="badge badge-outline">{{ byDay.length }} 天</span>
+                <span class="badge badge-outline">{{ snapshot.byDay.length }} 天</span>
               </div>
             </div>
             <div class="table-wrap day-scroll">
@@ -355,14 +427,14 @@ onMounted(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in byDay" :key="row.day">
+                  <tr v-for="row in snapshot.byDay" :key="row.day">
                     <td class="mono">{{ row.day }}</td>
                     <td class="num">{{ formatNumber(row.calls) }}</td>
                     <td class="num">{{ formatNumber(row.input) }}</td>
                     <td class="num">{{ formatNumber(row.output) }}</td>
                     <td class="num strong">{{ formatNumber(row.total) }}</td>
                   </tr>
-                  <tr v-if="byDay.length === 0">
+                  <tr v-if="snapshot.byDay.length === 0">
                     <td colspan="5" class="muted">所选范围内没有按天汇总的数据。</td>
                   </tr>
                 </tbody>
@@ -383,7 +455,7 @@ onMounted(() => {
             <div class="panel-body">
               <div v-if="recordCount === 0" class="empty" style="padding: 24px 12px">
                 <div class="empty-title">所选范围内没有用量记录</div>
-                <p class="empty-desc">可以放宽时间范围或清除 Profile / 模型筛选后再试。</p>
+                <p class="empty-desc">可以放宽时间范围或清除 Profile / 统计对象筛选后再试。</p>
                 <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="reset">重置筛选</button>
               </div>
               <div v-else-if="quality.length === 0" class="muted small">所选范围内没有触发数据质量标记。</div>
@@ -398,16 +470,6 @@ onMounted(() => {
               </div>
             </div>
           </div>
-
-          <div class="notice notice-info">
-            <Icon name="info" :size="15" />
-            <span>
-              <strong>口径说明</strong>
-              调用次数等于账本记录条数；每次调用可能来自消息响应、轮次汇总或缺失回退，来源会体现在数据质量中。缓存读取与写入按服务端上报值展示，字段缺失的记录会进入数据质量，不能据此判断缓存是否命中。最近同步：{{
-                formatDateTime(syncedAt)
-              }}（{{ relativeTime(syncedAt) }}）。
-            </span>
-          </div>
         </template>
       </template>
     </div>
@@ -415,7 +477,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.metric-grid.three {
+.usage-metric-second {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 

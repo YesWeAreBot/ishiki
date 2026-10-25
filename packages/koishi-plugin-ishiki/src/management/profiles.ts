@@ -237,19 +237,25 @@ export class ProfilesManager {
     });
   }
 
-  async create(id: string, draft: { model?: string; mode?: "channel" | "cross" }, operator: string): Promise<ProfileView> {
+  /** 控制台创建入口：接收完整配置与人格文本，目录已存在即拒绝，不会留下半成品。 */
+  async createFromInput(id: string, input: ProfileSaveInput, operator: string): Promise<ProfileView> {
     assertId(id);
     return this.changes.run(async () => {
       const directory = path.join(this.root, id);
       if ((await stat(directory).catch(() => undefined)) !== undefined) {
         throw new ManagementError("invalid", `Profile ${id} 已存在`);
       }
-      const config = ProfileConfig({ model: draft.model ?? "", mode: draft.mode ?? "channel", channels: {} } as unknown as ProfileConfig) as unknown as Record<
-        string,
-        unknown
-      >;
+      let config: Record<string, unknown>;
+      try {
+        config = ProfileConfig(input.config as unknown as ProfileConfig) as unknown as Record<string, unknown>;
+      } catch (error) {
+        throw new ManagementError("invalid", `Profile 配置无效: ${this.describe(error)}`);
+      }
+      const target = input.persona === undefined || input.persona.length === 0 ? undefined : await this.personaPath(id, config);
       await mkdir(directory, { recursive: true });
+      if (target !== undefined) await mkdir(path.resolve(target, ".."), { recursive: true });
       await writeAtomic(path.join(directory, "profile.yml"), stringify(config, { lineWidth: 0 }));
+      if (target !== undefined) await writeAtomic(target, input.persona as string);
       const view = await this.read(id);
       await this.audit.append({
         kind: "profile.save",
@@ -263,6 +269,14 @@ export class ProfilesManager {
       this.events.emit("profiles.changed", { profileId: id, revision: view.revision });
       return view;
     });
+  }
+
+  async create(id: string, draft: { model?: string; mode?: "channel" | "cross" }, operator: string): Promise<ProfileView> {
+    return this.createFromInput(
+      id,
+      { config: { model: draft.model ?? "", mode: draft.mode ?? "channel", channels: {} } as unknown as Record<string, unknown> },
+      operator,
+    );
   }
 
   async setField(id: string, field: "model" | "mode" | "instructions", value: string, operator: string): Promise<ProfileView> {
