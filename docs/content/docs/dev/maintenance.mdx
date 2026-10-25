@@ -81,8 +81,8 @@ bun run --filter @ishiki/docs types:check # next typegen + tsc --noEmit
 
 - 内容在 `docs/content/docs/`，MDX 格式，frontmatter 必须含 `title`。
 - 导航：每个目录的 `meta.json`（字段：`title`、`pages`、`description`、`root`、`defaultOpen`、`collapsible`、`icon`）。`pages` 里 `---文字---` 渲染为分隔符；fumadocs 默认按文件名排序，meta 声明优先。
-- 组件：`src/components/mdx.tsx` 是 MDX 组件注册表。`Callout`、`Card` / `Cards` 来自 fumadocs 默认集；`Tabs`、`Steps`、`Accordion`、`TypeTable` 与本地复制的 `Files`、`Mermaid`、`DocsGraph` 也在其中——MDX 里直接写标签即可，不需要 import。
-- 代码围栏：`source.config.ts` 注册了两个 remark 插件——```` ```mermaid ```` 转 `<Mermaid />`，```` ```files ```` 转 `<Files />`。文件树用 `├──` / `└──` 加缩进表达层级，**名字后面的注释会被当成文件名**，要写说明就放到围栏外的段落或列表里。
+- 组件：`src/components/mdx.tsx` 是 MDX 组件注册表。`Callout`、`Card` / `Cards` 来自 fumadocs 默认集；`Tabs`、`Steps`、`Accordion`、`TypeTable` 与本地复制的 `Files`、`Mermaid`、`DocsGraph` 也在其中，MDX 里直接写标签即可，不需要 import。
+- 代码围栏：`source.config.ts` 注册了两个 remark 插件：```` ```mermaid ```` 转 `<Mermaid />`，```` ```files ```` 转 `<Files />`。文件树用 `├──` / `└──` 加缩进表达层级，**名字后面的注释会被当成文件名**，要写说明就放到围栏外的段落或列表里。
 - 文档地图：首页的 `<DocsGraph />` 依赖 `lib/source.ts` 里的 `extractLinkReferences: true`（提取页间链接），页内链接写 `[文字](/docs/...)` 即可参与构图。
 - 布局：文档路由使用 Notebook 布局，源码由 Fumadocs CLI 复制到 `src/layouts/`（别名配置见 `cli.json`），`app/docs/layout.tsx` 与 `app/docs/[[...slug]]/page.tsx` 指向本地副本；升级 fumadocs 后可用 `npx @fumadocs/cli customize` 重新拉取。
 - 站点身份：`lib/shared.ts` 的 `appName` 与 `gitConfig` 提供项目名称和源码链接，`app/layout.tsx` 的 metadata 提供页面描述与正式地址。站点域名为 `https://ishiki.js.org/`，由 `public/CNAME` 声明；`next.config.mjs` 的 `trailingSlash` 为每条路由导出目录页面。部署由 `.github/workflows/pages.yml` 在 `main` 上的文档或构建依赖变更时触发。
@@ -117,7 +117,7 @@ bun run --filter @ishiki/docs types:check # next typegen + tsc --noEmit
 </Step>
 <Step>
 
-版本号仍在 0.0.x 阶段时，接口变更必须在本文档「事实同步」处留痕并在 profile.example.yml 注释中体现。
+版本号仍在 0.0.x 阶段时，接口变更需要在本文档「事实同步」处留痕，并在 profile.example.yml 注释中体现。
 
 </Step>
 </Steps>

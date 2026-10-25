@@ -37,8 +37,8 @@ profile 缺少某个已声明的扩展服务时会停在等待态并报 `missing
 
 配置文件有两个位置：
 
-- **profile 基线**：`<dataPath>/.mcp.json` —— 对所有 profile 生效的默认配置。
-- **profile 覆盖**：`<profile 目录>/mcp.json` —— 该 profile 存在此文件时**整体替换**基线（不是合并）。
+- **profile 基线**：`<dataPath>/.mcp.json`，对所有 profile 生效的默认配置。
+- **profile 覆盖**：`<profile 目录>/mcp.json`，该 profile 存在此文件时**整体替换**基线（不是合并）。
 
 最小示例（stdio 方式，本地拉起子进程）：
 
@@ -112,5 +112,5 @@ mcp pool for <profile 目录>: 2/3 servers connected
 | --- | --- | --- |
 | `connection failed: …` | 命令不存在、依赖未装、URL 不通 | 手动执行 `command + args` 验证；检查 `env` 是否漏了必要变量 |
 | 2/3 connected 但少的那台无报错详情 | 服务器自身启动失败 | 用日志级别 3（DEBUG）重跑看子进程输出 |
-| 工具在对话里「不存在」 | profile 没写 `extends`；或进了 `disabledServers`；或该 profile 用了自己的 mcp.json 覆盖了基线 | 逐项核对 |
+| 工具在对话里不存在 | profile 没写 `extends`；或进了 `disabledServers`；或该 profile 用了自己的 mcp.json 覆盖了基线 | 逐项核对 |
 | stdio 服务器反复崩溃 | 子进程即起即崩 | 单独跑该命令确认能常驻 |

@@ -136,7 +136,7 @@ wakeup:
 
 ### 让模型自己判断此刻该不该开口
 
-jev 引擎把「要不要说话」交给一次轻量模型调用。它按三个维度各问一句——是不是在跟 bot 说话（addressed）、bot 对这个话题有没有话说（interested）、是不是别人之间的对话（others）——按 `sqrt(max(addressed, interested) × (1 - others))` 合成 0 到 1 的量，超过阈值才开口：
+jev 引擎把「要不要说话」交给一次轻量模型调用。它分别询问是不是在跟 bot 说话（addressed）、bot 对这个话题有没有话说（interested）、是不是别人之间的对话（others），再按 `sqrt(max(addressed, interested) × (1 - others))` 合成 0 到 1 的量，超过阈值才开口：
 
 ```yaml
 wakeup:

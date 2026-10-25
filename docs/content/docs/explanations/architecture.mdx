@@ -44,7 +44,7 @@ Koishi 的 `internal/session` 事件由 `session-handler` 整形为 `ishiki.mess
 
 三个关注点可以分别定制，同一个 runtime 在每族中选择一个变体。唤醒引擎安排运行时机，上下文引擎在请求前整理输入，工具调用引擎在模型调用内部组织交互。具体变体按各自接口约定协作。
 
-上下文引擎不修改已有事实。压缩类操作用追加新条目的方式表达，历史保持可回放；它可以追加系统提示词。唤醒引擎的 `attach` 是必选成员，用于建立订阅、定时器或其他调度机制，并返回释放函数。这些状态跟着实例走，channel 模式下各频道天然隔离。工具调用引擎包装 `LanguageModelV4`：`native` 的 `middleware()` 返回 `undefined`，直接使用模型的原生 function call；文本协议变体把 JSON、XML 等输出解析成工具调用；`narrative` 在同一个模型步骤内组织多个模型调用，返回标准的 `LanguageModelV4` 结果。无论哪种变体，真正的工具执行都由宿主 Agent 完成。
+上下文引擎不修改已有事实。压缩类操作用追加新条目的方式表达，历史保持可回放；它可以追加系统提示词。唤醒引擎的 `attach` 是必选成员，用于建立订阅、定时器或其他调度机制，并返回释放函数。这些状态跟着实例走，channel 模式下各频道天然隔离。工具调用引擎包装 `LanguageModelV4`：`native` 的 `middleware()` 返回 `undefined`，直接使用模型的原生 function call；文本协议变体把 JSON、XML 等输出解析成工具调用；`narrative` 在同一个模型步骤内组织多个模型调用，返回标准的 `LanguageModelV4` 结果。无论哪种变体，工具执行都由宿主 Agent 完成。
 
 `narrative` 由独立插件提供，上下文与工具调用两个变体配套使用：上下文引擎维护可恢复的叙事，工具调用引擎在同一个模型步骤里推进 Narrator。Narrator 选择下一步意图，行动意图交给 Action Decoder 生成宿主工具调用，回复意图交给 Replyer 写出实际消息。两个分支按意图选择；工具执行与会话存储由宿主负责。
 

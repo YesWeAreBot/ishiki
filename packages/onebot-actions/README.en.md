@@ -101,7 +101,7 @@ node packages/onebot/scripts/generate-catalog.mjs --check   # exits non-zero whe
 
 The script reads `NAPCAT_DOCS` and `SNOWLUMA_DOCS`, defaulting to `D:/Codespace/references/NapCatDocs` and `D:/Codespace/references/SnowLumaDocs`. It uses the newest NapCat OpenAPI document for parameters and scans every version to record when an action first appeared; SnowLuma's `catalog.json` supplies its read-only flags and aliases, since its OpenAPI does not carry them.
 
-Two generation rules are worth knowing:
+There are two generation rules:
 
 - NapCat has no read-only flag. Actions are classified by name prefix, then corrected by an override table for the cases the prefix gets wrong (`get_ai_record`, `_mark_all_as_read`, `ocr_image`, and others).
 - OpenAPI lists some parameters with a `default` as required. Those are treated as optional, because the backend fills them in.

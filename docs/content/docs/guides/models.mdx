@@ -3,7 +3,7 @@ title: 接入模型供应商
 description: 在 models.yaml 中声明 provider、模型与故障转移组
 ---
 
-`models.yaml` 回答一个问题：Ishiki 可以用哪些模型。本文给出完整写法：供应商声明、多协议接入、环境变量、故障转移组。
+`models.yaml` 决定 Ishiki 可以用哪些模型。
 
 文件位置：`<dataPath>/models.yaml`（默认 `data/ishiki/models.yaml`）。插件启动时若文件不存在会自动创建空文件。修改后需重启 Koishi 生效。
 
@@ -74,7 +74,7 @@ providers:
 | `google-generative-ai` | Google Gemini 及其兼容接口 | 按需 |
 | `typesafe-ai` | Typesafe 平台的模型接口 | 按需 |
 
-选型口诀：官方 OpenAI/Anthropic/Google 账号用对应方言；国内聚合站和本地推理框架几乎都走 `openai-completions`。
+选型建议：官方 OpenAI/Anthropic/Google 账号用对应方言；国内聚合站和本地推理框架几乎都走 `openai-completions`。
 
 ## 用环境变量存密钥
 
@@ -120,7 +120,7 @@ groups:
 - 熔断器按候选记账：连续失败达到 `failureThreshold` 的候选在冷却期内被跳过，避免每次请求都在坏模型上浪费超时。
 
 <Callout type="warn">
-组只负责「选谁」，profile 的 `failover` 段负责「怎么重试」，两者配合见[参考：插件与 profile 配置](/docs/reference/plugin-config)的 failover 说明。
+组负责候选顺序，profile 的 `failover` 段负责重试，两者配合见[参考：插件与 profile 配置](/docs/reference/plugin-config)的 failover 说明。
 </Callout>
 
 ## 模型引用怎么写
@@ -139,4 +139,4 @@ profile 里 `model` 字段的合法写法：
 
 ## 验证
 
-重启 Koishi，日志无 `GatewayError` 类报错即说明文件合法。用一个只含该模型的 profile 发一条私聊消息做端到端验证。接口本身不通（网络、密钥）的报错发生在对话时而不是启动时，可在[调试与排障](/docs/guides/debugging)中开启 `dumpRequests` 查看实际请求。
+重启 Koishi，日志无 `GatewayError` 类报错即说明文件合法。用一个只含该模型的 profile 发一条私聊消息做端到端验证。接口本身不通（网络、密钥）的报错发生在对话时，启动阶段不会出现；可在[调试与排障](/docs/guides/debugging)中开启 `dumpRequests` 查看实际请求。

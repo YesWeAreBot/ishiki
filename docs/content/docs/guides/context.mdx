@@ -7,7 +7,7 @@ description: 选择线性历史、WorldState 或增量剧本，并配置上下�
 
 ## standard：线性历史与自动压缩
 
-standard 保留完整的线性消息流，当估算 token 超过上限时，把最旧的一段对话压缩成摘要，摘要作为背景贴在后续请求前部：
+standard 保留完整的线性消息流，估算 token 超过上限后把最旧的一段对话压缩成摘要，摘要作为背景贴在后续请求前部：
 
 ```yaml
 context:
@@ -67,7 +67,7 @@ description: 与常见_contacts 的关系与态度，涉及具体人时参考
 </Callout>
 
 <Callout title="什么时候选 v3">
-想要稳定的人格连续性（记忆块）、想让模型显式区分「已处理」与「本轮刺激」（配合 `toolcall: v3` 的思考协议）；代价是上下文结构固定，灵活性低于 standard。
+想要稳定的人格连续性（记忆块）、想让模型显式区分已处理与本轮刺激（配合 `toolcall: v3` 的思考协议）；代价是上下文结构固定，灵活性低于 standard。
 </Callout>
 
 ## narrative：增量剧本与分阶段模型

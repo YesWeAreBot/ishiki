@@ -3,7 +3,7 @@ title: 配置图片与附件
 description: 让 bot 看得见图、也发得出图
 ---
 
-Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能看见）由 `attachment.imageInput` 与模型声明共同决定；**出站**（bot 怎么把图发出去）由 `send_message` 的元素模式完成。本文两侧都讲。
+Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能看见）由 `attachment.imageInput` 与模型声明共同决定；**出站**（bot 怎么把图发出去）由 `send_message` 的元素模式完成。
 
 配置位置：profile 的 `attachment` 段。
 
@@ -21,7 +21,7 @@ attachment:
 ```
 
 <Callout type="error" title="imageInput 的硬前提">
-profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml` 里声明 `input: [text, image]`。只要有任何一个候选没声明，profile 装配即失败并报 `profile imageInput requires declared image input on every candidate of …`。这是故意的——故障转移不能把请求落到看不见图的模型上。
+profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml` 里声明 `input: [text, image]`。只要有任何一个候选没声明，profile 装配即失败并报 `profile imageInput requires declared image input on every candidate of …`。这是故意的，故障转移不能把请求落到看不见图的模型上。
 </Callout>
 
 ### 图片生命周期
@@ -66,11 +66,11 @@ read({ url: "asset://<32位十六进制>", lifetime: "recent" })
 
 终止性判定（能力关闭、媒体类型或编码不支持、图片自身字节超过单图上限、图片自身字节超过单次请求累计上限、图片尺寸超限）只输出一次原因，并随成功响应持久化；之后该附件消息不再出现。URL 仍留在工具结果的 `[attachment: …]` 标记或源消息体里。资源不可用与请求剩余容量不足属于本次请求未提供，会在后续请求重试。
 
-几个明确的行为边界：
+几条行为边界：
 
 - 抓取失败（源失效、超时）本次请求不嵌入，也不消耗展示机会；后续请求会继续尝试，直到成功或来源消失。
 - 嵌入过的图片想再看，用 `read` 读它的 URL：默认生成新的 `once` 附件记录；直接调用时可传 `lifetime: recent` 或 `retain`。
-- 即使 `imageInput: false`，模型仍可在 codemode 里把图片字节传给其他工具（比如交给 OCR 工具），只是它自己「看不见」；此时直接 `read` 不提供 `lifetime` 参数。
+- 即使 `imageInput: false`，模型仍可在 codemode 里把图片字节传给其他工具（比如交给 OCR 工具），只是它自己看不见；此时直接 `read` 不提供 `lifetime` 参数。
 - `maxImageRenders` 已移除。profile 里仍写这个字段时，装配期报 `attachment.maxImageRenders was removed; use image lifetimes (once, recent, retain) and attachment.recentImageCount/imagePruneBatchSize`。
 
 ## 让 bot 发图
@@ -88,7 +88,7 @@ read({ url: "asset://<32位十六进制>", lifetime: "recent" })
 <Steps>
 <Step>
 
-模型先拿到图（工具返回、或 codemode 返回值的 `attachments` 字段），此时图只是「可用」；
+模型先拿到图（工具返回、或 codemode 返回值的 `attachments` 字段），此时图还没有被发送；
 
 </Step>
 <Step>
@@ -104,7 +104,7 @@ read({ url: "asset://<32位十六进制>", lifetime: "recent" })
 </Steps>
 
 <Callout type="warn" title="常见出错点在第 2 步">
-模型自己「看到」了截图不等于用户看到了，必须走 send_message。系统提示词已内置这段引导，自定义 persona 时不要与之矛盾。
+模型自己看到了截图不等于用户看到了，必须走 send_message。系统提示词已内置这段引导，自定义 persona 时不要与之矛盾。
 </Callout>
 
 ## 附件在历史里如何呈现
@@ -123,4 +123,4 @@ read({ url: "asset://<32位十六进制>", lifetime: "recent" })
 | 装配报 `maxImageRenders was removed` | profile 还在用旧字段 | 删除 `maxImageRenders`，按需设置 `recentImageCount` / `imagePruneBatchSize` |
 | 图发出去是空的或没发出去 | `src` 不在白名单协议、资源已失效 | 用工具结果里的原样 URL |
 | bot 说「看不见图」 | `imageInput` 关着；或配额把图挡了 | 开启开关；调大配额；看附件消息里的原因 |
-| 历史里的图片「不见了」 | `once` 已成功交付，或 `recent` 已被成批移除 | 正常行为；需要时让 bot 重新 read 对应 URL，或改用 `retain` 生命周期 |
+| 历史里的图片不见了 | `once` 已成功交付，或 `recent` 已被成批移除 | 正常行为；需要时让 bot 重新 read 对应 URL，或改用 `retain` 生命周期 |

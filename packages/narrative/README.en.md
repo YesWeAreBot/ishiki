@@ -28,7 +28,7 @@ flowchart TD
 
 The Narrator returns a script increment and a next-step intent. The Action Decoder receives the actual tools available in that step and produces standard tool calls; it does not execute them. Ishiki runs the tools and persists their results. On a later model step, those results become evidence for the Narrator. For a reply, the Replyer produces exact message strings that the wrapper packages as the existing `send_message` tool.
 
-Narrative increments are stored as `ishiki.narrative` entries in the same session ledger as the conversation. The script is an explicit, model-generated narrative state—not hidden chain-of-thought extracted from a provider. The marked assistant reasoning part is the durable source for recovering a missing projection after restart. Original messages and tool records are not replaced by prose.
+Narrative increments are stored as `ishiki.narrative` entries in the same session ledger as the conversation. The script is an explicit, model-generated narrative state, not hidden chain-of-thought extracted from a provider. The marked assistant reasoning part is the durable source for recovering a missing projection after restart. Original messages and tool records are not replaced by prose.
 
 ## Install and enable
 
@@ -91,7 +91,7 @@ The token budget is estimated from text length. Compaction can lose detail; the 
 
 ## Why this fits Ishiki
 
-The package composes two existing seams instead of forking the agent loop:
+The package composes two existing seams, and the agent loop stays in Ishiki:
 
 1. The ContextEngine provides the per-runtime boundary for persistent narrative state and context projection.
 2. The ToolcallEngine receives the profile model through the existing `LanguageModelV4` seam and can coordinate additional model calls behind the ordinary model interface.
@@ -103,7 +103,7 @@ This keeps story state out of the profile-shared model wrapper and avoids a seco
 
 - This package does not expose an HTTP Chat Completions or Responses server. It participates in Ishiki's existing Agent model calls.
 - The two narrative engines are designed as a pair, but the current runtime does not enforce that pairing. Set both engine names to `narrative` in each profile.
-- Narrator, Replyer, and compaction stages request JSON output and parse it strictly. A provider can still return malformed or incomplete JSON; that fails the model step rather than being silently repaired.
+- Narrator, Replyer, and compaction stages request JSON output and parse it strictly. A provider can still return malformed or incomplete JSON. That fails the model step; nothing is silently repaired.
 - Narrative quality depends on the selected models, their instructions, and the evidence they receive. The pipeline provides role separation and continuity; it does not guarantee a particular writing quality or persona.
 - A single Agent model step can make several upstream model calls, and context compaction can add another. Expect additional latency and token usage compared with a single-model step.
 - This is one application of narrative orchestration, not a complete reproduction of HDS-Interlude's scheduling, delivery, and broader life-simulation system.

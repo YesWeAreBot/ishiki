@@ -26,7 +26,7 @@ wakeup:
     defaultMultiplier: 1
     maxWillingness: 100 # 意愿上限
     decayHalfLifeSeconds: 600 # 不被打扰时的衰减半衰期
-    probabilityThreshold: 55 # 概率从这个阈值之上起跳
+    probabilityThreshold: 55 # 意愿超过此值才有概率开口
     probabilityAmplifier: 0.04
     replyCost: 35 # 一轮结束后扣掉的意愿
 

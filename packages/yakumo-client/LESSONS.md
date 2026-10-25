@@ -42,8 +42,7 @@ Error: unknown command
 `koishi-boilerplate` 模板的 `pipeline.build: [tsc, esbuild, client]` 能跑，是因为它锁在
 `yakumo@1.0.0`。**抄配置前先看版本**，两个版本的 pipeline 语义不同。
 
-所以这里重写成一个 CLI 命令，内部直接调 `@koishijs/client` 导出的 `build()`——
-构建逻辑不重复，只是换了个入口。
+所以这里重写成一个 CLI 命令，内部直接调 `@koishijs/client` 导出的 `build()`。构建逻辑不重复，只是换了个入口。
 
 ## 装载路径的两个坑
 
@@ -70,8 +69,7 @@ import(name, getOuterStack) {
 
 **坑 2：workspace 内的包不在 `node_modules` 里。**
 bun 的 isolated linker 不给 workspace 成员建顶层链接，
-`import.meta.resolve("yakumo-client")` 直接 `ERR_MODULE_NOT_FOUND`——
-尽管 `yakumo-tsc` 同样在 workspace 之外，它能解析是因为它来自 npm registry。
+`import.meta.resolve("yakumo-client")` 直接 `ERR_MODULE_NOT_FOUND`。`yakumo-tsc` 同样在 workspace 之外，它能解析是因为它来自 npm registry。
 
 解法是让根 `package.json` 显式引用本地包：
 
@@ -83,7 +81,7 @@ bun 的 isolated linker 不给 workspace 成员建顶层链接，
 `packages/*` 已在 workspaces 里，但那只影响依赖解析，不影响 loader 的 specifier 解析。
 
 两条分支现在都可用（裸名靠 node_modules 链接，`./…/index.js` 靠 baseUrl），
-但裸名依赖 `file:` 依赖先装好——`yakumo.yml` 在 `bun install` 之前解析会直接失败。
+但裸名依赖 `file:` 依赖先装好；`yakumo.yml` 在 `bun install` 之前解析会直接失败。
 保持用裸名，与 `yakumo-tsc` / `yakumo-esbuild` 的写法一致。
 
 ## 排查手法
@@ -100,13 +98,12 @@ node -e "import('file:///<repo>/.cordis/resolve.mjs').then(m =>
 node -e "import('file:///<repo>/packages/yakumo-client/index.js').then(console.log)"
 ```
 
-`yakumo --help` 列出的是 CLI 命令，service 不会出现在里面——
-`client` 不出现只说明没注册成命令，不能推断插件没被加载。
+`yakumo --help` 列出的是 CLI 命令，service 不会出现在里面。`client` 不出现只说明没注册成命令，不能推断插件没被加载。
 
 ## 调试残留
 
 `.cordis/` 由 loader 自动生成，内含自己的 `.gitignore`（`*`），不需要手动加进根 gitignore。
-排查时如果自己写了 `.cordis/rt.mjs` 之类的探针，记得删——`git status` 看不到它们。
+排查时如果自己写了 `.cordis/rt.mjs` 之类的探针，记得删掉；`git status` 看不到它们。
 
 ## 输出目录：lib 与 dist 的分工
 

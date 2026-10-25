@@ -3,7 +3,7 @@ title: 启用工作区
 description: 给 bot 配一个可执行命令、读写文件的沙箱或宿主工作区
 ---
 
-workspace 扩展给每个意识实例一个工作目录和四个工具（`bash`、`read_file`、`write_file`、`edit_file`），外加技能（skills）注入。适合让 bot 处理文件、跑脚本、维护自己的「桌面」。
+workspace 扩展给每个意识实例一个工作目录和四个工具（`bash`、`read_file`、`write_file`、`edit_file`），外加技能（skills）注入。适合让 bot 处理文件、跑脚本、维护自己的桌面。
 
 ## 第一步：启用扩展
 
@@ -34,7 +34,7 @@ extends:
 | 默认工作目录 | `/home/workspace`（虚拟路径） | `<runtime 目录>/workspace`（真实路径） |
 | Windows shell | 不适用 | 默认 pwsh，兜底 powershell；可用 `shell` 指定，如 Git Bash |
 
-**默认 sandbox 足够大多数场景**：bot 能在自己的小天地里跑命令、管理文件，弄不坏宿主机。native 适合「让 bot 操作真实项目目录」的场景，用前想清楚权限暴露面：
+**默认 sandbox 足够大多数场景**：bot 能在自己的小天地里跑命令、管理文件，弄不坏宿主机。native 适合让 bot 操作真实项目目录的场景，用前想清楚权限暴露面：
 
 ```yaml
 extends:

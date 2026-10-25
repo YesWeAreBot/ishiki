@@ -3,7 +3,7 @@ title: 调试与排障
 description: 从日志到请求落盘，定位 Ishiki 的各类问题
 ---
 
-Ishiki 的调试面有三层：日志、请求落盘、流式分片。本文按「想看什么」组织。
+Ishiki 的调试面有三层：日志、请求落盘、流式分片。
 
 ## 打开调试开关
 
@@ -18,7 +18,7 @@ ishiki:
 
 三者成本递增：`logLevel: 3` 常驻无妨；`dumpRequests` 每请求写两个文件；`debugStream` 只适合本地盯着看。排障结束记得关掉后两个。
 
-## 看某次请求到底发了什么
+## 看某次请求发了什么
 
 `dumpRequests: true` 时，每次模型调用在 `<dataPath>/requests/` 下写一对文件：
 
@@ -82,5 +82,5 @@ data/ishiki/requests
 
 `<dataPath>` 下的产物都可以直接查看，布局见[参考：数据目录](/docs/reference/data-layout)。两个常用点：
 
-- `<profile>/runtimes/<实例>/events.jsonl` 是实例的完整事件流（JSONL），一行一个 JSON，是「复盘一次对话」的最终事实。
+- `<profile>/runtimes/<实例>/events.jsonl` 是实例的完整事件流（JSONL），一行一个 JSON，是还原一次对话的最终事实。
 - `<profile>/runtimes/<实例>/resources/` 下的 `assets/`、`artifacts/` 是媒体与工具输出的落盘字节，旁有同名 `.json` 元数据。

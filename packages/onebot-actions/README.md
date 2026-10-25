@@ -101,7 +101,7 @@ node packages/onebot/scripts/generate-catalog.mjs --check   # 过期时退出非
 
 脚本读取 `NAPCAT_DOCS` 与 `SNOWLUMA_DOCS`，默认是 `D:/Codespace/references/NapCatDocs` 与 `D:/Codespace/references/SnowLumaDocs`。参数取自最新的 NapCat OpenAPI 文档；脚本会扫描全部版本，记录每个动作首次出现的版本。SnowLuma 的只读标记与别名取自它的 `catalog.json`，因为它的 OpenAPI 没有这两项。
 
-有两条生成规则值得知道：
+生成规则有两条：
 
 - NapCat 没有只读标记。动作按名称前缀分类，再用覆盖表修正前缀判断错误的几个（`get_ai_record`、`_mark_all_as_read`、`ocr_image` 等）。
 - OpenAPI 把一部分带 `default` 的参数列为必填。这些按可选处理，因为后端会补上默认值。
