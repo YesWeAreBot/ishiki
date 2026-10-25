@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The narrative context keeps its own `<action>` and `<observation>` renderers instead of importing them from the runtime plugin, so the engine package depends only on the stable engine interfaces. File parts in tool results are described by media type and size, never by their bytes
 - Narrative context no longer passes through `ishiki.tools.catalog` messages, which no longer exist
 - The narrative context and tool-calling engines import agent, runtime, and gateway types from `koishi-plugin-ishiki` and drop their `@yesimagent/core` and `@yesimagent/gateway` dependencies
+- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service for the Koishi market
 
 ### Fixed
 - Narrative context preserves each message's direct/group conversation setting; Narrator continuity retains past events without locking current feelings, interpretations or plans to the opening scene.

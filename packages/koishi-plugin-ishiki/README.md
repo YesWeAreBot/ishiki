@@ -1,11 +1,11 @@
 # Ishiki 核心运行时
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../docs/public/logo-dark.svg">
-  <img src="../../docs/public/logo.svg" alt="Ishiki：意识的运行时，人格的栖息地" width="740">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/YesWeAreBot/ishiki/main/docs/public/logo-dark.svg">
+  <img src="https://raw.githubusercontent.com/YesWeAreBot/ishiki/main/docs/public/logo.svg" alt="Ishiki：意识的运行时，人格的栖息地" width="740">
 </picture>
 
-[项目首页](../../README.md) · [完整文档](https://ishiki.js.org/docs/) · [扩展 API](https://ishiki.js.org/docs/reference/api/) · [English](README.en.md)
+[项目首页](https://github.com/YesWeAreBot/ishiki/README.md) · [完整文档](https://ishiki.js.org/docs/) · [扩展 API](https://ishiki.js.org/docs/reference/api/) · [English](README.en.md)
 
 `koishi-plugin-ishiki` 是 Ishiki 基于 Koishi 的核心运行时。它把 [yesimagent](https://github.com/YesWeAreBot/yesimagent) 的 Agent 循环、模型网关与 Koishi 平台接入组织在一起，通过 profile 运行拥有稳定身份、独立经历与可定制行为的 Agent。
 

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Development depends on `koishi-plugin-ishiki` through `workspace:^`
+- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service with `server` optional for the Koishi market
 
 ### Fixed
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution.

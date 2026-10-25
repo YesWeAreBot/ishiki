@@ -1,6 +1,25 @@
 {
   "name": "koishi-plugin-ishiki-onebot-actions",
   "version": "0.0.1",
+  "description": "OneBot v11 action catalog and tools for Ishiki: group, file, history and profile operations",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "extension",
+    "ishiki",
+    "koishi",
+    "onebot",
+    "plugin"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/blob/main/packages/onebot-actions",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/onebot-actions"
+  },
   "files": [
     "lib"
   ],
@@ -36,6 +55,14 @@
     "description": {
       "zh": "OneBot v11 动作目录与调用工具",
       "en": "OneBot v11 action catalog and tools"
+    },
+    "service": {
+      "required": [
+        "ishiki"
+      ],
+      "optional": [
+        "server"
+      ]
     }
   }
 }

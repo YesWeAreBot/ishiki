@@ -1,7 +1,24 @@
 {
   "name": "koishi-plugin-ishiki",
   "version": "0.0.1",
+  "description": "Ishiki core runtime for Koishi: agent loop, model gateway, profiles, engines, tools and resources",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "ishiki",
+    "koishi",
+    "plugin"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/blob/main/packages/koishi-plugin-ishiki",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/koishi-plugin-ishiki"
+  },
   "files": [
     "dist",
     "lib",
@@ -47,6 +64,20 @@
   },
   "peerDependencies": {
     "koishi": "^4.18.11"
+  },
+  "koishi": {
+    "description": {
+      "zh": "Ishiki 核心运行时：Agent 循环、模型网关、profile、引擎机制与工具资源",
+      "en": "Ishiki core runtime: agent loop, model gateway, profiles, engines, tools and resources"
+    },
+    "service": {
+      "implements": [
+        "ishiki"
+      ],
+      "optional": [
+        "console"
+      ]
+    }
   },
   "yakumo": {
     "client": {

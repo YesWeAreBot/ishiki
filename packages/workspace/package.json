@@ -1,6 +1,25 @@
 {
   "name": "koishi-plugin-ishiki-workspace",
   "version": "0.0.1",
+  "description": "Workspace tools for Ishiki: sandboxed or native shell, file tools and skills",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "extension",
+    "ishiki",
+    "koishi",
+    "plugin",
+    "workspace"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/blob/main/packages/workspace",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/workspace"
+  },
   "files": [
     "lib"
   ],
@@ -35,6 +54,11 @@
     "description": {
       "zh": "工作区工具插件",
       "en": "Workspace tools plugin"
+    },
+    "service": {
+      "required": [
+        "ishiki"
+      ]
     }
   }
 }

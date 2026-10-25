@@ -1,6 +1,25 @@
 {
   "name": "koishi-plugin-ishiki-mcp-client",
   "version": "0.0.1",
+  "description": "MCP client for Ishiki: connects MCP servers and exposes their tools and resources to agents",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "extension",
+    "ishiki",
+    "koishi",
+    "mcp",
+    "plugin"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/blob/main/packages/mcp-client",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/mcp-client"
+  },
   "files": [
     "lib",
     "resources"
@@ -30,5 +49,16 @@
   "peerDependencies": {
     "koishi": "^4.18.11",
     "koishi-plugin-ishiki": "workspace:^"
+  },
+  "koishi": {
+    "description": {
+      "zh": "MCP 客户端插件：接入 MCP 服务器的工具与资源",
+      "en": "MCP client plugin: MCP server tools and resources"
+    },
+    "service": {
+      "required": [
+        "ishiki"
+      ]
+    }
   }
 }

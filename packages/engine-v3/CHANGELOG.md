@@ -14,3 +14,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The engine tests build the runtime with the host's `pacing` step budget; engine behaviour is unchanged
 - Engine sources and tests import agent helpers from `koishi-plugin-ishiki` instead of `@yesimagent/core`; behaviour is unchanged
+- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service for the Koishi market

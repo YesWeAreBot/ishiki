@@ -1,7 +1,26 @@
 {
   "name": "koishi-plugin-ishiki-narrative",
   "version": "0.0.1",
+  "description": "Ishiki narrative engines for Koishi: a narrator, action decoder and replyer pipeline over one model step",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "engine",
+    "ishiki",
+    "koishi",
+    "narrative",
+    "plugin"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/blob/main/packages/narrative",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/narrative"
+  },
   "files": [
     "lib"
   ],
@@ -33,6 +52,11 @@
     "description": {
       "zh": "叙事引擎插件",
       "en": "Narrative engines plugin"
+    },
+    "service": {
+      "required": [
+        "ishiki"
+      ]
     }
   }
 }

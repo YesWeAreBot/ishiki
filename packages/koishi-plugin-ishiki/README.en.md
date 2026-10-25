@@ -1,11 +1,11 @@
 # Ishiki Core Runtime
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../docs/public/logo.en-dark.svg">
-  <img src="../../docs/public/logo.en.svg" alt="Ishiki: A runtime for consciousness. A home for personality." width="740">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/YesWeAreBot/ishiki/main/docs/public/logo.en-dark.svg">
+  <img src="https://raw.githubusercontent.com/YesWeAreBot/ishiki/main/docs/public/logo.en.svg" alt="Ishiki: A runtime for consciousness. A home for personality." width="740">
 </picture>
 
-[中文](README.md) · [Project](../../README.en.md) · [Documentation](https://ishiki.js.org/docs/) · [Extension API](https://ishiki.js.org/docs/reference/api/)
+[中文](README.md) · [Project](https://github.com/YesWeAreBot/ishiki/README.en.md) · [Documentation](https://ishiki.js.org/docs/) · [Extension API](https://ishiki.js.org/docs/reference/api/)
 
 `koishi-plugin-ishiki` is Ishiki's Koishi-based core runtime. It brings together the [yesimagent](https://github.com/YesWeAreBot/yesimagent) Agent loop, a model gateway, and Koishi platform integration. Profiles run Agents with stable identities, their own experiences, and customizable behavior.
 

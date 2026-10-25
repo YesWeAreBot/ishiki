@@ -1,6 +1,25 @@
 {
   "name": "koishi-plugin-ishiki-engine-v3",
   "version": "0.0.1",
+  "description": "Ishiki v3 engines for Koishi: WorldState context, JSON OUTPUT toolcall protocol and willingness wakeup",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "engine",
+    "ishiki",
+    "koishi",
+    "plugin"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/blob/main/packages/engine-v3",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/engine-v3"
+  },
   "files": [
     "lib",
     "resources"
@@ -39,6 +58,11 @@
     "description": {
       "zh": "v3 引擎插件：WorldState 上下文、JSON OUTPUT 工具协议、响应意愿唤醒",
       "en": "v3 engines plugin: WorldState context, JSON OUTPUT tool protocol, willingness wakeup"
+    },
+    "service": {
+      "required": [
+        "ishiki"
+      ]
     }
   }
 }

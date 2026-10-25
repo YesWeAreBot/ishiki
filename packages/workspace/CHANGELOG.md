@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native tools resolve `/tmp` by asking the shell where it points, instead of assuming the host's `os.tmpdir()`; prompts and tool descriptions keep scratch files inside the working directory, because the shell, a program the shell starts, and the file tools can each resolve `/tmp` to a different folder.
 - Workspace prompts and tool descriptions direct scratch files to `./tmp` under the working directory, because the shell, host programs, and file tools can resolve `/tmp` to different folders
 - Development depends on `koishi-plugin-ishiki` through `workspace:^`
+- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service for the Koishi market
 
 ### Fixed
 - Native file tools resolve the git-bash path `/tmp` to the folder the shell itself reports, so tool paths and shell commands name the same file instead of `D:\tmp`.
