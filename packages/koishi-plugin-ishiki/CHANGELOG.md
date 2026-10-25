@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Downstream engine and tool packs reach agent types, runtime helpers, and the gateway type through the plugin's re-exports instead of `@yesimagent/core` and `@yesimagent/gateway`
+- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares the `ishiki` service it implements together with the optional `console` service, so npm and the Koishi market can present it
+
+## [0.0.1] - 2026-10-25
+
 ### Added
 - Per-profile `pacing` step budget: `maxSteps` caps one waking (default 20), `wrapUpSteps` (default 2) reminds the model before the cap so the last step sends something, and `progressAt` (default 8) asks once for a mid-task progress bubble. Both reminders ride only the affected request and never enter the stored transcript; `0` disables either one.
 - Image lifetimes for attachments: `once` (default; consumed only when the image-bearing response is persisted), `recent` (keep the latest viewed images, pruned in batches), and `retain` (stay eligible while the source record remains in context). `attachment.recentImageCount` (default 3) and `attachment.imagePruneBatchSize` (default 2) control pruning; final codemode `attachments[]` items and direct `read` calls under `imageInput` can override the lifetime.
@@ -73,8 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The console client build runs through the new `yakumo-client` yakumo plugin, replacing the package's own Vite config
 - The console drops its sidebar shell and revision badges, and schema forms span wide fields across both columns
 - Profile and model managers route narrow edits (create, set field, channels, extensions, persona, provider/declaration/group upserts) through one serialized read-modify-validate-write path, and activation rejects claim overlaps with other active profiles
-- Downstream engine and tool packs reach agent types, runtime helpers, and the gateway type through the plugin's re-exports instead of `@yesimagent/core` and `@yesimagent/gateway`
-- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares the `ishiki` service it implements together with the optional `console` service, so npm and the Koishi market can present it
 
 ### Removed
 - The `toolsearch` profile section, the standalone `search` tool, `ishiki.tools.catalog` messages, and the incremental catalog state machine. Discovery now lives inside codemode as the `searchTools` and `describeTool` globals, which never change the callable set or the model schema.

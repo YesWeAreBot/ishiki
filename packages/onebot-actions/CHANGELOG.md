@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service with `server` optional for the Koishi market
+
+## [0.0.1] - 2026-10-25
+
 ### Added
 - OneBot v11 action pack for ishiki: a catalog generated from the NapCat and SnowLuma OpenAPI documents, exposed as `onebot://actions` and as `list_actions` / `get_action` / `search_actions` / `list_categories`.
 - `query_action` (read-only actions) and `invoke_action` (any action) selected by the profile's `mode`: `docs`, `read`, or `write`.
@@ -17,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Development depends on `koishi-plugin-ishiki` through `workspace:^`
-- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service with `server` optional for the Koishi market
 
 ### Fixed
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution.

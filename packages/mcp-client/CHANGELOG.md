@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service for the Koishi market
+
+## [0.0.1] - 2026-10-25
+
 ### Added
 - `toolIndex` per server: connected servers list their exposed tool names in the system prompt, even when the server provides no instructions.
 - `prefix` per server: exposed tool names use the server name by default, drop it with `false`, or use a custom string prefix.
@@ -28,4 +33,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool output schemas describe the native MCP content blocks returned inside codemode; model conversion and resource processing remain outside internal tool calls
 - Server summaries combine declared instructions with the exposed tool-name index
 - Duplicate exposed tool names across servers now raise a `ToolConflictError` instead of silently overwriting earlier tools
-- Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service for the Koishi market
