@@ -494,6 +494,8 @@ declare module "koishi" {
 
 export * from "@huggingface/jinja";
 export * from "@yesimagent/core";
+export * from "@yesimagent/gateway";
+export { createGateway, type Gateway } from "@yesimagent/gateway";
 
 export * from "./debugger.js";
 export * from "./extension.js";

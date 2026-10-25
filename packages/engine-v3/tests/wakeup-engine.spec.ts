@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createGateway } from "@yesimagent/gateway";
 import {
   AgentRuntime,
   ResourceCenter,
   collapse,
   createCustomMessage,
   createFinish,
+  createGateway,
   jsonSchema,
   tool,
   type AgentMessage,

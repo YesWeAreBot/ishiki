@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createCustomMessage, createUserMessage, type AgentMessage, type ToolResultOutput } from "@yesimagent/core";
-import type { ExtensionContext } from "koishi-plugin-ishiki";
+import type { AgentMessage, ExtensionContext, ToolResultOutput } from "koishi-plugin-ishiki";
+import { createCustomMessage, createUserMessage } from "koishi-plugin-ishiki";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { V3ContextInstance } from "../src/context-engine.js";

@@ -14,9 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Usage page renders daily line charts from raw usage records
 
 ### Changed
-- Downstream engine and tool packs reach agent types, runtime helpers, and the gateway type through the plugin's re-exports instead of `@yesimagent/core` and `@yesimagent/gateway`
 - Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares the `ishiki` service it implements together with the optional `console` service, so npm and the Koishi market can present it
 - README describes the new console editing and wizard flow
+- The plugin re-exports the gateway factory and type alongside agent types and runtime helpers, so engine and tool packs no longer depend on `@yesimagent/gateway` directly
 
 ### Removed
 - Audit page and its console endpoint
