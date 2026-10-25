@@ -10,6 +10,7 @@
   "type": "module",
   "scripts": {
     "build": "yakumo build",
+    "build:docs": "yakumo build @ishiki/docs",
     "clean": "yakumo clean",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
