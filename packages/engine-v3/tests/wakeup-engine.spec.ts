@@ -2,9 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createCustomMessage, jsonSchema, tool, type AgentMessage, type ToolSet } from "@yesimagent/core";
 import { createGateway } from "@yesimagent/gateway";
-import { AgentRuntime, ResourceCenter, createFinish, collapse } from "koishi-plugin-ishiki";
+import {
+  AgentRuntime,
+  ResourceCenter,
+  collapse,
+  createCustomMessage,
+  createFinish,
+  jsonSchema,
+  tool,
+  type AgentMessage,
+  type ToolSet,
+} from "koishi-plugin-ishiki";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { V3WakeupInstance } from "../src/wakeup-engine.js";

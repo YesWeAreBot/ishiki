@@ -1,4 +1,7 @@
+import { Service, type Context, type Logger } from "koishi";
 import type {
+  EngineConfig,
+  FailoverConfig,
   LanguageModelV4,
   LanguageModelV4CallOptions,
   LanguageModelV4Content,
@@ -15,19 +18,9 @@ import type {
   SharedV4ProviderMetadata,
   SharedV4ProviderOptions,
   SharedV4Warning,
-} from "@yesimagent/core";
-import type { Gateway } from "@yesimagent/gateway";
-import { Service, type Context, type Logger } from "koishi";
-import {
-  FailoverModel,
-  FINISH_TOOL,
-  SEND_MESSAGE_TOOL,
-  ToolcallEngine,
-  ToolcallEngineInstance,
-  type EngineConfig,
-  type FailoverConfig,
-  type ToolcallEngines,
+  ToolcallEngines,
 } from "koishi-plugin-ishiki";
+import { FailoverModel, FINISH_TOOL, SEND_MESSAGE_TOOL, ToolcallEngine, ToolcallEngineInstance } from "koishi-plugin-ishiki";
 
 import { narrativeOptions, parseNarrativeNext, readNarrativeMarker, type NarrativeInput } from "../narrative.js";
 import {
@@ -104,6 +97,8 @@ interface NarrativePromptScan {
   input: NarrativeInput;
   summaries: Set<string>;
 }
+
+type Gateway = Pick<Context, "ishiki">["ishiki"]["gateway"];
 
 /** Schema defaults from profile/config.ts; group candidates already carry their own breaker state. */
 const DEFAULT_FAILOVER: FailoverConfig = { backoffMs: 500, failoverOn: "unavailable" };

@@ -1,10 +1,10 @@
 {
   "name": "koishi-plugin-ishiki",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "license": "MIT",
   "files": [
-    "lib",
     "dist",
+    "lib",
     "resources"
   ],
   "type": "module",

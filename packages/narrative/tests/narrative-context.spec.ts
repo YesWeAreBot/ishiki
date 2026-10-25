@@ -1,5 +1,5 @@
-import { createAgent, createAssistantMessage, createEntry, createMemoryStorage, createUserMessage, type Agent, type AgentEntry } from "@yesimagent/core";
-import type { ExtensionContext } from "koishi-plugin-ishiki";
+import type { ExtensionContext, Agent, AgentEntry } from "koishi-plugin-ishiki";
+import { createAgent, createAssistantMessage, createEntry, createMemoryStorage, createUserMessage } from "koishi-plugin-ishiki";
 import { describe, expect, it } from "vitest";
 
 import { NarrativeContextInstance } from "../src/context/narrative.engine.js";

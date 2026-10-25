@@ -1,4 +1,4 @@
-import type { JSONValue } from "@yesimagent/core";
+import type { JSONValue } from "koishi-plugin-ishiki";
 
 export type NarrativeNext =
   | { kind: "action" }
@@ -18,7 +18,7 @@ export type NarrativeEntryData = { originMessageId: string; script: string } & (
 
 // The marked assistant part is the durable source; these entries are its
 // idempotent narrative projection in the same session ledger.
-declare module "@yesimagent/core" {
+declare module "koishi-plugin-ishiki" {
   interface AgentCustomEntry {
     "ishiki.narrative": NarrativeEntryData;
   }

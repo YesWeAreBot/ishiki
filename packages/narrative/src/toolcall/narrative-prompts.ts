@@ -4,7 +4,7 @@ import type {
   LanguageModelV4ToolChoice,
   LanguageModelV4ToolResultOutput,
   SharedV4FileData,
-} from "@yesimagent/core";
+} from "koishi-plugin-ishiki";
 
 /** Per-role instruction overlays from profile config; they extend, never replace, the engine contracts. */
 export interface NarrativeRoleInstructions {

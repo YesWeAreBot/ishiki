@@ -1,25 +1,23 @@
+import { Service, type Context, type Logger } from "koishi";
 import {
+  ContextEngine,
   createEntry,
   createUserMessage,
+  renderLine,
   type Agent,
   type AgentAssistantMessage,
   type AgentEntry,
   type AgentMessage,
   type AgentToolMessage,
-  type FileData,
-  type ToolResultPart,
-  type UserContent,
-} from "@yesimagent/core";
-import { Service, type Context, type Logger } from "koishi";
-import {
-  ContextEngine,
-  renderLine,
   type ContextEngineInstance,
   type ContextEngines,
   type ContextRequest,
   type EngineConfig,
   type ExtensionContext,
+  type FileData,
   type InstanceDomain,
+  type ToolResultPart,
+  type UserContent,
 } from "koishi-plugin-ishiki";
 
 import {

@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The console client build runs through the new `yakumo-client` yakumo plugin, replacing the package's own Vite config
 - The console drops its sidebar shell and revision badges, and schema forms span wide fields across both columns
 - Profile and model managers route narrow edits (create, set field, channels, extensions, persona, provider/declaration/group upserts) through one serialized read-modify-validate-write path, and activation rejects claim overlaps with other active profiles
+- Downstream engine and tool packs reach agent types, runtime helpers, and the gateway type through the plugin's re-exports instead of `@yesimagent/core` and `@yesimagent/gateway`
 
 ### Removed
 - The `toolsearch` profile section, the standalone `search` tool, `ishiki.tools.catalog` messages, and the incremental catalog state machine. Discovery now lives inside codemode as the `searchTools` and `describeTool` globals, which never change the callable set or the model schema.
