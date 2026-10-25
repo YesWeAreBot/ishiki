@@ -1,5 +1,5 @@
 /** 管理接口可以交给界面展示的错误分类。 */
-export type ManagementErrorCode = "invalid" | "conflict" | "not-found" | "rejected" | "busy" | "failed";
+export type ManagementErrorCode = "invalid" | "conflict" | "not-found" | "rejected" | "busy" | "failed" | "ambiguous";
 
 export class ManagementError extends Error {
   constructor(

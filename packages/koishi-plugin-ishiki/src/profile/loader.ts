@@ -1,10 +1,23 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type Logger from "reggol";
 import { parse } from "yaml";
 
 import { overlaps, resolveProfile, type Profile } from "./config.js";
+
+/** 读取单个 profile 的原始配置对象；目录或文件不存在、内容不是对象时返回 undefined。 */
+export async function readProfileRaw(root: string, id: string): Promise<Record<string, unknown> | undefined> {
+  for (const name of ["profile.yml", "profile.yaml"]) {
+    const text = await readFile(path.join(root, id, name), "utf8").catch(() => undefined);
+    if (text === undefined) continue;
+    const raw = parse(text);
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    return raw as Record<string, unknown>;
+  }
+  return undefined;
+}
 
 /** 扫描 profiles 根目录，逐个解析并做跨 profile 的认领冲突检查。 */
 export function loadProfiles(root: string, logger: Logger): Profile[] {

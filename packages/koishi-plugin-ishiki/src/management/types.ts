@@ -116,6 +116,12 @@ export interface ProfileSaveInput {
   persona?: string;
 }
 
+export interface ProfileCheckReport {
+  id: string;
+  ok: boolean;
+  items: Array<{ aspect: "schema" | "engines" | "model" | "instructions" | "claims"; ok: boolean; message?: string }>;
+}
+
 export interface ProfileStatus {
   id: string;
   state: ProfileState;
@@ -130,6 +136,22 @@ export interface ProfileStatus {
 /* Runtime */
 
 export type RuntimeState = "idle" | "running" | "stopped" | "failed";
+
+/** 频道坐标：与 Runtime id、认领表键（platform:selfId）同构。 */
+export interface ChannelAddress {
+  platform: string;
+  selfId: string;
+  channelId: string;
+}
+
+/** 一个频道此刻的归属事实：激活认领、磁盘认领名单、已派生 Runtime。 */
+export interface ChannelClaimView {
+  address: string;
+  profileId?: string;
+  matchedPattern?: string;
+  savedClaimants: string[];
+  runtime?: RuntimeView;
+}
 
 export interface RuntimeView {
   id: string;

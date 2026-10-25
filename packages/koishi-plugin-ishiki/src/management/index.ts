@@ -3,6 +3,7 @@ import type Logger from "reggol";
 
 import type Ishiki from "../index.js";
 import { enginesDirectory, extensionsDirectory } from "./catalog.js";
+import { ChannelsManager } from "./channels.js";
 import { ManagementEventBus } from "./events.js";
 import { ModelsManager } from "./models.js";
 import { AuditLog, CacheReporter, UsageLedger } from "./observability.js";
@@ -14,7 +15,7 @@ export * from "./types.js";
 export { ManagementError, describeError } from "./errors.js";
 export type { ManagementEvents } from "./events.js";
 
-/** 核心运行时对外管理能力的入口；控制台只通过这里读取和修改状态。 */
+/** 核心运行时对外管理能力的入口；控制台与指令层只通过这里读取和修改状态。 */
 export class Management {
   public readonly events = new ManagementEventBus();
   public readonly audit: AuditLog;
@@ -22,6 +23,7 @@ export class Management {
   public readonly runtimes: RuntimesManager;
   public readonly profiles: ProfilesManager;
   public readonly models: ModelsManager;
+  public readonly channels: ChannelsManager;
   public readonly usage: UsageLedger;
   public readonly cache: CacheReporter;
 
@@ -34,8 +36,9 @@ export class Management {
     this.sessions = new SessionsManager(host, this.events);
     this.runtimes = new RuntimesManager(host, this.events, this.audit, this.sessions, logger);
     this.usage = new UsageLedger(host.dataPath, this.sessions);
-    this.profiles = new ProfilesManager(host, this.events, this.audit, this.sessions, this.usage, this.runtimes, logger);
-    this.models = new ModelsManager(host, this.events, this.audit, logger);
+    this.models = new ModelsManager(host, this.events, this.audit, logger, this.runtimes);
+    this.profiles = new ProfilesManager(host, ctx, this.events, this.audit, this.sessions, this.usage, this.runtimes, this.models, logger);
+    this.channels = new ChannelsManager(host, this.profiles, this.runtimes);
     this.cache = new CacheReporter(host, this.sessions, this.usage);
   }
 

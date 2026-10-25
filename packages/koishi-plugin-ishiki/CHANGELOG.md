@@ -37,8 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Revision-checked management interfaces for models, profiles, runtimes, sessions, usage and audit, with secret redaction and atomic saves
 - Ishiki console under `client/`, built by `yakumo-client`: one console entry hosts model, model-group, provider, profile, session, runtime, usage, audit and cache views. Pages read real runtime data through `@koishijs/client` data services and write through authority-checked RPC listeners
 - The console model field is a catalog-aware picker: choose a model or model group plus its thinking level, and references missing from the catalog survive edits to other fields
+- In-chat `ishiki` management commands for models, profiles, channels, runtimes, engines, sessions, and extensions: reads need authority 2, writes use `commands.authority` (default 3), and secret fields need 4. `commands.enable` toggles the whole tree
+- `ishiki.profile.check` dry-run validation covering schema, engine availability, model references, instruction files, and channel claim overlaps
+- Channel claim commands (`ishiki.channel.show`, `.check`, `.list`, `.claim`, `.release`, `.move`) report every claiming profile, ask for confirmation before destructive changes, and re-apply the affected profile afterwards
+- `ishiki.model.test` sends one minimal gateway request and reports the latency with a truncated reply
+- Standard context engine commands for usage, summary, and compaction
 
 ### Changed
+- Management internals share one `digest()` (in `management/atomic.ts`) and one `domainLabel()` (in `management/reference.ts`) instead of per-file copies in profiles, models, sessions, and runtimes.
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`.
 - Request projection tracks image delivery per item: `once` commits only when the image-bearing response is persisted (the ledger entry is appended with that response), `recent` keeps the latest viewed images and prunes the oldest viewed in batches, `retain` stays eligible while its source record survives, and failed or aborted steps do not consume. Terminal rejections are stated once, and projected message prefixes keep their order, IDs and timestamps until selection or pruning changes.
 - Merge attachment capture, model-output processing, and request projection into resources; the runtime owns message submission and context rendering order.
@@ -66,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The plugin entrypoint no longer re-exports the debugger module
 - The console client build runs through the new `yakumo-client` yakumo plugin, replacing the package's own Vite config
 - The console drops its sidebar shell and revision badges, and schema forms span wide fields across both columns
+- Profile and model managers route narrow edits (create, set field, channels, extensions, persona, provider/declaration/group upserts) through one serialized read-modify-validate-write path, and activation rejects claim overlaps with other active profiles
 
 ### Removed
 - The `toolsearch` profile section, the standalone `search` tool, `ishiki.tools.catalog` messages, and the incremental catalog state machine. Discovery now lives inside codemode as the `searchTools` and `describeTool` globals, which never change the callable set or the model schema.

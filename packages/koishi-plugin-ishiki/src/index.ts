@@ -12,6 +12,8 @@ import { loadCodemode } from "./builtin-tools/codemode.js";
 import { createFinish } from "./builtin-tools/finish.js";
 import { createReadTool } from "./builtin-tools/read.js";
 import { createSendMessage } from "./builtin-tools/send-message.js";
+import { IshikiCommands } from "./commands/contribute.js";
+import { installCommands } from "./commands/index.js";
 import { installConsole } from "./console/index.js";
 import { ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
@@ -20,7 +22,7 @@ import { FailoverModel } from "./failover.js";
 import { loadInstructionFiles, renderInstructions } from "./instructions.js";
 import { Management } from "./management/index.js";
 import type { RuntimeMeta } from "./management/types.js";
-import { directoryName, loadProfiles, matchesChannel, type InstanceDomain, type Profile } from "./profile/index.js";
+import { directoryName, loadProfiles, matchesChannel, matchesPattern, type ChannelFilter, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
 import { AgentRuntime } from "./runtime.js";
@@ -75,6 +77,8 @@ class Ishiki extends Service<Ishiki.Config> {
   public readonly profiles = new Map<string, ProfileRecord>();
   public readonly runtimes = new Map<string, AgentRuntime>();
   public readonly management: Management;
+  /** 贡献指令注册子模块；扩展与宿主引擎经它注册指令（ctx.ishiki.commands）。 */
+  public readonly commands: IshikiCommands;
 
   constructor(ctx: Context, config: Ishiki.Config) {
     super(ctx, "ishiki");
@@ -107,10 +111,19 @@ class Ishiki extends Service<Ishiki.Config> {
     ctx.plugin(YamlXmlToolcallEngine);
 
     this.management = new Management(this, ctx, this.logger);
+    this.commands = new IshikiCommands(this, ctx);
     ctx.inject(["console"], (ctx) => installConsole(ctx, this));
+    if (config.commands.enable) ctx.inject(["ishiki"], (ctx) => installCommands(ctx, this, config.commands));
 
     ctx.on("ready", () => void this.load());
-    ctx.on("internal/session", (session) => void this.onSession(session));
+    ctx.on("internal/session", (session) => void this.onBackgroundEvent(session));
+    ctx.middleware(async (session, next) => {
+      // 消息经完整中间件链路由：命中指令时 argv.command 已由指令中间件设置，这类消息不进入 Runtime。
+      if (session.type === "message-created" && session.argv?.command === undefined) {
+        await this.onSession(session);
+      }
+      return next();
+    });
     ctx.on("dispose", async () => {
       this.management.dispose();
       await Promise.all([...this.profiles.keys()].map((profileId) => this.deactivate(profileId)));
@@ -302,6 +315,36 @@ class Ishiki extends Service<Ishiki.Config> {
     return this.runtimes.get(runtimeId);
   }
 
+  /** 只读查找一个频道的激活认领；查询类指令用它，绝不触发派生。 */
+  public findClaim(address: SessionAddress): { profile: Profile; filter: ChannelFilter; matchedPattern: string } | undefined {
+    const hit = this.claimRoute(address);
+    if (hit === undefined) return undefined;
+    return { profile: hit.route.profile, filter: hit.filter, matchedPattern: hit.matchedPattern };
+  }
+
+  /** 只读查找频道坐标对应的已派生 Runtime；不存在时返回 undefined，绝不 spawn。 */
+  public findRuntimeByAddress(address: SessionAddress): AgentRuntime | undefined {
+    const hit = this.claimRoute(address);
+    if (hit === undefined) return undefined;
+    const { profile } = hit.route;
+    return this.profiles.get(profile.id)?.runtimes.get(this.runtimeKey(profile, address));
+  }
+
+  private claimRoute(address: SessionAddress): { route: Route; filter: ChannelFilter; matchedPattern: string } | undefined {
+    const sid = `${address.platform}:${address.selfId}`;
+    for (const route of this.routes.get(sid) ?? []) {
+      const filter = route.profile.channels.get(sid);
+      if (filter === undefined || !matchesChannel(filter, address.channelId)) continue;
+      const matchedPattern = filter.include.find((pattern) => matchesPattern(pattern, address.channelId)) ?? "";
+      return { route, filter, matchedPattern };
+    }
+    return undefined;
+  }
+
+  private runtimeKey(profile: Profile, address: SessionAddress): string {
+    return profile.mode === "cross" ? `${profile.id}/main` : `${profile.id}/${address.platform}:${address.selfId}/${address.channelId}`;
+  }
+
   public ensureRuntime(profileId: string, domain: InstanceDomain): AgentRuntime {
     const record = this.profiles.get(profileId);
     if (record === undefined) throw new Error(`profile "${profileId}" is not active`);
@@ -383,6 +426,12 @@ class Ishiki extends Service<Ishiki.Config> {
     return runtime.wake(prompt);
   }
 
+  /** 非消息事件（撤回等）没有中间件链，从 internal/session 事件入口接收。 */
+  private async onBackgroundEvent(session: Session): Promise<void> {
+    if (session.type === "message-created") return;
+    await this.onSession(session);
+  }
+
   private async onSession(session: Session): Promise<void> {
     if (session.userId !== undefined && session.userId === session.selfId) return;
 
@@ -403,18 +452,15 @@ class Ishiki extends Service<Ishiki.Config> {
   }
 
   private resolveRuntime(address: SessionAddress): AgentRuntime | undefined {
-    const { platform, selfId, channelId } = address;
-    const sid = `${platform}:${selfId}`;
-    const route = this.routes.get(sid)?.find((entry) => matchesChannel(entry.profile.channels.get(sid)!, channelId));
-    if (route === undefined) {
-      this.logger.warn(`no profile claims ${sid}/${channelId}`);
+    const hit = this.claimRoute(address);
+    if (hit === undefined) {
+      this.logger.warn(`no profile claims ${address.platform}:${address.selfId}/${address.channelId}`);
       return;
     }
-
-    const { profile } = route;
-    const key = profile.mode === "cross" ? `${profile.id}/main` : `${profile.id}/${sid}/${channelId}`;
-    const domain: InstanceDomain = profile.mode === "cross" ? { mode: "cross", channels: profile.channels } : { mode: "channel", platform, selfId, channelId };
-    return route.runtimes.get(key) ?? route.spawn(key, domain);
+    const { profile } = hit.route;
+    const key = this.runtimeKey(profile, address);
+    const domain: InstanceDomain = profile.mode === "cross" ? { mode: "cross", channels: profile.channels } : { mode: "channel", ...address };
+    return hit.route.runtimes.get(key) ?? hit.route.spawn(key, domain);
   }
 }
 
@@ -424,12 +470,19 @@ namespace Ishiki {
     dumpRequests: boolean;
     debugStream: boolean;
     logLevel: number;
+    commands: { enable: boolean; authority: number };
   }
   export const Config: Schema<Ishiki.Config> = Schema.object({
     dataPath: Schema.string().role("path").description("数据存储路径").default("data/ishiki"),
     dumpRequests: Schema.boolean().description("是否将请求数据保存到本地").default(false),
     debugStream: Schema.boolean().description("是否将模型流的分片实时输出到控制台（开发调试用）").default(false),
     logLevel: Schema.union([0, 1, 2, 3]).description("日志级别").default(Logger.INFO) as Schema<number>,
+    commands: Schema.object({
+      enable: Schema.boolean().description("启用 ishiki 管理指令").default(true),
+      authority: Schema.number().min(1).description("写操作的基础权限等级").default(3),
+    })
+      .description("管理指令设置")
+      .default({ enable: true, authority: 3 }),
   });
 }
 

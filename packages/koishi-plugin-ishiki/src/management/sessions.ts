@@ -6,7 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import type Ishiki from "../index.js";
 import { ManagementError } from "./errors.js";
 import type { ManagementEventBus } from "./events.js";
-import { baseReference } from "./reference.js";
+import { baseReference, domainLabel } from "./reference.js";
 import type {
   CorruptLine,
   LogEntry,
@@ -149,10 +149,6 @@ function entryCost(entry: LogEntry): number {
   const message = fields(entry.data);
   if (textField(message, "role") !== "assistant") return 0;
   return readUsage(message?.usage)?.total ?? 0;
-}
-
-function domainLabel(domain: RuntimeMeta["domain"]): string {
-  return domain.mode === "cross" ? "跨频道" : `${domain.platform} · ${domain.channelId}`;
 }
 
 export class SessionsManager {

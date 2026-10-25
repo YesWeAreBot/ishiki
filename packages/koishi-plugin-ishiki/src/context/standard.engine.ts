@@ -4,9 +4,11 @@ import type Logger from "reggol";
 import Schema from "schemastery";
 
 import type { ExtensionContext } from "../extension.js";
+import { ManagementError } from "../management/errors.js";
 import type { EngineConfig, InstanceDomain } from "../profile/index.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
 import { ContextEngine, type ContextEngineInstance, type ContextEngines } from "./engine.js";
+import { registerStandardCommands } from "./standard.commands.js";
 
 declare module "@yesimagent/core" {
   interface AgentCustomEntry {
@@ -181,14 +183,14 @@ export function collapse(messages: readonly AgentMessage[], domain?: InstanceDom
   return collapsed;
 }
 
-function lastCompact(entries: readonly AgentEntry[]): AgentEntry<"ishiki.compact"> | undefined {
+/** 最近一条压缩锚点条目；指令层用它展示记忆摘要。 */
+export function lastCompact(entries: readonly AgentEntry[]): AgentEntry<"ishiki.compact"> | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry.type === "ishiki.compact") return entry;
   }
   return undefined;
 }
-
 function visibleSize(entries: readonly AgentEntry[], domain?: InstanceDomain): number {
   let size = 0;
   for (const entry of entries) {
@@ -234,6 +236,22 @@ function findCut(
     if (size > target) break;
   }
   return { cut: starts[picked], kept: size };
+}
+
+/** 上下文预算状态的只读视图；estimatedTokens 未标定时按 0.5 字符比估算。 */
+export interface ContextStats {
+  assembledChars: number;
+  estimatedTokens: number;
+  rateCalibrated: boolean;
+  /** 0 表示预算关闭。 */
+  ceilingChars: number;
+  targetChars: number;
+  over: boolean;
+  compacting: boolean;
+  config: { maxTokens: number; refillRatio: number };
+  lastCompact?: { at: number; summaryChars: number; anchorEntryId: string };
+  /** 按 target 计算的手动压缩预览。 */
+  plan?: { droppedEntries: number; droppedChars: number; keptChars: number; throughEntryId: string };
 }
 
 export class StandardContextInstance implements ContextEngineInstance {
@@ -362,24 +380,72 @@ export class StandardContextInstance implements ContextEngineInstance {
 
   private finishTurn(): void {
     if (!this.over || this.compacting !== undefined) return;
-    this.compacting = this.compact().finally(() => {
-      this.compacting = undefined;
-    });
+    this.compacting = this.compact()
+      .then(() => undefined)
+      .finally(() => {
+        this.compacting = undefined;
+      });
   }
 
   async settle(): Promise<void> {
     await this.compacting;
   }
 
-  private async compact(): Promise<void> {
+  /** 上下文预算状态与手动压缩预览；含一次 storage 读（取 lastCompact 与 plan）。 */
+  async stats(): Promise<ContextStats> {
+    const entries: readonly AgentEntry[] = this.agent === undefined ? [] : await this.agent.storage.read();
+    const { tail, head } = this.window(entries);
+    const compact = lastCompact(entries);
+    const chars = this.assembled ?? head.length + visibleSize(tail, this.domain);
+    const rate = this.rate;
+    const stats: ContextStats = {
+      assembledChars: chars,
+      estimatedTokens: Math.round(rate === undefined ? FALLBACK_TOKENS_PER_CHAR * chars : rate * chars + (this.fixed ?? 0)),
+      rateCalibrated: rate !== undefined,
+      ceilingChars: this.ceiling,
+      targetChars: this.target,
+      over: this.over,
+      compacting: this.compacting !== undefined,
+      config: { maxTokens: this.maxTokens, refillRatio: this.refillRatio },
+    };
+    if (compact !== undefined) {
+      stats.lastCompact = { at: compact.timestamp, summaryChars: compact.data.summary.length, anchorEntryId: compact.data.lastEntryId };
+    }
+    if (this.agent !== undefined && this.ceiling > 0) {
+      const { cut, kept } = findCut(tail, head.length, this.target, this.ceiling, this.domain, "drop");
+      if (cut > 0) {
+        stats.plan = {
+          droppedEntries: tail.slice(0, cut).filter((entry) => entry.type === "message").length,
+          droppedChars: visibleSize(tail.slice(0, cut), this.domain),
+          keptChars: kept,
+          throughEntryId: tail[cut - 1].id,
+        };
+      }
+    }
+    return stats;
+  }
+
+  /** 手动压缩：与自动压缩共用一条 compact 路径，裁剪阈值取 target，提供提前压缩的操作空间。 */
+  async forceCompact(): Promise<{ appended: boolean; summaryChars: number; throughEntryId?: string }> {
+    await this.settle();
+    if (this.ceiling <= 0) throw new ManagementError("rejected", "该 Profile 关闭了上下文预算，没有可压缩的内容");
     const agent = this.agent;
-    if (agent === undefined) return;
+    if (agent === undefined) throw new ManagementError("failed", "Runtime 已停止，无法压缩");
+    if (!agent.isIdle()) throw new ManagementError("busy", "Runtime 正在执行轮次，压缩会在轮次结束时自动进行");
+    const result = await this.compact();
+    if (!result.appended && result.cut > 0) throw new ManagementError("failed", "压缩被中止");
+    return { appended: result.appended, summaryChars: result.summaryChars, throughEntryId: result.throughEntryId };
+  }
+
+  private async compact(): Promise<{ appended: boolean; summaryChars: number; cut: number; throughEntryId?: string }> {
+    const agent = this.agent;
+    if (agent === undefined) return { appended: false, summaryChars: 0, cut: 0 };
 
     const { summary: previous, tail, head } = this.window(await agent.storage.read());
     const { cut } = findCut(tail, head.length, this.target, this.ceiling, this.domain, "drop");
     if (cut === 0) {
       this.over = false;
-      return;
+      return { appended: false, summaryChars: previous?.length ?? 0, cut: 0 };
     }
 
     const through = tail[cut - 1].id;
@@ -387,7 +453,7 @@ export class StandardContextInstance implements ContextEngineInstance {
     if (dropped.length === 0) {
       await agent.storage.append(createEntry("ishiki.compact", { summary: previous ?? "", lastEntryId: through }));
       this.over = false;
-      return;
+      return { appended: true, summaryChars: (previous ?? "").length, cut, throughEntryId: through };
     }
 
     const abort = new AbortController();
@@ -395,10 +461,13 @@ export class StandardContextInstance implements ContextEngineInstance {
     try {
       const summary = await this.summarize(previous, dropped, abort.signal);
 
-      if (summary === undefined || abort.signal.aborted) return;
+      if (summary === undefined || abort.signal.aborted) {
+        return { appended: false, summaryChars: (previous ?? "").length, cut, throughEntryId: through };
+      }
 
       await agent.storage.append(createEntry("ishiki.compact", { summary, lastEntryId: through }));
       this.over = false;
+      return { appended: true, summaryChars: summary.length, cut, throughEntryId: through };
     } finally {
       if (this.abort === abort) this.abort = undefined;
     }
@@ -450,6 +519,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
 
   constructor(ctx: Context) {
     super(ctx, "standard");
+    registerStandardCommands(ctx);
   }
 
   public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "standard">>, context: ExtensionContext): ContextEngineInstance {

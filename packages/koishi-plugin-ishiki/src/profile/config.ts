@@ -255,9 +255,13 @@ function compileChannels(id: string, channels: Record<string, string[]>): Readon
   return compiled;
 }
 
+/** 单条模式对频道的命中：`*` 全部、`前缀*` 前缀、其余精确。 */
+export function matchesPattern(pattern: string, channelId: string): boolean {
+  return pattern === "*" || (pattern.endsWith("*") ? channelId.startsWith(pattern.slice(0, -1)) : pattern === channelId);
+}
+
 export function matchesChannel(filter: ChannelFilter, channelId: string): boolean {
-  const matched = (pattern: string): boolean => pattern === "*" || (pattern.endsWith("*") ? channelId.startsWith(pattern.slice(0, -1)) : pattern === channelId);
-  return filter.include.some(matched) && !filter.exclude.some(matched);
+  return filter.include.some((pattern) => matchesPattern(pattern, channelId)) && !filter.exclude.some((pattern) => matchesPattern(pattern, channelId));
 }
 
 /** 排除项是否把某条正项整个盖掉：`*`、同值，或前缀覆盖（含正项本身是前缀模式）。 */

@@ -9,6 +9,7 @@ import type { AgentRuntime } from "../runtime.js";
 import { describeError, ManagementError } from "./errors.js";
 import type { ManagementEventBus } from "./events.js";
 import type { AuditLog } from "./observability.js";
+import { domainLabel } from "./reference.js";
 import type { SessionsManager } from "./sessions.js";
 import type { RuntimeMeta, RuntimeState, RuntimeView, RuntimeWakeResult } from "./types.js";
 
@@ -31,10 +32,6 @@ function readMeta(runtime: { id: string; home: string }): RuntimeMeta | undefine
   } catch {
     return undefined;
   }
-}
-
-function domainLabel(domain: RuntimeMeta["domain"]): string {
-  return domain.mode === "cross" ? "跨频道" : `${domain.platform} · ${domain.channelId}`;
 }
 
 export class RuntimesManager {
