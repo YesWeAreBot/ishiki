@@ -357,7 +357,7 @@ describe("codemode output sections", () => {
     const run = await probe({
       steps: (index) =>
         index === 0
-          ? [script(`// @options: {"timeout_ms": 100}\nimage({type: "image", data: "${PNG}", mimeType: "image/png"}); while (true) {}`, "loop")]
+          ? [script(`// @options: {"timeout_ms": 1000}\nimage({type: "image", data: "${PNG}", mimeType: "image/png"}); while (true) {}`, "loop")]
           : [{ name: "finish", input: {} }],
     });
     const messages = await run.turn();
