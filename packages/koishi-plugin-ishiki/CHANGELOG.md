@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-26
+
 ### Added
 - Model editor switches fields by model type and imports declarations from a provider's remote model list through a server-side proxy
 - Model and Profile editors sync between form and YAML RAW mode and validate input before saving
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - Audit page and its console endpoint
+
 ## [0.0.1] - 2026-10-25
 
 ### Added
@@ -111,3 +114,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compressed history is demoted to supplementary material, with instructions kept in their own system prompt.
 - Attachment extraction requires a payload or URL up front.
 - The first request carries the baseline tool catalog instead of an empty one.
+
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.2...HEAD
+[0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki@0.0.2

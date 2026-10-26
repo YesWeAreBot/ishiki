@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-26
+
 ### Changed
 - Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service for the Koishi market
 - The `koishi-plugin-ishiki` peer dependency now accepts any `0.0.x` release instead of only `0.0.1`
+
 ## [0.0.1] - 2026-10-25
 
 ### Added
@@ -33,3 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool output schemas describe the native MCP content blocks returned inside codemode; model conversion and resource processing remain outside internal tool calls
 - Server summaries combine declared instructions with the exposed tool-name index
 - Duplicate exposed tool names across servers now raise a `ToolConflictError` instead of silently overwriting earlier tools
+
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.2...HEAD
+[0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-mcp-client@0.0.2
