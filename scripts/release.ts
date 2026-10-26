@@ -10,7 +10,6 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CHANGESET_TEMP = join(ROOT, ".changeset", "__release__.md");
 const PLAN_FILE = join(ROOT, "packs", "release-plan.json");
 const NOTES_FILE = join(ROOT, "packs", "release-notes.md");
-const MARKER_TAG = /^release-\d{8}-\d{6}(?:-\d+)?$/;
 
 type BumpType = "patch" | "minor" | "major";
 
@@ -88,11 +87,6 @@ function pad2(value: number): string {
 function dateString(): string {
   const now = new Date();
   return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
-}
-
-function timestamp(): string {
-  const now = new Date();
-  return `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
 }
 
 function loadPackages(): PackageInfo[] {
@@ -304,20 +298,22 @@ async function selectReleases(candidates: PackageInfo[], published: Map<string, 
       const answer = (
         await readline.question(
           isPublished
-            ? `${pkg.name} ${pkg.version}（已发布）1) patch 2) minor 3) major 4) skip [1]：`
-            : `${pkg.name} ${pkg.version}（未发布）1) release 2) skip [1]：`,
+            ? `${pkg.name} ${pkg.version}（已发布）patch / minor / major / skip [patch]：`
+            : `${pkg.name} ${pkg.version}（未发布）release / skip [release]：`,
         )
-      ).trim();
+      )
+        .trim()
+        .toLowerCase();
       if (isPublished) {
-        if (answer === "" || answer === "1" || answer === "patch" || answer === "p") selection.publishedBumps.set(pkg.name, "patch");
-        else if (answer === "2" || answer === "minor" || answer === "m") selection.publishedBumps.set(pkg.name, "minor");
-        else if (answer === "3" || answer === "major" || answer === "M") selection.publishedBumps.set(pkg.name, "major");
-        else if (answer === "4" || answer === "skip" || answer === "s") continue;
-        else throw new Error(`无法识别的选择：${answer}`);
+        if (answer === "" || answer === "patch") selection.publishedBumps.set(pkg.name, "patch");
+        else if (answer === "minor") selection.publishedBumps.set(pkg.name, "minor");
+        else if (answer === "major") selection.publishedBumps.set(pkg.name, "major");
+        else if (answer === "skip") continue;
+        else throw new Error(`无法识别的选择：${answer}。请输入 patch、minor、major 或 skip。`);
       } else {
-        if (answer === "" || answer === "1" || answer === "release" || answer === "r") selection.firstReleases.add(pkg.name);
-        else if (answer === "2" || answer === "skip" || answer === "s") selection.skippedFirstReleases.add(pkg.name);
-        else throw new Error(`无法识别的选择：${answer}`);
+        if (answer === "" || answer === "release") selection.firstReleases.add(pkg.name);
+        else if (answer === "skip") selection.skippedFirstReleases.add(pkg.name);
+        else throw new Error(`无法识别的选择：${answer}。请输入 release 或 skip。`);
       }
     }
   } finally {
@@ -432,34 +428,24 @@ function writeChangelogs(plan: PlanRelease[], packages: PackageInfo[], rewrites:
   }
 }
 
-function createMarkerTag(): string {
-  const base = `release-${timestamp()}`;
-  let marker = base;
-  let suffix = 2;
-  while (hasTag(marker)) {
-    marker = `${base}-${suffix}`;
-    suffix += 1;
-  }
-  return marker;
+export function releaseCommitMessage(plan: PlanRelease[]): { subject: string; body: string } {
+  const releases = [...plan].sort((left, right) => left.name.localeCompare(right.name));
+  return {
+    subject: "chore(release): bump version",
+    body: releases.map((release) => `- ${release.name}@${release.newVersion}`).join("\n"),
+  };
 }
 
 function commitAndTag(plan: PlanRelease[]): void {
-  const summary = [...plan]
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .map((release) => `${release.name}@${release.newVersion}`)
-    .join(", ");
+  const releases = [...plan].sort((left, right) => left.name.localeCompare(right.name));
+  const message = releaseCommitMessage(plan);
   run("git", ["add", "-A"]);
-  run("git", ["commit", "-m", `chore(release): ${summary}`]);
-  for (const release of plan) {
+  run("git", ["commit", "-m", message.subject, "-m", message.body]);
+  for (const release of releases) {
     const tag = `${release.name}@${release.newVersion}`;
     run("git", ["tag", "-a", tag, "-m", tag]);
   }
-  const marker = createMarkerTag();
-  run("git", ["tag", marker]);
-  run("git", ["push", "origin", "main"]);
-  run("git", ["push", "origin", ...plan.map((release) => `${release.name}@${release.newVersion}`)]);
-  run("git", ["push", "origin", marker]);
-  console.log(`已推送 ${plan.length} 个包 tag，标记 tag：${marker}`);
+  console.log(`已提交并创建 ${releases.length} 个包 tag（未推送）：${releases.map((release) => `${release.name}@${release.newVersion}`).join(", ")}`);
 }
 
 async function bump(args: string[]): Promise<void> {
@@ -528,7 +514,7 @@ async function publish(args: string[]): Promise<void> {
   const tags = run("git", ["tag", "--points-at", "HEAD"], { capture: true })
     .split("\n")
     .map((line) => line.trim())
-    .filter((tag) => tag.length > 0 && tag.includes("@") && !MARKER_TAG.test(tag));
+    .filter((tag) => tag.length > 0 && tag.includes("@"));
   if (tags.length === 0) throw new Error("HEAD 上没有 package tag");
   const releases = tags.map((tag) => {
     const at = tag.lastIndexOf("@");
