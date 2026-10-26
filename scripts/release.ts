@@ -4,6 +4,8 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
+import { Range, inc, satisfies, validRange, type ReleaseType } from "semver";
+
 const { dirname, join, relative, resolve } = path;
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -418,6 +420,64 @@ function resetFirstReleaseVersions(plan: PlanRelease[], packages: PackageInfo[])
   }
 }
 
+function getVersionRangeType(versionRange: string): string {
+  if (versionRange.charAt(0) === "^") return "^";
+  if (versionRange.charAt(0) === "~") return "~";
+  if (versionRange.startsWith(">=")) return ">=";
+  if (versionRange.startsWith("<=")) return "<=";
+  if (versionRange.charAt(0) === ">") return ">";
+  return "";
+}
+
+export function getNewPeerRange(versionRange: string, newVersion: string, releaseType: string): string {
+  if (versionRange.startsWith("workspace:") || versionRange.startsWith("file:") || versionRange.startsWith("link:")) {
+    return versionRange;
+  }
+  if (!validRange(versionRange)) throw new Error(`无法解析版本区间：${versionRange}`);
+  if (/^\s*(\*|x|X)\s*$/.test(versionRange)) return versionRange;
+  const sets = new Range(versionRange).set;
+  if (sets.length !== 1) throw new Error(`无法自动更新复合版本区间：${versionRange}`);
+  const comparators = sets[0];
+  if (comparators.length === 2 && versionRange.includes(">") && versionRange.includes("<")) {
+    const lowerBound = comparators.find(({ operator }) => operator.startsWith(">"));
+    const upperBound = comparators.find(({ operator }) => operator.startsWith("<"));
+    if (lowerBound && upperBound) {
+      let newUpperBound = upperBound.value;
+      if (!satisfies(newVersion, newUpperBound)) {
+        const incremented = inc(newVersion, (releaseType === "minor" || releaseType === "major" ? releaseType : "patch") as ReleaseType);
+        if (!incremented) throw new Error(`无法计算 ${newVersion} 的下一个版本`);
+        newUpperBound = `<${incremented}`;
+      }
+      return comparators[0] === lowerBound ? `>=${newVersion} ${newUpperBound}` : `${newUpperBound} >=${newVersion}`;
+    }
+  }
+  return `${getVersionRangeType(versionRange)}${newVersion}`;
+}
+
+export function syncPeerDependencies(plan: PlanRelease[], packages: PackageInfo[]): void {
+  const releases = new Map(plan.filter((release) => release.type !== "none").map((release) => [release.name, release]));
+  for (const pkg of packages) {
+    const manifestPath = join(pkg.dir, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
+    const peers = manifest.peerDependencies;
+    if (!peers) continue;
+    let changed = false;
+    for (const [name, release] of releases) {
+      if (name === manifest.name) continue;
+      const versionRange = peers[name];
+      if (!versionRange) continue;
+      const nextRange = getNewPeerRange(versionRange, release.newVersion, release.type);
+      if (nextRange === versionRange) continue;
+      peers[name] = nextRange;
+      changed = true;
+    }
+    if (!changed) continue;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    pkg.manifest = manifest;
+    console.log(`同步 ${relative(ROOT, manifestPath)} 的 peerDependencies`);
+  }
+}
+
 function writeChangelogs(plan: PlanRelease[], packages: PackageInfo[], rewrites: Map<string, string>): void {
   for (const release of plan) {
     const pkg = packages.find((item) => item.name === release.name);
@@ -499,6 +559,7 @@ async function bump(args: string[]): Promise<void> {
     buildAndTest();
     if (usedChangesets) run(process.execPath, ["x", "changeset", "version"]);
     resetFirstReleaseVersions(plan, packages);
+    syncPeerDependencies(plan, packages);
     writeChangelogs(plan, packages, rewrites);
     run(process.execPath, ["install"]);
     rmSync(CHANGESET_TEMP, { force: true });

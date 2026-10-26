@@ -20,6 +20,6 @@ export default defineConfig({
   },
   test: {
     exclude: ["**/node_modules/**", "**/.git/**"],
-    include: ["packages/*/tests/**/*.spec.ts"],
+    include: ["packages/*/tests/**/*.spec.ts", "scripts/tests/**/*.spec.ts"],
   },
 });
