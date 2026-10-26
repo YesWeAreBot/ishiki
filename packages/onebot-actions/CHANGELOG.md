@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service with `server` optional for the Koishi market
-
+- The `koishi-plugin-ishiki` peer dependency now accepts any `0.0.x` release instead of only `0.0.1`
 ## [0.0.1] - 2026-10-25
 
 ### Added

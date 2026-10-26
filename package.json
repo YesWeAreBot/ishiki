@@ -10,7 +10,7 @@
   "type": "module",
   "scripts": {
     "build": "yakumo build",
-    "build:docs": "yakumo build @ishiki/docs",
+    "bump": "bun scripts/release.ts bump",
     "clean": "yakumo clean",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

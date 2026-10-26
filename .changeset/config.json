@@ -3,15 +3,13 @@
   "baseBranch": "main",
   "access": "public",
   "format": "auto",
-  "changelog": [
-    "@changesets/changelog-github",
-    {
-      "repo": "YesWeAreBot/ishiki"
-    }
-  ],
-  "commit": true,
+  "changelog": false,
+  "commit": false,
   "ignore": [],
   "fixed": [],
   "linked": [],
-  "updateInternalDependencies": "patch"
+  "updateInternalDependencies": "patch",
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  }
 }
