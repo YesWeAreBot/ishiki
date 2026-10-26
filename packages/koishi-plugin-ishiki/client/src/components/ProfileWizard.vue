@@ -661,10 +661,10 @@ function confirmSummary(): Array<{ label: string; value: string }> {
   width: 20px;
   height: 20px;
   border: 1px solid var(--line-strong);
-  border-radius: 50%;
-  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10.5px;
 }
 
 li.done .wizard-step-mark {

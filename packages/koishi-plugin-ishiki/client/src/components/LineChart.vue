@@ -222,7 +222,7 @@ const legend = computed(() => seriesMeta.value.map(({ entry, color }) => ({ labe
 .line-chart-frame:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: 0;
 }
 
 .line-chart-svg {
@@ -245,8 +245,9 @@ const legend = computed(() => seriesMeta.value.map(({ entry, color }) => ({ labe
 
 .axis-text {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .cursor-line {
@@ -259,17 +260,17 @@ const legend = computed(() => seriesMeta.value.map(({ entry, color }) => ({ labe
   top: 8px;
   transform: translateX(-50%);
   min-width: 148px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow);
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
   pointer-events: none;
 }
 
 .tooltip-day {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10.5px;
   margin-bottom: 4px;
 }
 
@@ -277,7 +278,7 @@ const legend = computed(() => seriesMeta.value.map(({ entry, color }) => ({ labe
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .tooltip-row span {
@@ -303,9 +304,9 @@ const legend = computed(() => seriesMeta.value.map(({ entry, color }) => ({ labe
   display: flex;
   flex-wrap: wrap;
   gap: 6px 14px;
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 10.5px;
 }
 
 .line-chart-legend span {

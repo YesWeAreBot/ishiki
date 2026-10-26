@@ -11,24 +11,16 @@ interface PageEntry {
   id: string;
   path: string;
   label: string;
-  icon: string;
   component: Component;
 }
 
-interface NavNode {
-  id: string;
-  label: string;
-  page?: PageEntry;
-  children?: NavNode[];
-}
-
 const pages: PageEntry[] = [
-  { id: "models", path: "/ishiki/models", label: "模型目录", icon: "models", component: defineAsyncComponent(() => import("./pages/ModelsPage.vue")) },
-  { id: "profiles", path: "/ishiki/profiles", label: "人格配置", icon: "profile", component: defineAsyncComponent(() => import("./pages/ProfilesPage.vue")) },
-  { id: "runtimes", path: "/ishiki/runtimes", label: "运行实例", icon: "runtimes", component: defineAsyncComponent(() => import("./pages/RuntimesPage.vue")) },
-  { id: "sessions", path: "/ishiki/sessions", label: "会话日志", icon: "sessions", component: defineAsyncComponent(() => import("./pages/SessionsPage.vue")) },
-  { id: "usage", path: "/ishiki/usage", label: "用量统计", icon: "usage", component: defineAsyncComponent(() => import("./pages/UsagePage.vue")) },
-  { id: "cache", path: "/ishiki/cache", label: "缓存状态", icon: "cache", component: defineAsyncComponent(() => import("./pages/CachePage.vue")) },
+  { id: "models", path: "/ishiki/models", label: "模型目录", component: defineAsyncComponent(() => import("./pages/ModelsPage.vue")) },
+  { id: "profiles", path: "/ishiki/profiles", label: "人格配置", component: defineAsyncComponent(() => import("./pages/ProfilesPage.vue")) },
+  { id: "runtimes", path: "/ishiki/runtimes", label: "运行实例", component: defineAsyncComponent(() => import("./pages/RuntimesPage.vue")) },
+  { id: "sessions", path: "/ishiki/sessions", label: "会话日志", component: defineAsyncComponent(() => import("./pages/SessionsPage.vue")) },
+  { id: "usage", path: "/ishiki/usage", label: "用量统计", component: defineAsyncComponent(() => import("./pages/UsagePage.vue")) },
+  { id: "cache", path: "/ishiki/cache", label: "缓存状态", component: defineAsyncComponent(() => import("./pages/CachePage.vue")) },
 ];
 
 const groups = [
@@ -36,12 +28,11 @@ const groups = [
   { label: "观测", ids: ["usage", "cache"] },
 ] as const;
 
-const navTree: NavNode[] = groups.map((group) => ({
-  id: `group:${group.label}`,
+const navGroups = groups.map((group) => ({
   label: group.label,
-  children: group.ids.flatMap((id) => {
+  pages: group.ids.flatMap((id) => {
     const page = pages.find((entry) => entry.id === id);
-    return page === undefined ? [] : [{ id: page.id, label: page.label, page }];
+    return page === undefined ? [] : [page];
   }),
 }));
 
@@ -66,34 +57,50 @@ function go(page: PageEntry): void {
   if (route.path === page.path) return;
   void router.push(page.path);
 }
-
-function onNodeClick(node: NavNode): void {
-  if (node.page !== undefined) go(node.page);
-}
 </script>
 
 <template>
   <k-layout main="darker">
-    <template #left>
-      <el-scrollbar>
-        <el-tree
-          :data="navTree"
-          node-key="id"
-          :default-expand-all="true"
-          :current-node-key="activeId"
-          :highlight-current="true"
-          :expand-on-click-node="true"
-          @node-click="onNodeClick"
-        >
-          <template #default="{ data }">
-            <span class="label" :class="{ active: data.page !== undefined && data.id === activeId }">{{ data.label }}</span>
-          </template>
-        </el-tree>
-      </el-scrollbar>
-    </template>
-
     <div class="ishiki-root console-root" :class="{ 'is-dark': isDark }">
-      <component :is="current.component" :key="activeId" />
+      <div class="console-shell">
+        <aside class="console-sidebar" aria-label="Ishiki 导航">
+          <div class="console-sidebar-inner">
+            <div class="sidebar-brand">
+              <span class="sidebar-mark" aria-hidden="true"><i /><i /><i /></span>
+              <div>
+                <div class="sidebar-name">Ishiki</div>
+                <div class="sidebar-sub">意识运行时</div>
+              </div>
+            </div>
+
+            <nav class="sidebar-nav">
+              <div v-for="group in navGroups" :key="group.label" class="sidebar-group">
+                <div class="sidebar-group-label">{{ group.label }}</div>
+                <button
+                  v-for="page in group.pages"
+                  :key="page.id"
+                  type="button"
+                  class="sidebar-item"
+                  :class="{ active: page.id === activeId }"
+                  :aria-current="page.id === activeId ? 'page' : undefined"
+                  @click="go(page)"
+                >
+                  {{ page.label }}
+                </button>
+              </div>
+            </nav>
+
+            <div class="sidebar-foot">
+              <div class="sidebar-status"><span class="sidebar-dot" />控制台在线</div>
+              <div>Koishi Console</div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="console-main">
+          <component :is="current.component" :key="activeId" />
+        </main>
+      </div>
       <ToastHost />
     </div>
   </k-layout>

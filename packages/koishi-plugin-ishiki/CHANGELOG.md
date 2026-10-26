@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Usage page renders daily line charts from raw usage records
 
 ### Changed
+- Console adopts the manual-style visual system: a custom sidebar, paper and ink surfaces with one blue signal, a bundled Outfit Latin subset, and denser tables, forms, and panels
 - Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares the `ishiki` service it implements together with the optional `console` service, so npm and the Koishi market can present it
 - README describes the new console editing and wizard flow
 - The plugin re-exports the gateway factory and type alongside agent types and runtime helpers, so engine and tool packs no longer depend on `@yesimagent/gateway` directly

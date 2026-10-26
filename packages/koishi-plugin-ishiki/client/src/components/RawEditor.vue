@@ -135,13 +135,13 @@ v-html="line"
   overflow: auto;
   max-height: 60vh;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface-raised);
+  border-radius: 0;
+  background: var(--surface);
 }
 
 .raw-editor:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .raw-inner {
@@ -159,11 +159,11 @@ v-html="line"
   min-width: 46px;
   padding: 8px 8px 8px 0;
   border-right: 1px solid var(--line);
-  background: var(--surface-inset);
-  color: var(--faint);
+  background: var(--surface-muted);
+  color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
-  line-height: 21px;
+  font-size: 10.5px;
+  line-height: 20px;
   text-align: right;
   user-select: none;
 }
@@ -180,14 +180,14 @@ v-html="line"
   margin: 0;
   padding: 8px 12px 28px;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   white-space: pre;
 }
 
 .raw-line {
   display: block;
-  min-height: 21px;
-  line-height: 21px;
+  min-height: 20px;
+  line-height: 20px;
 }
 
 .raw-line-error {
@@ -211,8 +211,8 @@ v-html="line"
   color: transparent;
   caret-color: var(--ink);
   font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 21px;
+  font-size: 12px;
+  line-height: 20px;
   white-space: pre;
   overflow: hidden;
   resize: none;
@@ -223,7 +223,7 @@ v-html="line"
 }
 
 .tk-key {
-  color: var(--info-ink);
+  color: var(--c2);
 }
 
 .tk-string {
