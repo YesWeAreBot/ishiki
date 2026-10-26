@@ -47,11 +47,11 @@
   },
   "devDependencies": {
     "koishi": "^4.18.11",
-    "koishi-plugin-ishiki": "workspace:^"
+    "koishi-plugin-ishiki": "^0.0.1"
   },
   "peerDependencies": {
     "koishi": "^4.18.11",
-    "koishi-plugin-ishiki": "workspace:^"
+    "koishi-plugin-ishiki": "^0.0.1"
   },
   "koishi": {
     "description": {

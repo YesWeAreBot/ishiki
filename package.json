@@ -20,6 +20,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.3",
     "@types/node": "^26.6.4",
     "esbuild": "^0.28.0",
     "husky": "^9.1.7",
