@@ -331,6 +331,12 @@ class Ishiki extends Service<Ishiki.Config> {
     return this.profiles.get(profile.id)?.runtimes.get(this.runtimeKey(profile, address));
   }
 
+  /** 只读查找频道坐标对应的会话标识；不派生 Runtime。 */
+  public findSessionId(address: SessionAddress): string | undefined {
+    const hit = this.claimRoute(address);
+    return hit === undefined ? undefined : this.runtimeKey(hit.route.profile, address);
+  }
+
   private claimRoute(address: SessionAddress): { route: Route; filter: ChannelFilter; matchedPattern: string } | undefined {
     const sid = `${address.platform}:${address.selfId}`;
     for (const route of this.routes.get(sid) ?? []) {

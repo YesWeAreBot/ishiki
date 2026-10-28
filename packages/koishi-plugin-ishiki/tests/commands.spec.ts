@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
@@ -238,6 +238,87 @@ describe("ishiki commands", () => {
       expect(existsSync(path.join(setup.dataPath, "profiles", "demo", "profile.yml"))).toBe(true);
       const audit = await setup.host.management.audit.query({ kind: "profile.remove" });
       expect(audit.records).toHaveLength(0);
+    } finally {
+      await setup.stop();
+    }
+  });
+
+  it("archives a stopped session's log and resources after confirmation", async () => {
+    const setup = await startApp({
+      users: [
+        { id: "alice", authority: 2 },
+        { id: "carol", authority: 3 },
+      ],
+    });
+    try {
+      await writeProfile(setup.dataPath, "mainbot", { model: "mock:vision", mode: "cross", channels: { "test:10001": ["*"] } });
+      await applyProfile(setup, "mainbot");
+      await setup.message("alice", "hello");
+      await vi.waitFor(() => expect(setup.host.runtimes.size).toBe(1));
+      const runtime = [...setup.host.runtimes.values()][0];
+      const sessionId = runtime.id;
+      const home = runtime.home;
+      await vi.waitFor(() => expect(existsSync(path.join(home, "events.jsonl"))).toBe(true));
+      mkdirSync(path.join(home, "resources", "assets"), { recursive: true });
+      writeFileSync(path.join(home, "resources", "assets", "note.json"), "{}", "utf8");
+
+      await setup.session("carol").execute(`ishiki.session.archive ${sessionId}`);
+      expect(lastOutput(setup)).toContain("仍在运行");
+      expect(existsSync(path.join(home, "events.jsonl"))).toBe(true);
+
+      await executeWithReply(setup, "carol", `ishiki.runtime.stop ${sessionId}`, "确认");
+      expect(setup.host.runtimes.size).toBe(0);
+
+      const cancelled = await executeWithReply(setup, "carol", `ishiki.session.archive ${sessionId}`, "不");
+      expect(cancelled).toContain("操作已取消");
+      expect(existsSync(path.join(home, "events.jsonl"))).toBe(true);
+      expect(existsSync(path.join(home, "resources"))).toBe(true);
+
+      const output = await executeWithReply(setup, "carol", `ishiki.session.archive ${sessionId}`, "确认");
+      expect(output).toContain(`已归档会话 ${sessionId}`);
+      expect(existsSync(path.join(home, "events.jsonl"))).toBe(false);
+      expect(existsSync(path.join(home, "resources"))).toBe(false);
+
+      const [archiveName] = readdirSync(path.join(home, "archives"));
+      expect(archiveName).toMatch(/^\d{8}-\d{6}_[0-9a-f-]{36}$/);
+      const archived = path.join(home, "archives", archiveName);
+      expect(readdirSync(archived).sort()).toEqual(["events.jsonl", "resources"]);
+      expect(existsSync(path.join(archived, "resources", "assets", "note.json"))).toBe(true);
+      expect((await setup.host.management.sessions.list()).some((session) => session.id === sessionId)).toBe(false);
+      expect((await setup.host.management.audit.query({ kind: "session.archive" })).records).toHaveLength(1);
+    } finally {
+      await setup.stop();
+    }
+  });
+
+  it("archives the current channel's stopped session when the id is omitted", async () => {
+    const setup = await startApp({
+      users: [
+        { id: "alice", authority: 2 },
+        { id: "carol", authority: 3 },
+      ],
+    });
+    try {
+      await writeProfile(setup.dataPath, "mainbot", { model: "mock:vision", mode: "cross", channels: { "test:10001": ["*"] } });
+      await applyProfile(setup, "mainbot");
+      await setup.message("alice", "hello");
+      await vi.waitFor(() => expect(setup.host.runtimes.size).toBe(1));
+      const runtime = [...setup.host.runtimes.values()][0];
+      const sessionId = runtime.id;
+      const home = runtime.home;
+      await vi.waitFor(() => expect(existsSync(path.join(home, "events.jsonl"))).toBe(true));
+
+      await setup.session("carol").execute("ishiki.session.archive");
+      expect(lastOutput(setup)).toContain("仍在运行");
+      expect(existsSync(path.join(home, "events.jsonl"))).toBe(true);
+
+      await executeWithReply(setup, "carol", `ishiki.runtime.stop ${sessionId}`, "确认");
+      expect(setup.host.runtimes.size).toBe(0);
+
+      const output = await executeWithReply(setup, "carol", "ishiki.session.archive", "确认");
+      expect(output).toContain(`已归档会话 ${sessionId}`);
+      expect(existsSync(path.join(home, "events.jsonl"))).toBe(false);
+      expect(existsSync(path.join(home, "resources"))).toBe(false);
     } finally {
       await setup.stop();
     }

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a `chat` context engine that folds old tool output into intent digests stored as artifact files and summarizes the folded prefix
 - Added a required one-line `i` intent to every model-side tool call, preserved through context folding
 - Added `ishiki.chat.usage`, `ishiki.chat.summary`, `ishiki.chat.shake` and `ishiki.chat.compact` commands
+- Added an `ishiki.session.archive` command that moves a stopped session's `events.jsonl` and `resources/` into `archives/<timestamp>_<uuid>`
 
 ### Changed
 - Changed the default profile context engine from `standard` to `chat`

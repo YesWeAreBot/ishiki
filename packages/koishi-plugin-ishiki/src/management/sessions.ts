@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
@@ -45,7 +46,34 @@ interface UsageScan {
   records: UsageRecord[];
 }
 
+export interface SessionArchiveResult {
+  sessionId: string;
+  profileId: string;
+  path: string;
+  files: string[];
+}
+
+export interface SessionArchivePlan {
+  sessionId: string;
+  profileId: string;
+  files: string[];
+}
+
 const CHUNK = 64 * 1024;
+
+/** 归档目录名：本地时间 `YYYYMMDD-HHmmss` 加 uuid，避免同一秒内冲突。 */
+function archiveStamp(date: Date): string {
+  const months = twoDigits(date.getMonth() + 1);
+  const days = twoDigits(date.getDate());
+  const hours = twoDigits(date.getHours());
+  const minutes = twoDigits(date.getMinutes());
+  const seconds = twoDigits(date.getSeconds());
+  return `${date.getFullYear()}${months}${days}-${hours}${minutes}${seconds}`;
+}
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0");
+}
 
 /** 逐行读取 JSONL；只处理回调需要的那段，游标是字节偏移加行号。 */
 async function scanLines(
@@ -268,6 +296,56 @@ export class SessionsManager {
     const record = (await this.records()).find((entry) => entry.id === sessionId);
     if (record === undefined) return "stopped";
     return runtimeState(record.id) ?? (record.active ? "idle" : "stopped");
+  }
+
+  /** 归档前检查：会话存在、已停止且至少有一份可移动的文件。 */
+  public async planArchive(sessionId: string): Promise<SessionArchivePlan> {
+    const record = await this.recordOf(sessionId);
+    if (record.active) {
+      throw new ManagementError("conflict", `会话 ${sessionId} 仍在运行，请先执行 ishiki.runtime.stop ${sessionId}`);
+    }
+    const files = ["resources", "events.jsonl"].filter((name) => existsSync(path.join(record.home, name)));
+    if (files.length === 0) throw new ManagementError("not-found", `会话 ${sessionId} 没有可归档的文件`);
+    return { sessionId: record.id, profileId: record.profileId, files };
+  }
+
+  /** 归档会话：把 events.jsonl 与 resources 移到实例目录下的 archives/<时间>_<uuid>。 */
+  public async archive(plan: SessionArchivePlan, operator: string): Promise<SessionArchiveResult> {
+    const record = await this.recordOf(plan.sessionId);
+    if (record.active) {
+      throw new ManagementError("conflict", `会话 ${plan.sessionId} 仍在运行，请先执行 ishiki.runtime.stop ${plan.sessionId}`);
+    }
+    const targets = plan.files.map((name) => path.join(record.home, name)).filter((target) => existsSync(target));
+    if (targets.length === 0) throw new ManagementError("not-found", `会话 ${plan.sessionId} 没有可归档的文件`);
+    const destination = path.join(record.home, "archives", `${archiveStamp(new Date())}_${randomUUID()}`);
+    await mkdir(destination, { recursive: true });
+    // resources 先移，events.jsonl 最后移：它是会话在列表中可见的条件，作为归档完成的标记。
+    for (const target of targets) await rename(target, path.join(destination, path.basename(target)));
+    this.statsCache.delete(record.file);
+    this.usageCache.delete(record.file);
+    const result: SessionArchiveResult = {
+      sessionId: plan.sessionId,
+      profileId: record.profileId,
+      path: destination,
+      files: targets.map((target) => path.basename(target)),
+    };
+    await this.host.management.audit.append({
+      kind: "session.archive",
+      operator,
+      summary: `归档会话 ${plan.sessionId}`,
+      result: "ok",
+      profileId: record.profileId,
+      runtimeId: record.id,
+      sessionId: record.id,
+      detail: { path: destination, files: result.files },
+    });
+    return result;
+  }
+
+  private async recordOf(sessionId: string): Promise<SessionRecord> {
+    const record = (await this.records()).find((entry) => entry.id === sessionId);
+    if (record === undefined) throw new ManagementError("not-found", `会话不存在: ${sessionId}`);
+    return record;
   }
 
   private summaryOf(record: SessionRecord, stats: FileStats): SessionSummary {

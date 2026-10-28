@@ -21,9 +21,11 @@ data/ishiki
             └── <实例 key>
                 ├── events.jsonl
                 ├── workspace
-                └── resources
-                    ├── assets
-                    └── artifacts
+                ├── resources
+                │   ├── assets
+                │   └── artifacts
+                └── archives
+                    └── <时间>_<uuid>
 ```
 
 ## 你维护的部分
@@ -56,6 +58,10 @@ data/ishiki
 ### resources/artifacts/
 
 工具输出的归档：内容寻址命名（SHA-256 前 16 位 + `.bin`），旁有 `.json` 元数据。沙箱内以 `/home/.ishiki/artifacts/<tool>/<name>` 只读可见。早期版本的 `<hash>-<type><hash>.blob` 命名仍可通过元数据解析读取。
+
+### archives/
+
+执行 `ishiki.session.archive [runtimeId]` 并确认后，该实例的 `events.jsonl` 与 `resources/` 被移动到 `archives/<YYYYMMDD-HHmmss>_<uuid>/`。省略 `runtimeId` 时归档当前频道归属的会话；控制台或未归属频道需要显式指定。归档后会话不再出现在会话列表，`runtime.json` 与服务配置保留。运行中的实例需要先停止对应 Runtime 再归档。
 
 ### requests/
 
