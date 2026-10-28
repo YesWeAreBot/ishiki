@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Changed the default profile context engine from `standard` to `chat`
 - Moved shared transcript rendering helpers into `render.ts` for use by both context engines
+
+### Fixed
+- Fixed missing descriptions on the `ishiki` root command and the `ishiki.chat`/`ishiki.standard` command groups
 ## [0.0.2] - 2026-10-26
 
 ### Added

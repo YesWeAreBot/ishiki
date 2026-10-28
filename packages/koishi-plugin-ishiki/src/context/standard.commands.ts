@@ -26,6 +26,8 @@ export function registerStandardCommands(ctx: Context): void {
     if (!host.commands.enabled) return;
     const commands = host.commands;
 
+    // 先建组指令：ctx.command 展开路径时只为末段定义描述，隐式创建的中间组会没有描述文本
+    fiber.command("ishiki.standard", "上下文管理");
     const target = { kind: "runtime" } as const;
     const requires = { engines: { context: "standard" } } as const;
 

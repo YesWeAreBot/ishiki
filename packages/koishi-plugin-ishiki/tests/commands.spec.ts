@@ -386,4 +386,15 @@ describe("ishiki commands", () => {
       await setup.stop();
     }
   });
+
+  it("keeps descriptions resolvable for the root and contributed command groups", async () => {
+    const setup = await startApp({ users: [{ id: "alice", authority: 2 }] });
+    try {
+      expect(setup.app.i18n.get("commands.ishiki.description")).toMatchObject({ "": "ishiki 管理指令" });
+      expect(setup.app.i18n.get("commands.ishiki.chat.description")).toMatchObject({ "": "聊天上下文管理" });
+      expect(setup.app.i18n.get("commands.ishiki.standard.description")).toMatchObject({ "": "上下文管理" });
+    } finally {
+      await setup.stop();
+    }
+  });
 });

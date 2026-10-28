@@ -19,10 +19,15 @@ export interface CommandsSettings {
 export function installCommands(ctx: Context, host: Ishiki, config: CommandsSettings): () => void {
   const write = config.authority;
   const root = ctx.command("ishiki", "ishiki 管理指令", { authority: 1 });
+  // 贡献指令先注册时，ishiki 根指令已由路径展开隐式创建，ctx.command 会丢弃描述参数，这里显式补上
+  const disposeDescription = ctx.i18n.define("", "commands.ishiki.description", "ishiki 管理指令");
   registerModelCommands(ctx, host, root, write);
   registerProfileCommands(ctx, host, root, write);
   registerRuntimeCommands(ctx, host, root, write);
   registerChannelCommands(ctx, host, root, write);
   registerEngineCommands(ctx, host, root, write);
-  return () => root.dispose();
+  return () => {
+    disposeDescription();
+    root.dispose();
+  };
 }
