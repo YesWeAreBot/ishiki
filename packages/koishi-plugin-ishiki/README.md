@@ -44,59 +44,71 @@ plugins:
 
 ## 创建第一个 Agent
 
+全新数据目录第一次启动时，插件会在 `data/ishiki/models.yaml`、`data/ishiki/profiles/default/profile.yaml` 与同目录的 `PERSONA.md` 释放一套可直接修改的预设。
+
+预设默认使用 `chat` 上下文、`standard` 唤醒、`native` 工具调用和开启的 codemode。已有数据目录不会被写入或覆盖。
+
 ### 1. 声明模型
 
-创建 `data/ishiki/models.yaml`：
+修改 `data/ishiki/models.yaml`，替换供应商名称、接口地址、凭据和模型名称：
 
 ```yaml
 providers:
-  my-api:
-    api: openai-completions
-    baseUrl: https://api.example.com/v1
+  deepseek:
+    baseUrl: https://api.deepseek.com/v1
     apiKey: YOUR_API_KEY
+    api: openai-completions
     models:
-      - id: your-model-name
-        input: [text]
-        contextWindow: 128000
-        maxTokens: 8192
+      - id: deepseek-flash
+        reasoning: true
+        input: [text, image]
+        contextWindow: 1000000
+        maxTokens: 384000
+        thinking:
+          mode: effort
+          efforts: [none, low, high, max]
 ```
 
-将 `baseUrl`、`apiKey`、模型 `id` 替换为实际值；窗口与输出上限按模型能力填写。`api` 选择接口方言，其他供应商与模型组的配置见[接入模型供应商](https://ishiki.js.org/docs/guides/models/)。
+窗口与输出上限按实际模型能力填写。`api` 选择接口方言，其他供应商与模型组的配置见[接入模型供应商](https://ishiki.js.org/docs/guides/models/)。
 
 模型凭据以明文保存在此文件中，请限制文件访问权限，避免将数据目录提交到版本库。
 
 ### 2. 声明 profile
 
-创建 `data/ishiki/profiles/my-first/profile.yml`：
+修改 `data/ishiki/profiles/default/profile.yaml`，把账号与频道占位项换成实际值：
 
 ```yaml
-model: my-api:your-model-name
+model: deepseek:deepseek-flash
 mode: channel
 
 channels:
   "onebot:BOT_ID":
-    - "CHANNEL_ID"
+    - "*"
 
 context:
-  engine: standard
+  engine: chat
 wakeup:
   engine: standard
 toolcall:
   engine: native
+codemode:
+  enable: true
 ```
 
-将 `onebot:BOT_ID` 替换为适配器的 `platform:selfId`，将 `CHANNEL_ID` 替换为实际频道标识。频道名单支持精确匹配、末尾 `*` 前缀匹配与 `!` 排除项；`"*"` 表示该账号下的全部频道。
+将 `onebot:BOT_ID` 替换为适配器的 `platform:selfId`。频道名单支持精确匹配、末尾 `*` 前缀匹配与 `!` 排除项；`"*"` 表示该账号下的全部频道。
 
-三组引擎的示例值也是默认选择，可以省略对应段落。每个族通过 `engine` 选择一个变体，变体的配置放在同名子段中。
+预设显式选择了三组引擎，每个族通过 `engine` 选择一个变体，变体的配置放在同名子段中。
 
 ### 3. 写下指令文件
 
-在同一个 profile 目录创建 `PERSONA.md`（`instructions` 的缺省值）：
+修改同目录下的 `PERSONA.md`（`instructions` 的缺省值）：
 
 ```markdown
-你是小雪。表达清晰，保留自己的判断与好奇心。
-记住正在推进的事情，使用工具完成能够执行的任务；
-需要向对方表达时，直接说明结果。
+你是一位清晰、耐心、可靠的对话伙伴。
+
+先理解对方真正想解决的问题，再给出直接、可执行的回应。需要查证时使用工具确认事实；能够完成的操作直接完成，并把结果说明白。
+
+保持稳定的判断，不迎合，也不把责任推回给对方。
 ```
 
 `instructions` 接收文件列表，内容按声明顺序拼接后附加到系统提示词末尾；相对路径以 profile 目录为准，也可以写绝对路径。文件缺失只记录日志警告，不阻止启动。

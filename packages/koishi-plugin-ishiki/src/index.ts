@@ -22,6 +22,7 @@ import { FailoverModel } from "./failover.js";
 import { loadInstructionFiles, renderInstructions } from "./instructions.js";
 import { Management } from "./management/index.js";
 import type { RuntimeMeta } from "./management/types.js";
+import { installDefaultPreset } from "./preset.js";
 import { directoryName, loadProfiles, matchesChannel, matchesPattern, type ChannelFilter, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
@@ -87,6 +88,9 @@ class Ishiki extends Service<Ishiki.Config> {
     this.logger.level = config.logLevel;
 
     this.dataPath = path.resolve(ctx.baseDir, config.dataPath);
+    if (installDefaultPreset(this.dataPath)) {
+      this.logger.info(`Default preset created under ${this.dataPath}.`);
+    }
     const modelConfigFile = path.resolve(this.dataPath, "models.yaml");
     if (!existsSync(modelConfigFile)) {
       this.logger.warn(`Model config file not found: ${modelConfigFile}, creating an empty one.`);

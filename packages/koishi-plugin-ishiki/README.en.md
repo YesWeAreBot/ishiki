@@ -44,59 +44,68 @@ The default data directory is `data/ishiki/` inside the Koishi application. Chan
 
 ## Create your first Agent
 
+On the first start with a fresh data directory, the plugin releases an editable preset at `data/ishiki/models.yaml` and `data/ishiki/profiles/default/`, including `profile.yaml` and `PERSONA.md`.
+
+The preset uses the `chat` context engine, `standard` wakeup, `native` tool calling, and enables codemode. Existing data directories are left untouched.
+
 ### 1. Declare a model
 
-Create `data/ishiki/models.yaml`:
+Edit `data/ishiki/models.yaml` and replace the provider name, endpoint, credential, and model name:
 
 ```yaml
 providers:
-  my-api:
+  openai:
     api: openai-completions
-    baseUrl: https://api.example.com/v1
+    baseUrl: https://api.openai.com/v1
     apiKey: YOUR_API_KEY
     models:
-      - id: your-model-name
+      - id: gpt-4.1-mini
+        toolCall: true
         input: [text]
-        contextWindow: 128000
-        maxTokens: 8192
+        contextWindow: 1047576
+        maxTokens: 32768
 ```
 
-Replace `baseUrl`, `apiKey`, and the model `id`. Set the context window and output limit to match the model. The `api` field selects the interface dialect; see [model providers](https://ishiki.js.org/docs/guides/models/) for other providers and model groups.
+Set the context window and output limit to match the model. The `api` field selects the interface dialect; see [model providers](https://ishiki.js.org/docs/guides/models/) for other providers and model groups.
 
 Credentials are stored as plain text. Restrict access to this file and keep the data directory out of version control.
 
 ### 2. Declare a profile
 
-Create `data/ishiki/profiles/my-first/profile.yml`:
+Edit `data/ishiki/profiles/default/profile.yaml` and replace the account placeholder:
 
 ```yaml
-model: my-api:your-model-name
+model: openai:gpt-4.1-mini
 mode: channel
 
 channels:
   "onebot:BOT_ID":
-    - "CHANNEL_ID"
+    - "*"
 
 context:
-  engine: standard
+  engine: chat
 wakeup:
   engine: standard
 toolcall:
   engine: native
+codemode:
+  enable: true
 ```
 
-Replace `onebot:BOT_ID` with the adapter's `platform:selfId`, and `CHANNEL_ID` with the actual channel identifier. Claims support exact matches, trailing `*` prefix matches, and `!` exclusions. `"*"` claims all channels on that account.
+Replace `onebot:BOT_ID` with the adapter's `platform:selfId`. Claims support exact matches, trailing `*` prefix matches, and `!` exclusions. `"*"` claims all channels on that account.
 
-The example's engines are also the defaults, so these three sections may be omitted. Each family selects one variant through `engine`, with variant settings in a subsection of the same name.
+The preset selects explicit engines for all three families. Each family chooses one variant through `engine`, with variant settings in a subsection of the same name.
 
 ### 3. Write the instruction files
 
-Create `PERSONA.md` in the same profile directory (the default value of `instructions`):
+Edit `PERSONA.md` in the same profile directory (the default value of `instructions`):
 
 ```markdown
-You are Yuki. Speak clearly, with your own judgment and curiosity.
-Remember what you are working on, and use tools to carry out tasks.
-When you have something to communicate, explain the result directly.
+You are a clear, patient, and reliable conversation partner.
+
+Understand the problem the other person is trying to solve before giving a direct, actionable response. Use tools to verify facts when needed. Complete operations you can carry out and explain the result clearly.
+
+Keep a stable judgment. Do not flatter or push the responsibility back to the other person.
 ```
 
 `instructions` takes a list of files, concatenated in declaration order and appended to the end of the system prompt. Relative paths resolve against the profile directory; absolute paths are also accepted. A missing file logs a warning and does not block startup.

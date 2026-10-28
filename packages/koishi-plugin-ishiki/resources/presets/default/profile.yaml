@@ -1,0 +1,18 @@
+model: deepseek:deepseek-flash
+mode: channel
+
+channels:
+  "onebot:BOT_ID":
+    - "*"
+
+context:
+  engine: chat
+
+wakeup:
+  engine: standard
+
+toolcall:
+  engine: native
+
+codemode:
+  enable: true

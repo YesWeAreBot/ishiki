@@ -1,0 +1,15 @@
+# 将供应商名称、接口地址、凭据和模型名称替换成实际配置。
+providers:
+  deepseek:
+    baseUrl: https://api.deepseek.com/v1
+    apiKey: YOUR_API_KEY
+    api: openai-completions
+    models:
+      - id: deepseek-flash
+        reasoning: true
+        input: [text, image]
+        contextWindow: 1000000
+        maxTokens: 384000
+        thinking:
+          mode: effort
+          efforts: [none, low, high, max]

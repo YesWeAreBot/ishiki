@@ -32,7 +32,8 @@ data/ishiki
 
 | 路径 | 说明 |
 | --- | --- |
-| `models.yaml` | 见[参考：models.yaml](/docs/reference/models-yaml)；首次启动自动创建空文件 |
+| `models.yaml` | 见[参考：models.yaml](/docs/reference/models-yaml)；全新数据目录第一次启动时释放可编辑的模型模板 |
+| `profiles/default/` | 全新数据目录第一次启动时释放的预设 profile；替换账号、频道和模型占位值后即可运行 |
 | `profiles/<ID>/profile.yml` | 见[参考：插件与 profile 配置](/docs/reference/plugin-config) |
 | `profiles/<ID>/PERSONA.md` | `instructions` 的缺省文件；文件列表与顺序在 `profile.yml` 中声明 |
 | `profiles/<ID>/mcp.json` | 存在时**整体替换** `.mcp.json` 基线，不是合并 |

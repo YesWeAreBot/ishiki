@@ -46,7 +46,7 @@ data/ishiki/requests
 
 | 日志 | 含义 | 处理 |
 | --- | --- | --- |
-| `Model config file not found … creating an empty one` | 首次运行自动建了空 `models.yaml` | 去填它 |
+| `Model config file not found … creating an empty one` | 已有数据目录缺少模型配置 | 填写新建的 `models.yaml` |
 | `[<ID>] missing required service "…"; profile is waiting` | profile 声明的扩展/引擎服务不存在 | 按名补装对应插件或改正拼写；装好后重载自动装配 |
 | `[<ID>] profile skipped: …` | 该 profile 解析失败或频道冲突，被整体跳过 | 看冒号后的具体原因 |
 | `toolcall runtime unavailable, nothing loaded` | 工具调用运行时加载失败，全部 profile 未装载 | 检查依赖安装是否完整 |

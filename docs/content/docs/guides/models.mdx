@@ -5,7 +5,7 @@ description: 在 models.yaml 中声明 provider、模型与故障转移组
 
 `models.yaml` 决定 Ishiki 可以用哪些模型。
 
-文件位置：`<dataPath>/models.yaml`（默认 `data/ishiki/models.yaml`）。插件启动时若文件不存在会自动创建空文件。修改后需重启 Koishi 生效。
+文件位置：`<dataPath>/models.yaml`（默认 `data/ishiki/models.yaml`）。全新数据目录第一次启动时会释放一份可编辑的模板；已有数据目录缺少该文件时会自动创建空文件。修改后需重启 Koishi 生效。
 
 <Callout title="前置知识">
 文件由 `@yesimagent/gateway` 的模型注册表读取，顶层只有两个键：`providers`（供应商）和 `groups`（组）。profile 通过「模型引用」指向其中条目。

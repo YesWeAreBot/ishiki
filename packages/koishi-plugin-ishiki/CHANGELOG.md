@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a required one-line `i` intent to every model-side tool call, preserved through context folding
 - Added `ishiki.chat.usage`, `ishiki.chat.summary`, `ishiki.chat.shake` and `ishiki.chat.compact` commands
 - Added an `ishiki.session.archive` command that moves a stopped session's `events.jsonl` and `resources/` into `archives/<timestamp>_<uuid>`
+- Added automatic default preset scaffolding that releases `models.yaml`, `profiles/default/profile.yaml` and `PERSONA.md` on the first start with an empty data directory
 
 ### Changed
 - Changed the default profile context engine from `standard` to `chat`
