@@ -34,6 +34,7 @@ import type { ResourceCenter } from "./resource/center.js";
 import { type AttachmentConfig } from "./resource/config.js";
 import { processOutput } from "./resource/output.js";
 import { attachmentMessages, AttachmentProjection } from "./resource/projection.js";
+import { withIntent } from "./tools/intent.js";
 import type { IshikiEvent } from "./types.js";
 import type { WakeupEngineInstance } from "./wakeup/index.js";
 
@@ -101,6 +102,8 @@ export class AgentRuntime {
   private disposeContext?: () => void;
   private disposeWakeup?: () => void;
   private readonly toolCallers: ToolCallers = {};
+  /** 模型侧工具已包上 `i`；脚本里的 host tool 必须用未包装的原始集合。 */
+  private codemodeHosts: ToolSet = {};
   private readonly initTools: ToolSet;
   private readonly condition: WaitConditionMachine;
   private readonly attachments: AttachmentProjection;
@@ -129,6 +132,7 @@ export class AgentRuntime {
         resources: config.resources,
         imageInput: config.attachment.imageInput,
         contextOf: (name) => this.toolsContext[name],
+        hostTools: () => this.codemodeHosts,
       });
     }
 
@@ -263,6 +267,7 @@ export class AgentRuntime {
       }
     }
     merged = await this.transformTools(merged, "base");
+    this.codemodeHosts = { ...merged };
     const final: ToolSet = { ...merged };
     if (WAIT_TOOL in merged) throw new ToolConflictError(WAIT_TOOL);
     final[WAIT_TOOL] = createWaitTool(this.condition);
@@ -278,8 +283,12 @@ export class AgentRuntime {
     if (transformedNames.length !== finalNames.length || finalNames.some((name) => !(name in transformed))) {
       throw new Error("external tool transforms must preserve the tool names");
     }
+    const intended: ToolSet = {};
+    for (const [name, tool] of Object.entries(transformed)) {
+      intended[name] = withIntent(name, tool);
+    }
     const wrapped: ToolSet = {};
-    for (const [name, original] of Object.entries(transformed)) {
+    for (const [name, original] of Object.entries(intended)) {
       // codemode renders its own tool result (sections, artifacts, attachments);
       // the generic resource wrapper must not re-render it.
       if (name === CODEMODE_TOOL) {

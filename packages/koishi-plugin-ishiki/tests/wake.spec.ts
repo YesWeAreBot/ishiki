@@ -7,7 +7,7 @@ import { createGateway } from "@yesimagent/gateway";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createFinish } from "../src/builtin-tools/finish.js";
-import { collapse } from "../src/context/standard.engine.js";
+import { collapse } from "../src/context/render.js";
 import type { ExtensionInstance } from "../src/extension.js";
 import { CodemodeConfig } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resource/center.js";
@@ -363,7 +363,7 @@ describe("AgentRuntime wakeup subscription", () => {
   it("a declared secs window opens the next round on stored history", async () => {
     const { runtime, bodies } = await makeRuntime({
       wakeup: judgeWakeup((message) => message.messageId === "m1"),
-      steps: (index) => (index === 0 ? [{ name: "wait", input: { secs: 1 } }] : [{ name: "finish", input: {} }]),
+      steps: (index) => (index === 0 ? [{ name: "wait", input: { i: "等待下一轮", secs: 1 } }] : [{ name: "finish", input: { i: "结束" } }]),
     });
 
     await runtime.deliver(created("m1", "only an at-mention"));
@@ -379,7 +379,7 @@ describe("AgentRuntime wakeup subscription", () => {
   it("treats wait({msgs: 0}) as no declaration: later input opens no round", async () => {
     const { runtime, bodies } = await makeRuntime({
       wakeup: judgeWakeup(() => false),
-      steps: () => [{ name: "wait", input: { msgs: 0 } }],
+      steps: () => [{ name: "wait", input: { i: "不声明等待", msgs: 0 } }],
     });
 
     runtime.wake("check in");
@@ -416,8 +416,8 @@ describe("AgentRuntime wakeup subscription", () => {
     const { runtime, bodies } = await makeRuntime({
       wakeup: judgeWakeup(() => false),
       steps: () => [
-        { name: "wait", input: { msgs: 1 } },
-        { name: "speak", input: { text: "said and scheduled" } },
+        { name: "wait", input: { i: "等待下一条", msgs: 1 } },
+        { name: "speak", input: { i: "回复", text: "said and scheduled" } },
       ],
     });
 
@@ -545,7 +545,7 @@ describe("declared wake windows (end-to-end)", () => {
   it("wakes on the declared msgs window alone, with no signal", async () => {
     const { runtime } = await makeRuntime({
       wakeup: judgeWakeup((message) => message.messageId === "m1"),
-      steps: (index) => (index === 0 ? [{ name: "wait", input: { msgs: 2 } }] : []),
+      steps: (index) => (index === 0 ? [{ name: "wait", input: { i: "等待两条", msgs: 2 } }] : []),
     });
 
     await runtime.deliver(created("m1"));
@@ -569,7 +569,8 @@ describe("declared wake windows (end-to-end)", () => {
   it("answers a split sentence once, in the round the window opens", async () => {
     const { runtime, bodies } = await makeRuntime({
       wakeup: judgeWakeup((message) => message.messageId === "m1"),
-      steps: (index) => (index === 0 ? [{ name: "wait", input: { msgs: 1 } }] : [{ name: "speak", input: { text: "both parts answered" } }]),
+      steps: (index) =>
+        index === 0 ? [{ name: "wait", input: { i: "等待补全", msgs: 1 } }] : [{ name: "speak", input: { i: "回复", text: "both parts answered" } }],
     });
 
     await runtime.deliver(created("m1", "first part"));
@@ -600,7 +601,8 @@ describe("declared wake windows (end-to-end)", () => {
       gate: async (call) => {
         if (call === 0) await release.promise;
       },
-      steps: (index) => (index === 0 ? [{ name: "wait", input: { msgs: 1 } }] : [{ name: "speak", input: { text: "follow-up sent" } }]),
+      steps: (index) =>
+        index === 0 ? [{ name: "wait", input: { i: "等待补全", msgs: 1 } }] : [{ name: "speak", input: { i: "回复", text: "follow-up sent" } }],
     });
 
     await runtime.deliver(created("m1", "opening line"));

@@ -7,7 +7,7 @@ import { createGateway } from "@yesimagent/gateway";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createFinish } from "../src/builtin-tools/finish.js";
-import { collapse } from "../src/context/standard.engine.js";
+import { collapse } from "../src/context/render.js";
 import type { PacingConfig } from "../src/profile/config.js";
 import { CodemodeConfig } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resource/center.js";

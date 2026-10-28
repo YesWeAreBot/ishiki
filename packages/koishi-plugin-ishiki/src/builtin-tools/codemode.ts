@@ -101,6 +101,7 @@ const DESCRIPTION = [
   "",
   "`store(key, value)` saves JSON state for later calls, `store(key, undefined)` deletes a key, and `load(key)` reads one. Keep it small: images and large data belong in variables or in a host tool's own storage.",
   "",
+  "`i` is required: one line stating why you are running this program.",
   'Put `// @options: {"timeout_ms": 60000, "max_output_tokens": 2000}` on the first line to override the timeout and the display budget of this call.',
   "",
   "A host tool that throws becomes a catchable script error. An uncaught error fails the call and keeps the output produced so far.",
@@ -112,6 +113,20 @@ const INPUT_SCHEMA = jsonSchema<CodemodeInput>({
     js: { type: "string", description: "body of an async function; runs in the sandbox with host tools available as `tools`" },
   },
   required: ["js"],
+  additionalProperties: false,
+});
+
+const INTENT_INPUT_SCHEMA = jsonSchema<CodemodeInput & { i: string }>({
+  type: "object",
+  properties: {
+    js: { type: "string", description: "body of an async function; runs in the sandbox with host tools available as `tools`" },
+    i: {
+      type: "string",
+      minLength: 1,
+      description: "One-line intent for this call. It survives context folding; parameters and results do not.",
+    },
+  },
+  required: ["js", "i"],
   additionalProperties: false,
 });
 
@@ -186,6 +201,8 @@ export interface CodemodeOptions {
   imageInput: boolean;
   /** Per-tool context handed to description functions by the current step. */
   contextOf(name: string): unknown;
+  /** Raw tools for scripts; they bypass the model-facing intent wrapper. */
+  hostTools?: () => ToolSet;
 }
 
 export async function createCodemode(options: CodemodeOptions): Promise<CodemodeSurface> {
@@ -274,13 +291,22 @@ export async function createCodemode(options: CodemodeOptions): Promise<Codemode
     return { result, elapsedMs, text: rendered.text, items: rendered.items };
   };
 
+  const boundExecute = async (input: CodemodeInput & { i: string }, execution: ToolExecutionOptions<unknown>): Promise<CodemodeToolResult> => {
+    if (typeof input.i !== "string" || input.i.trim().length === 0) {
+      throw new Error("codemode requires a non-empty i intent");
+    }
+    const { i: _intent, ...rest } = input;
+    return call(rest, execution);
+  };
+
   const tool: Tool<CodemodeInput, CodemodeToolResult> = experimental_toolCaller(
     { description: DESCRIPTION, inputSchema: INPUT_SCHEMA, execute: call, toModelOutput },
     {
       type: "local",
       bind: (tools) => {
-        const bound = { description: DESCRIPTION, inputSchema: INPUT_SCHEMA, execute: call, toModelOutput };
-        binding = { tools, entries: readHosts(tools) };
+        const hosts = options.hostTools?.() ?? tools;
+        const bound = { description: DESCRIPTION, inputSchema: INTENT_INPUT_SCHEMA, execute: boundExecute, toModelOutput };
+        binding = { tools: hosts, entries: readHosts(hosts) };
         return bound;
       },
     },

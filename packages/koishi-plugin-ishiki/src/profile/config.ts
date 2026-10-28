@@ -206,7 +206,7 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       instructions: config.instructions ?? ["PERSONA.md"],
       failover: FailoverConfig((config.failover ?? {}) as FailoverConfig),
       // Schema 对缺省段落会给出空对象而非 undefined，这里以 engine 兜底合并。
-      context: fillEngine(config.context, "standard"),
+      context: fillEngine(config.context, "chat"),
       wakeup: fillEngine(config.wakeup, "standard"),
       toolcall: fillEngine(config.toolcall, "native"),
       codemode: CodemodeConfig((config.codemode ?? {}) as CodemodeConfig),

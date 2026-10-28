@@ -7,7 +7,7 @@ import { createGateway } from "@yesimagent/gateway";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createFinish } from "../src/builtin-tools/finish.js";
-import { collapse } from "../src/context/standard.engine.js";
+import { collapse } from "../src/context/render.js";
 import { CodemodeConfig, resolveProfile } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime, type AgentRuntimeConfig } from "../src/runtime.js";
@@ -154,7 +154,7 @@ function toolTexts(messages: AgentMessage[]): string[] {
 }
 
 function script(input: string, id?: string): Call {
-  return { name: "codemode", id, input: { js: input } };
+  return { name: "codemode", id, input: { i: "执行脚本", js: input } };
 }
 
 function names(body: Probe["bodies"][number]): Array<string | undefined> {
@@ -195,7 +195,7 @@ describe("codemode session state", () => {
             ? [script("store('counter', 2); throw new Error('no commit');", "failing")]
             : index === 2
               ? [script("return load('counter');", "read")]
-              : [{ name: "finish", input: {} }],
+              : [{ name: "finish", input: { i: "结束" } }],
     });
     const messages = await first.turn();
     const texts = toolTexts(messages);
@@ -211,7 +211,7 @@ describe("codemode session state", () => {
 
     const reloaded = await probe({
       home,
-      steps: (index) => (index === 0 ? [script("return load('counter');", "again")] : [{ name: "finish", input: {} }]),
+      steps: (index) => (index === 0 ? [script("return load('counter');", "again")] : [{ name: "finish", input: { i: "结束" } }]),
     });
     const after = await reloaded.turn();
     expect(toolTexts(after)[0]).toContain("=== RESULT ===\n1");
@@ -224,7 +224,7 @@ describe("codemode session state", () => {
           ? [script("store('a', 1); store('k', 'first');", "one"), script("store('b', 2); store('k', 'second');", "two")]
           : index === 1
             ? [script("return [load('a'), load('b'), load('k')];", "read")]
-            : [{ name: "finish", input: {} }],
+            : [{ name: "finish", input: { i: "结束" } }],
     });
     const messages = await run.turn();
     expect(toolTexts(messages)[2]).toContain('=== RESULT ===\n[1,2,"second"]');
@@ -236,7 +236,11 @@ describe("codemode session state", () => {
     const run = await probe({
       prepareEntries: () => [createEntry("message", createUserMessage("compacted"), { turnId: "compacted" })],
       steps: (index) =>
-        index === 0 ? [script("store('kept', 'yes');", "write")] : index === 1 ? [script("return load('kept');", "read")] : [{ name: "finish", input: {} }],
+        index === 0
+          ? [script("store('kept', 'yes');", "write")]
+          : index === 1
+            ? [script("return load('kept');", "read")]
+            : [{ name: "finish", input: { i: "结束" } }],
     });
     const messages = await run.turn();
     expect(toolTexts(messages)[1]).toContain('=== RESULT ===\n"yes"');
@@ -247,7 +251,7 @@ describe("codemode session state", () => {
       steps: (index) =>
         index === 0
           ? [script("store('n', null); store('temp', 1); store('temp', undefined); return [load('n'), typeof load('temp')];", "writes")]
-          : [{ name: "finish", input: {} }],
+          : [{ name: "finish", input: { i: "结束" } }],
     });
     expect(toolTexts(await run.turn())[0]).toContain('=== RESULT ===\n[null,"undefined"]');
   }, 20000);
@@ -261,7 +265,7 @@ describe("codemode session state", () => {
               script(`for (let i = 0; i < 3; i += 1) store('a' + i, ${JSON.stringify(value)});`, "left"),
               script(`for (let i = 0; i < 3; i += 1) store('b' + i, ${JSON.stringify(value)});`, "right"),
             ]
-          : [{ name: "finish", input: {} }],
+          : [{ name: "finish", input: { i: "结束" } }],
     });
     const messages = await run.turn();
     const entries = await run.runtime.storage.read();
@@ -282,7 +286,7 @@ describe("codemode discovery", () => {
             ? [script("return describeTool('echo');", "describe")]
             : index === 2
               ? [script("return await tools.echo({value: 'hi'});", "call")]
-              : [{ name: "finish", input: {} }],
+              : [{ name: "finish", input: { i: "结束" } }],
     });
     const messages = await run.turn();
     const texts = toolTexts(messages);
@@ -300,7 +304,11 @@ describe("codemode discovery", () => {
   it("fails a source parse error without leaking it into the next call", async () => {
     const run = await probe({
       steps: (index) =>
-        index === 0 ? [script('// @options: {"bogus": 1}\nreturn 1;', "bad")] : index === 1 ? [script("return 2;", "good")] : [{ name: "finish", input: {} }],
+        index === 0
+          ? [script('// @options: {"bogus": 1}\nreturn 1;', "bad")]
+          : index === 1
+            ? [script("return 2;", "good")]
+            : [{ name: "finish", input: { i: "结束" } }],
     });
     const messages = await run.turn();
     const outputs = messages.flatMap((message) => (message.role === "tool" ? message.content.map((part) => part.output) : []));
@@ -316,7 +324,7 @@ describe("codemode routing", () => {
     const run = await probe({
       tools: echo,
       direct: ["echo"],
-      steps: () => [{ name: "finish", input: {} }],
+      steps: () => [{ name: "finish", input: { i: "结束" } }],
     });
     await run.turn();
     expect(names(run.bodies[0]!)).toContain("echo");
@@ -333,7 +341,7 @@ describe("codemode output sections", () => {
             ? [script("return undefined;", "void")]
             : index === 2
               ? [script("text('bye'); exit();", "exit")]
-              : [{ name: "finish", input: {} }],
+              : [{ name: "finish", input: { i: "结束" } }],
     });
     const texts = toolTexts(await run.turn());
     expect(texts[0]).toContain("=== RESULT ===\nnull");
@@ -347,7 +355,7 @@ describe("codemode output sections", () => {
   it("quotes tool names and numbers nested calls", async () => {
     const run = await probe({
       tools: odd,
-      steps: (index) => (index === 0 ? [script('return await tools["weird name.v2"]({value: "x"});', "outer")] : [{ name: "finish", input: {} }]),
+      steps: (index) => (index === 0 ? [script('return await tools["weird name.v2"]({value: "x"});', "outer")] : [{ name: "finish", input: { i: "结束" } }]),
     });
     expect(toolTexts(await run.turn())[0]).toContain('=== RESULT ===\n{"value":"x"}');
     expect(nestedIds).toEqual(["outer:tool-0"]);
@@ -358,7 +366,7 @@ describe("codemode output sections", () => {
       steps: (index) =>
         index === 0
           ? [script(`// @options: {"timeout_ms": 1000}\nimage({type: "image", data: "${PNG}", mimeType: "image/png"}); while (true) {}`, "loop")]
-          : [{ name: "finish", input: {} }],
+          : [{ name: "finish", input: { i: "结束" } }],
     });
     const messages = await run.turn();
     const text = toolTexts(messages)[0]!;

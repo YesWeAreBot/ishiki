@@ -61,6 +61,10 @@ When a task takes many steps, drop one short send_message with \`continue: true\
 Base instructions finished.
 From now on, you are going to act as your persona.
 
+## Tool intents
+
+Every tool call you make requires \`i\`: one short sentence stating why you are calling it. This intent survives context folding; parameters and results are dropped. Write the purpose, not the arguments. Inside codemode, the host tools available as \`tools\` do not take \`i\`.
+
 {% if enableCodemode %}
 ## Codemode
 Codemode runs JavaScript in an isolated sandbox. Put the whole program in \`js\`: a function body where top-level \`await\` and \`return\` are allowed. The returned value comes back to you as RESULT.

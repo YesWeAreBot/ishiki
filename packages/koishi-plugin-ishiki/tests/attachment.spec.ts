@@ -23,7 +23,7 @@ import { loadCodemode } from "../src/builtin-tools/codemode.js";
 import { createFinish } from "../src/builtin-tools/finish.js";
 import { createReadTool } from "../src/builtin-tools/read.js";
 import { createSendMessage } from "../src/builtin-tools/send-message.js";
-import { collapse } from "../src/context/standard.engine.js";
+import { collapse } from "../src/context/render.js";
 import { FailoverModel } from "../src/failover.js";
 import { CodemodeConfig, resolveProfile, TypingConfig } from "../src/profile/config.js";
 import { supportsImageInput } from "../src/resource/capabilities.js";
@@ -813,10 +813,13 @@ describe("real Agent / codemode / provider smoke", () => {
               {
                 name: "codemode",
                 id: "inspection",
-                input: { js: "const shot = await tools.Screenshot({}); return shot.map((block) => ({ type: block.type, keys: Object.keys(block) }));" },
+                input: {
+                  i: "检查截图",
+                  js: "const shot = await tools.Screenshot({}); return shot.map((block) => ({ type: block.type, keys: Object.keys(block) }));",
+                },
               },
             ]
-          : [{ name: "finish", input: {} }],
+          : [{ name: "finish", input: { i: "检查结果" } }],
     });
     const messages = await probe.run();
     const output = results(messages)[0]!.output;
@@ -863,11 +866,12 @@ describe("real Agent / codemode / provider smoke", () => {
                 name: "codemode",
                 id: "outer",
                 input: {
+                  i: "检查截图",
                   js: 'const shot = await tools.Screenshot({}); const processed = await tools.process_image({data: shot[1].data}); image({type: "image", data: shot[1].data, mimeType: "image/png"}); return {text: shot[0].text, processed};',
                 },
               },
             ]
-          : [{ name: "finish", input: {} }],
+          : [{ name: "finish", input: { i: "检查结果" } }],
     });
     const messages = await probe.run();
     expect(nativeCalls).toBe(0);
@@ -894,8 +898,8 @@ describe("real Agent / codemode / provider smoke", () => {
       tools: { Screenshot: tool({ inputSchema: emptyInput, execute: async () => [{ type: "image", mimeType: "image/png", data: PNG }] }) },
       steps: (index) =>
         index === 0
-          ? [{ name: "codemode", input: { js: "const shot = await tools.Screenshot({}); return {ok:true, length:shot[0].data.length};" } }]
-          : [{ name: "finish", input: {} }],
+          ? [{ name: "codemode", input: { i: "检查截图", js: "const shot = await tools.Screenshot({}); return {ok:true, length:shot[0].data.length};" } }]
+          : [{ name: "finish", input: { i: "检查结果" } }],
     });
     const messages = await probe.run();
     expect(await probe.resources.store.namespaces("artifact")).toEqual([]);
@@ -913,7 +917,7 @@ describe("real Agent / codemode / provider smoke", () => {
           { type: "image", mimeType: "image/png", data: PNG },
         ]),
       },
-      steps: (index) => (index === 0 ? [{ name: "Screenshot", id: "direct", input: {} }] : [{ name: "finish", input: {} }]),
+      steps: (index) => (index === 0 ? [{ name: "Screenshot", id: "direct", input: { i: "检查结果" } }] : [{ name: "finish", input: { i: "检查结果" } }]),
     });
     const messages = await probe.run();
     expect(messages.filter((m) => m.role === "custom" && m.type === "ishiki.attachment")).toHaveLength(1);
@@ -943,10 +947,10 @@ describe("real Agent / codemode / provider smoke", () => {
       steps: (index) =>
         index === 0
           ? [
-              { name: "Screenshot", id: "a", input: {} },
-              { name: "Screenshot", id: "b", input: {} },
+              { name: "Screenshot", id: "a", input: { i: "检查结果" } },
+              { name: "Screenshot", id: "b", input: { i: "检查结果" } },
             ]
-          : [{ name: "finish", input: {} }],
+          : [{ name: "finish", input: { i: "检查结果" } }],
     });
     const messages = await probe.run();
     const attachments = messages.flatMap((m) => (m.role === "custom" && m.type === "ishiki.attachment" ? [m.data] : []));
@@ -971,13 +975,14 @@ describe("real Agent / codemode / provider smoke", () => {
   it("turns a host read result into an attachment through the native image helper", async () => {
     const probe = await scenario({
       steps: (index, bodies) => {
-        if (index > 0) return [{ name: "finish", input: {} }];
+        if (index > 0) return [{ name: "finish", input: { i: "检查结果" } }];
         const match = /asset:\/\/[a-f0-9]{32}/.exec(JSON.stringify(bodies[0]));
         return [
           {
             name: "codemode",
             id: "attach",
             input: {
+              i: "检查附件",
               js: `const file = await tools.read({url:${JSON.stringify(match![0])}}); image({type: "image", data: file.data, mimeType: file.mediaType}); return {byteLength: file.byteLength};`,
             },
           },
@@ -996,7 +1001,7 @@ describe("real Agent / codemode / provider smoke", () => {
     const delivered: Array<{ channel: string; content: unknown }> = [];
     const probe = await scenario({
       codemode: false,
-      steps: (index) => (index === 0 ? [{ name: "Screenshot", input: {} }] : [{ name: "finish", input: {} }]),
+      steps: (index) => (index === 0 ? [{ name: "Screenshot", input: { i: "检查结果" } }] : [{ name: "finish", input: { i: "检查结果" } }]),
       tools: { Screenshot: screenshotTool(() => [{ type: "image", mimeType: "image/png", data: PNG }]) },
     });
     const url = await probe.resources.store.writeArtifact("image", PNG_BUFFER, { mediaType: "image/png" });
@@ -1024,7 +1029,9 @@ describe("real Agent / codemode / provider smoke", () => {
       codemode: false,
       tools: { send_message: send },
       steps: (index) =>
-        index === 0 ? [{ name: "send_message", input: { mode: "element", messages: [`<img src="${url}"/>`] } }] : [{ name: "finish", input: {} }],
+        index === 0
+          ? [{ name: "send_message", input: { i: "发送图片", mode: "element", messages: [`<img src="${url}"/>`] } }]
+          : [{ name: "finish", input: { i: "检查结果" } }],
     });
     const messages = await calls.run();
     expect(calls.bodies).toHaveLength(1);
@@ -1036,7 +1043,7 @@ describe("real Agent / codemode / provider smoke", () => {
     const probe = await scenario({
       tools: { logs: tool({ inputSchema: emptyInput, execute: async () => raw }) },
       steps: (index, bodies) => {
-        if (index === 0) return [{ name: "codemode", id: "logs", input: { js: "return await tools.logs({});" } }];
+        if (index === 0) return [{ name: "codemode", id: "logs", input: { i: "检查截图", js: "return await tools.logs({});" } }];
         if (index === 1) {
           const content = bodies[1]!.messages
             .filter((message) => message.role === "tool")
@@ -1047,11 +1054,11 @@ describe("real Agent / codemode / provider smoke", () => {
             {
               name: "codemode",
               id: "read",
-              input: { js: `const page = await tools.read(${next}); return { length: page.text.length, head: page.text.slice(0, 6) };` },
+              input: { i: "检查截图", js: `const page = await tools.read(${next}); return { length: page.text.length, head: page.text.slice(0, 6) };` },
             },
           ];
         }
-        return [{ name: "finish", input: {} }];
+        return [{ name: "finish", input: { i: "检查结果" } }];
       },
     });
     const messages = await probe.run();
@@ -1080,7 +1087,7 @@ describe("real Agent / codemode / provider smoke", () => {
     const probe = await scenario({
       codemode: false,
       tools: { Screenshot: screenshotTool(() => [{ type: "image", mimeType: "image/png", data: PNG }]) },
-      steps: (index) => (index === 0 ? [{ name: "Screenshot", id: "orphan", input: {} }] : [{ name: "finish", input: {} }]),
+      steps: (index) => (index === 0 ? [{ name: "Screenshot", id: "orphan", input: { i: "检查结果" } }] : [{ name: "finish", input: { i: "检查结果" } }]),
     });
     const append = probe.runtime.storage.append;
     let failed = false;
@@ -1110,7 +1117,9 @@ describe("real Agent / codemode / provider smoke", () => {
         }),
       },
       steps: (index) =>
-        index === 0 ? [{ name: "codemode", input: { js: "text('before the failure'); return await tools.fail({});" } }] : [{ name: "finish", input: {} }],
+        index === 0
+          ? [{ name: "codemode", input: { i: "检查截图", js: "text('before the failure'); return await tools.fail({});" } }]
+          : [{ name: "finish", input: { i: "检查结果" } }],
     });
     const messages = await probe.run();
     const output = results(messages)[0]!.output;
@@ -1130,10 +1139,10 @@ describe("real Agent / codemode / provider smoke", () => {
               {
                 name: "codemode",
                 id: "fail-image",
-                input: { js: `image({type: "image", data: "${PNG}", mimeType: "image/png"}); throw new Error("after the image");` },
+                input: { i: "检查截图", js: `image({type: "image", data: "${PNG}", mimeType: "image/png"}); throw new Error("after the image");` },
               },
             ]
-          : [{ name: "finish", input: {} }],
+          : [{ name: "finish", input: { i: "检查结果" } }],
     });
     const messages = await probe.run();
     const output = results(messages)[0]!.output;

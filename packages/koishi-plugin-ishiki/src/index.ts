@@ -15,7 +15,7 @@ import { createSendMessage } from "./builtin-tools/send-message.js";
 import { IshikiCommands } from "./commands/contribute.js";
 import { installCommands } from "./commands/index.js";
 import { installConsole } from "./console/index.js";
-import { ContextEngine, StandardContextEngine } from "./context/index.js";
+import { ChatContextEngine, ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
@@ -100,6 +100,7 @@ class Ishiki extends Service<Ishiki.Config> {
     });
 
     ctx.plugin(StandardContextEngine);
+    ctx.plugin(ChatContextEngine);
 
     ctx.plugin(StandardWakeupEngine);
     ctx.plugin(JevWakeupEngine);
