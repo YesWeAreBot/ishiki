@@ -6,17 +6,16 @@ import { MediaPublisher } from "./media.js";
 import { CatalogScheme } from "./scheme.js";
 import { createTools, instructions } from "./tools.js";
 
-export interface OneBotConfig {
+export interface OneBotExtensionConfig {
   backend: Backend;
   mode: Mode;
   maxInlineBytes: number;
   resourceBaseUrl: string;
   denyActions: string[];
-  logLevel: number;
 }
 
-export const OneBotConfig: Schema<OneBotConfig> = Schema.object({
-  backend: Schema.union(["napcat", "snowluma"]).description("协议后端：两个实现的动作集合与参数形状不同，目录和只读判定都按它选择。").required(),
+export const OneBotExtensionConfig: Schema<OneBotExtensionConfig> = Schema.object({
+  backend: Schema.union(["napcat", "snowluma"]).description("协议后端：两个实现的动作集合与参数形状不同，目录和只读判定都按它选择。"),
   mode: Schema.union(["docs", "read", "write"]).description("工具档位。docs 只提供目录查询；read 增加只读动作执行；write 增加全部动作执行。").default("read"),
   maxInlineBytes: Schema.number()
     .min(1)
@@ -28,22 +27,23 @@ export const OneBotConfig: Schema<OneBotConfig> = Schema.object({
   denyActions: Schema.array(Schema.string())
     .description("额外禁用的动作名（规范名或别名）。内置的 bot_exit、set_restart、send_packet 等始终禁用。")
     .default([]),
-  logLevel: Schema.union([0, 1, 2, 3]).description("日志级别").default(Logger.INFO) as Schema<number>,
 });
 
-class OneBotExtension extends Extension<OneBotConfig> {
+class OneBotExtension extends Extension<OneBotExtensionConfig> {
+  static readonly name = "onebot-actions";
+  static readonly usage = ``;
   static inject = ["ishiki"];
-  public readonly Schema = OneBotConfig;
+  public readonly Schema = OneBotExtensionConfig;
 
   /** 每个 profile 一份发布器：同一 profile 的 runtime 共享同一组临时 URL。 */
   private readonly publishers = new Map<string, MediaPublisher>();
 
-  constructor(ctx: Context, config: OneBotConfig) {
+  constructor(ctx: Context, config: OneBotExtension.Config) {
     super(ctx, "onebot-actions");
     this.logger.level = config.logLevel;
   }
 
-  public [Service.invoke](config: OneBotConfig, context: ExtensionContext) {
+  public [Service.invoke](config: OneBotExtensionConfig, context: ExtensionContext) {
     const publisher = this.publisher(context);
     const options = {
       ctx: context.fiber,
@@ -80,6 +80,23 @@ class OneBotExtension extends Extension<OneBotConfig> {
     });
     return publisher;
   }
+}
+
+namespace OneBotExtension {
+  export interface Config {
+    defaultBackend: Backend;
+    defaultMode: Mode;
+    logLevel: number;
+  }
+  export const Config: Schema<Config> = Schema.object({
+    defaultBackend: Schema.union(["napcat", "snowluma"])
+      .description("协议后端：两个实现的动作集合与参数形状不同，目录和只读判定都按它选择。")
+      .default("napcat"),
+    defaultMode: Schema.union(["docs", "read", "write"])
+      .description("工具档位。docs 只提供目录查询；read 增加只读动作执行；write 增加全部动作执行。")
+      .default("read"),
+    logLevel: Schema.union([0, 1, 2, 3]).description("日志级别").default(Logger.INFO) as Schema<number>,
+  });
 }
 
 export default OneBotExtension;

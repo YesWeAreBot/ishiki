@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- Renamed the exported `OneBotConfig` type and schema to `OneBotExtensionConfig`
+
 ### Changed
 - Raised the `koishi-plugin-ishiki` peer dependency range to `>=0.0.2 <0.1.0`
+- Moved `logLevel` out of the per-profile extension config into the plugin config, which now also offers `defaultBackend` and `defaultMode`
 ## [0.0.2] - 2026-10-26
 
 ### Changed
