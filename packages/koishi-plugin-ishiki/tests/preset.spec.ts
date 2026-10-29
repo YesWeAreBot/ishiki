@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { App } from "koishi";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 import Ishiki from "../src/index.js";
@@ -74,6 +74,6 @@ describe("default preset", () => {
     const service = app.get("ishiki") as Ishiki;
     expect(service.gateway.providers()).toContain("deepseek");
     expect(await readFile(path.join(dataPath, "models.yaml"), "utf8")).toContain("YOUR_API_KEY");
-    await vi.waitFor(() => expect(service.profiles.has("default")).toBe(true));
+    expect(service.profiles.has("default")).toBe(true);
   });
 });

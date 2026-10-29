@@ -126,7 +126,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
     ctx.inject(["console"], (ctx) => installConsole(ctx, this));
     if (config.commands.enable) ctx.inject(["ishiki"], (ctx) => installCommands(ctx, this, config.commands));
 
-    ctx.on("ready", () => void this.load());
+    ctx.on("ready", () => this.load());
     ctx.on("internal/session", (session) => void this.onBackgroundEvent(session));
     ctx.middleware(async (session, next) => {
       // 消息经完整中间件链路由：命中指令时 argv.command 已由指令中间件设置，这类消息不进入 Runtime。
