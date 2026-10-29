@@ -13,10 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `ishiki.chat.usage`, `ishiki.chat.summary`, `ishiki.chat.shake` and `ishiki.chat.compact` commands
 - Added an `ishiki.session.archive` command that moves a stopped session's `events.jsonl` and `resources/` into `archives/<timestamp>_<uuid>`
 - Added automatic default preset scaffolding that releases `models.yaml`, `profiles/default/profile.yaml` and `PERSONA.md` on the first start with an empty data directory
+- Added light and dark Ishiki logo and icon assets used by the console sidebar
 
 ### Changed
 - Changed the default profile context engine from `standard` to `chat`
 - Moved shared transcript rendering helpers into `render.ts` for use by both context engines
+- Repainted the console UI with a blue-tinted brand palette, gradient accents, rounded surfaces and a rebuilt dark theme
+- Replaced the hand-drawn sidebar glyph with the Ishiki wordmark, collapsing to a compact icon on narrow screens
 
 ### Fixed
 - Fixed missing descriptions on the `ishiki` root command and the `ishiki.chat`/`ishiki.standard` command groups

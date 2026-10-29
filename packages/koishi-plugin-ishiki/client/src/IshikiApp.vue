@@ -2,6 +2,10 @@
 import { computed, defineAsyncComponent, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import brandIconDark from "./assets/ishiki-icon-dark.svg";
+import brandIconLight from "./assets/ishiki-icon.svg";
+import brandLogoDark from "./assets/ishiki-logo-dark.svg";
+import brandLogoLight from "./assets/ishiki-logo.svg";
 import ToastHost from "./components/ToastHost.vue";
 import { useIshikiTheme } from "./lib/theme";
 
@@ -39,6 +43,8 @@ const navGroups = groups.map((group) => ({
 const route = useRoute();
 const router = useRouter();
 const { isDark } = useIshikiTheme();
+const brandIcon = computed(() => (isDark.value ? brandIconDark : brandIconLight));
+const brandLogo = computed(() => (isDark.value ? brandLogoDark : brandLogoLight));
 
 const segments = computed<string[]>(() => {
   const raw = route.params.page;
@@ -66,10 +72,10 @@ function go(page: PageEntry): void {
         <aside class="console-sidebar" aria-label="Ishiki 导航">
           <div class="console-sidebar-inner">
             <div class="sidebar-brand">
-              <span class="sidebar-mark" aria-hidden="true"><i /><i /><i /></span>
-              <div>
-                <div class="sidebar-name">Ishiki</div>
-                <div class="sidebar-sub">意识运行时</div>
+              <img class="sidebar-brand-logo" :src="brandLogo" alt="Ishiki，意识的运行时，人格的栖息地" width="740" height="240" />
+              <div class="sidebar-brand-compact" aria-hidden="true">
+                <img :src="brandIcon" alt="" width="192" height="192" />
+                <span>Ishiki</span>
               </div>
             </div>
 

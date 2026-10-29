@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="16 24 192 192" width="192" height="192" role="img" aria-labelledby="icon-title icon-desc" style="--c1:#66CCFF;--c2:#FB8190;--fg:#1F2937;--muted:#667085;--accent:#1F2937">
+  <title id="icon-title">Ishiki</title>
+  <desc id="icon-desc">Two interwoven lines surrounding a central node.</desc>
+  <g fill="none" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M132 44 L60 116 Q56 120 60 124 L104 168 M120 184 L132 196" stroke="var(--c1)"/>
+    <path d="M92 44 L104 56 M120 72 L164 116 Q168 120 164 124 L92 196" stroke="var(--c2)"/>
+  </g>
+  <circle cx="112" cy="120" r="8" fill="var(--accent)"/>
+</svg>
