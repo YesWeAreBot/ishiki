@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-10-29
+
 ### Changed
 - Raised the `koishi-plugin-ishiki` peer dependency range to `>=0.0.2 <0.1.0`
+
 ## [0.0.2] - 2026-10-26
 
 ### Changed
@@ -39,5 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Server summaries combine declared instructions with the exposed tool-name index
 - Duplicate exposed tool names across servers now raise a `ToolConflictError` instead of silently overwriting earlier tools
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.2...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.3...HEAD
+[0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.2...koishi-plugin-ishiki-mcp-client@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-mcp-client@0.0.2

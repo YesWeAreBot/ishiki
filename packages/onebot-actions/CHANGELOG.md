@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-10-29
+
 ### Breaking Changes
 - Renamed the exported `OneBotConfig` type and schema to `OneBotExtensionConfig`
 
 ### Changed
 - Raised the `koishi-plugin-ishiki` peer dependency range to `>=0.0.2 <0.1.0`
 - Moved `logLevel` out of the per-profile extension config into the plugin config, which now also offers `defaultBackend` and `defaultMode`
+
 ## [0.0.2] - 2026-10-26
 
 ### Changed
@@ -36,5 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution.
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.2...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.3...HEAD
+[0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.2...koishi-plugin-ishiki-onebot-actions@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-onebot-actions@0.0.2

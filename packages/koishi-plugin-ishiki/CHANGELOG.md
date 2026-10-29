@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-10-29
+
 ### Added
 - Added a `chat` context engine that folds old tool output into intent digests stored as artifact files and summarizes the folded prefix
 - Added a required one-line `i` intent to every model-side tool call, preserved through context folding
@@ -23,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed missing descriptions on the `ishiki` root command and the `ishiki.chat`/`ishiki.standard` command groups
+
 ## [0.0.2] - 2026-10-26
 
 ### Added
@@ -131,5 +134,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attachment extraction requires a payload or URL up front.
 - The first request carries the baseline tool catalog instead of an empty one.
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.2...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.3...HEAD
+[0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.2...koishi-plugin-ishiki@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki@0.0.2
