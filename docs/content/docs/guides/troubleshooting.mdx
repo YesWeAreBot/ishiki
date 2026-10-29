@@ -1,0 +1,155 @@
+---
+title: 常见问题与排查
+description: 按现象定位安装、启动、消息路由、模型与图片问题
+---
+
+先判断问题停在哪一层：插件是否安装并启用，Koishi 是否收到平台消息，profile 是否认领当前频道，模型是否成功返回，`send_message` 是否把回复送到平台。控制台日志里的事件会依次经过这些层。
+
+## 插件安装失败
+
+先确认在「插件市场」搜索的是完整包名 `koishi-plugin-ishiki`。Koishi 需要 **4.18.11 或更高的 4.x 版本**，过低的版本可能无法加载发布包。
+
+常见检查项：
+
+- 「插件市场」能否正常加载其他插件。市场本身打不开时，先处理 Koishi 的网络或软件源问题。
+- 安装操作的错误提示是否指向网络、磁盘空间或依赖解析。保留完整错误文本。
+- 安装成功后，插件是否出现在「插件配置」中。安装不会自动启用，还需要点击「启用插件」。
+- 安装或升级后是否重载过 Koishi。控制台页面没有出现时，确认 `@koishijs/plugin-console` 正常运行，再重载插件。
+- 此前从源码构建并 link 过插件时，检查 `<应用目录>/node_modules/koishi-plugin-ishiki` 是否仍指向源码目录。先用当前包管理器解除旧链接，再安装插件市场的发布包。
+
+Ishiki 的发布包已经包含控制台资源与运行时代码。市场安装不需要执行 `bun run build` 或 `console:build`。
+
+## 启动失败或 profile 没有加载
+
+先看日志中的第一条错误，不要只根据最后一行结果判断。
+
+| 日志或现象 | 含义 | 处理 |
+| --- | --- | --- |
+| `Model config file not found` | 数据目录里缺少 `models.yaml` | 检查 `dataPath`，在模型页面保存一份有效配置 |
+| `toolcall runtime unavailable, nothing loaded` | 工具调用运行时初始化失败，所有 profile 停止加载 | 检查发布包是否完整安装，确认 Koishi 与插件版本兼容 |
+| `profile loading failed: ...` | 某份 profile 在装配阶段失败 | 检查模型引用、图片能力、引擎与扩展配置 |
+| `profile skipped: ...` | 某份 profile 解析失败或认领冲突 | 查看冒号后的具体原因，修正后重新加载 |
+| `missing required service` | profile 依赖的引擎或扩展未安装、未启用 | 安装对应插件，核对引擎名称与扩展名称 |
+| `import_core3.jsonSchema is not a function` | 常见于依赖树中存在多份不兼容的 `ai` 包，YesImBot v4 会锁定旧版本 | 检查 `ai` 的依赖链，只保留一个版本，详见下文 |
+| `Default preset created` 没有出现 | 数据目录已有文件，预设不会覆盖 | 检查当前 `dataPath`；已有配置继续使用时直接修改现有文件 |
+
+如果插件配置页显示红色必填项，先补齐必填值并保存。紫色通常表示配置已修改但尚未保存。
+
+启动失败时先开启 `logLevel: 3`，再重载插件，记录第一条报错和建议的调用位置。数据目录没有写入权限时，插件无法释放预设或保存模型、profile 与运行记录。
+
+### `import_core3.jsonSchema is not a function`
+
+如果启动日志出现这条错误，先检查当前 Koishi 应用是否安装了 YesImBot v4。YesImBot v4 使用并锁定了旧版 `ai` 包，同时安装 Ishiki 时，依赖树里可能同时出现两个版本，加载阶段就会得到这个错误。
+
+先根据 `package.json` 的 `packageManager` 字段或锁文件确认当前包管理器，再检查 `ai` 的来源：
+
+```bash
+bun why ai
+yarn why ai
+pnpm why ai
+npm explain ai
+```
+
+只运行与当前项目包管理器对应的命令。检查输出中是否同时存在多份 `ai`，以及每一份被哪个插件引入。需要同时使用 YesImBot v4 与 Ishiki 时，分成两个 Koishi 实例部署；在同一个应用里应当只保留一份兼容的 `ai` 版本。修复依赖链后重新安装依赖并启动 Koishi。
+
+## Koishi 收不到消息
+
+这类问题的表现是 Bot 完全没有收到输入。先确认平台适配器在线，Bot 账号仍在群聊中，平台端没有断开连接。
+
+然后从真实账号的 `inspect`、适配器配置或控制台日志核对以下值：
+
+- `platform`：适配器名称。OneBot 使用 `onebot`。
+- `selfId`：Bot 的平台账号。
+- `sid`：`platform:selfId`，两个值之间必须是半角冒号。
+- `channelId`：当前群聊或私聊的频道标识。
+
+消息进入路由后，如果没有 profile 认领当前地址，日志会包含：
+
+```text
+no profile claims onebot:BOT_ID/CHANNEL_ID
+```
+
+看到这条日志时，回到「人格配置」检查账号与频道名单。`*` 表示该账号下的全部频道；填写 `!CHANNEL_ID` 时，这个频道会被排除。多个 profile 同时认领同一个账号和频道时，也可能触发认领冲突。
+
+没有看到 `no profile claims` 时，检查平台适配器是否收到事件、Bot 是否在正确的群聊中，以及 Koishi 日志级别是否足以显示路由信息。
+
+如果 Koishi 沙箱频道可以正常回复，真实群聊没有回复，插件与模型通常已经正常加载，重点检查真实适配器状态、`sid`、`channelId` 与发送目标。
+
+<Callout type="warn" title="平台名称写错">
+QQ 是聊天平台，OneBot 是适配器。使用 OneBot 适配器时，`platform` 必须写 `onebot`。请使用适配器实际配置的平台名，或者使用 `inspect` 返回的原值，不要按聊天软件名称猜测。
+</Callout>
+
+## 收到消息但没有回复
+
+先查看「运行实例」与「会话日志」页面。消息已经进入 profile，却没有新的运行记录时，通常是唤醒条件没有命中。预设的 `standard` 唤醒引擎会处理 @、引用与已认领私聊等明确唤醒方式；普通群聊消息可能被保留为背景，不会立刻触发模型。
+
+已有运行记录时，继续检查：
+
+- 模型请求是否返回鉴权、余额、地址或模型名称错误。
+- `native` 工具调用是否得到模型支持。不支持原生工具调用的模型需要换用兼容模型或文本工具调用引擎。
+- 模型是否调用了 `send_message`。模型的普通文本只记录在会话事实中，不会自动变成平台消息。
+- 日志中是否出现 `Failed to send message`。这条错误表示回复已生成，但平台发送失败。
+- 回复是否被发送到另一个频道。`cross` 模式会跨频道共享上下文，发送目标必须由模型显式给出。
+
+需要定位模型输入与输出时，开启 `dumpRequests`，查看 `<dataPath>/requests/` 中最近一对请求与响应文件。具体字段与日志说明见[调试与排障](/docs/guides/debugging)。
+
+## 一个群有回复，另一个群没有
+
+同一 Bot 账号在不同群聊表现不一致时，先比较两个群聊的 `channelId`，再检查 profile 的频道名单：
+
+```yaml
+channels:
+  "onebot:123456789":
+    - "*"
+    - "!987654321"
+```
+
+上面的配置认领全部频道，但排除 `987654321`。尾随 `*` 的前缀规则、精确频道与 `!` 排除项会共同决定匹配结果。多个 profile 也可以分别认领不同群聊；认领范围重叠时，后来加载的 profile 可能被跳过。
+
+只在一个群聊中测试时，建议先用 `*` 确认整条链路正常，再改为精确的 `channelId`。完整匹配规则见[编写 profile](/docs/guides/profile)。
+
+## Bot 看不到图片
+
+入站图片需要同时满足两个条件：
+
+1. profile 开启 `attachment.imageInput: true`。
+2. profile 使用的每个模型候选都在 `models.yaml` 中声明 `input: [text, image]`。
+
+只开启 profile 开关，模型仍然不会收到图片。模型候选缺少图片声明时，profile 可能在激活阶段直接报：
+
+```text
+profile imageInput requires declared image input on every candidate
+```
+
+图片还会受到单图大小、单次请求总量、图片数量与尺寸上限约束。附件消息里会写明本次没有提供图片的原因，例如能力关闭、格式不支持、尺寸超限或预算不足。
+
+## Bot 发了图片但看不到
+
+出站图片必须通过 `send_message` 的 `element` 模式发送，图片地址需要来自 `asset://`、`artifact://`、`local://` 或 `workspace://`。普通文本消息不会自动把图片附件送到平台。
+
+资源失效或 URL 不在白名单时，Ishiki 会从消息中移除无法解析的图片，文字部分仍可能正常发出。检查工具结果中的原始资源 URL，并让模型原样使用它。完整流程与预算字段见[配置图片与附件](/docs/guides/images)。
+
+## 模型请求失败
+
+在「模型目录」检查供应商的接口地址、API Key、接口方言与模型名称。401 或 403 通常表示凭据无效；404 通常表示地址或模型名称不匹配；参数错误可能来自模型不支持当前工具调用方式。
+
+模型组的每个候选都需要满足 profile 的能力要求。开启图片输入时，组内不能混入只声明文本能力的模型。修改模型配置后保存；连接中的 profile 仍使用旧配置时，点击「重新加载」或重载插件。
+
+## 控制台没有 Ishiki 入口
+
+控制台入口由 `koishi-plugin-ishiki` 在 Koishi 启动后注册，同时依赖 `@koishijs/plugin-console`。确认这两个插件都已启用并完成加载。
+
+发布包已经自带构建后的控制台页面。只有从源码修改 `packages/koishi-plugin-ishiki/client/` 后，开发环境才需要重新构建控制台资源；市场安装用户不需要执行构建命令。
+
+## 提交问题
+
+仍然无法解决时，在 [GitHub Issues](https://github.com/YesWeAreBot/ishiki/issues) 提交问题。QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)。
+
+提交前请整理：
+
+- Koishi 版本、`koishi-plugin-ishiki` 版本、操作系统与运行方式。
+- 使用的平台适配器，以及坐标来源与经过隐去敏感信息的会话标识；提供 `inspect` 结果时可以一并附上。
+- 问题出现的完整操作步骤与预期结果。
+- 第一条错误日志、相关 profile 片段与已经检查过的项目。
+
+请删除 API Key、Bot Token、用户隐私与完整聊天记录。请求落盘文件可能包含聊天内容和模型输出，公开前务必检查。

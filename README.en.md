@@ -112,23 +112,14 @@ Multiple profiles can run together with their own identities and capabilities. T
 
 [Write a profile →](https://ishiki.js.org/docs/guides/profile/) · [Understand instances and sharing →](https://ishiki.js.org/docs/explanations/profiles-runtimes/)
 
-## Start building
+## Get started
 
 [`koishi-plugin-ishiki`](packages/koishi-plugin-ishiki/README.en.md) is the current Koishi-based core runtime. It connects to chat platforms through Koishi adapters.
 
-With a Koishi application, a platform adapter, and a model API ready, build from source:
-
-```bash
-git clone https://github.com/YesWeAreBot/ishiki.git
-cd ishiki
-bun install
-bun run build
-```
-
-Then link the core plugin, configure `models.yaml`, and create your first `profile.yml` and the instruction files it references:
+The plugin is available in the Koishi plugin market. Search for `koishi-plugin-ishiki` in the console, add and install it, then enable it under plugin configuration. On first start with an empty data directory, the plugin releases a preset. Fill in the model API key and the bot's `platform:selfId` in the `Ishiki` console, apply the default profile, and start a conversation in a claimed channel.
 
 - [Core runtime README](packages/koishi-plugin-ishiki/README.en.md): installation and minimal configuration.
-- [Quick start](https://ishiki.js.org/docs/tutorial/quickstart/): source setup through the first conversation.
+- [Quick start](https://ishiki.js.org/docs/tutorial/quickstart/): plugin market installation through the first conversation.
 - [Extension API](https://ishiki.js.org/docs/reference/api/): tools, engines, and resource handlers.
 
 The documentation site is currently in Chinese.
@@ -143,8 +134,8 @@ Ishiki's design centers on the Agent itself. A future goal is to offer operation
 | [`koishi-plugin-ishiki-workspace`](https://ishiki.js.org/docs/guides/workspace/) | Workspace, file operations, command execution, and skills |
 | [`koishi-plugin-ishiki-mcp-client`](https://ishiki.js.org/docs/guides/mcp/)      | MCP tools and resources                                   |
 | [`koishi-plugin-ishiki-narrative`](packages/narrative/README.md)                 | Narrative context and multi-role model interaction        |
-| [`koishi-plugin-ishiki-onebot`](packages/onebot/README.md)                       | OneBot action catalogs and protocol-specific operations   |
+| [`koishi-plugin-ishiki-onebot-actions`](packages/onebot-actions/README.en.md)    | OneBot action catalogs and protocol-specific operations   |
 
-Share your experience and design ideas through [Issues](https://github.com/YesWeAreBot/ishiki/issues), or contribute a pull request. The [maintenance guide](https://ishiki.js.org/docs/dev/maintenance/) covers builds and documentation workflows.
+Share your experience and design ideas through [Issues](https://github.com/YesWeAreBot/ishiki/issues), or contribute a pull request. The [maintenance guide](https://ishiki.js.org/docs/dev/maintenance/) covers builds and documentation workflows. QQ group: [857518324](https://qm.qq.com/q/EeL0FDu3JK).
 
 Ishiki is developed by [Yes! We Are Bot!](https://github.com/YesWeAreBot) and licensed under [MIT](LICENSE).

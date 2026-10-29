@@ -3,17 +3,17 @@ title: 使用 OneBot 扩展
 description: 通过 OneBot v11 协议端调用群管理、文件、表情回应等协议特有动作
 ---
 
-OneBot 扩展（`koishi-plugin-ishiki-onebot`）把 NapCat 与 SnowLuma 的 OneBot v11 动作目录带进对话，让 Agent 能查询并调用核心工具没有覆盖的协议能力：群管理、群文件与群相册、表情回应、历史消息、好友与资料管理。
+OneBot 扩展（`koishi-plugin-ishiki-onebot-actions`）把 NapCat 与 SnowLuma 的 OneBot v11 动作目录带进对话，让 Agent 能查询并调用核心工具没有覆盖的协议能力：群管理、群文件与群相册、表情回应、历史消息、好友与资料管理。
 
 普通发言仍用 `send_message`；这些工具只补足协议特有的操作。
 
 ## 动作从哪来
 
-目录由 `packages/onebot/scripts/generate-catalog.mjs` 从两边的 OpenAPI 文档生成，产物 `packages/onebot/src/catalog/generated.ts` 提交进仓库，运行时不依赖参考仓库：
+目录由 `packages/onebot-actions/scripts/generate-catalog.mjs` 从两边的 OpenAPI 文档生成，产物 `packages/onebot-actions/src/catalog/generated.ts` 提交进仓库，运行时不依赖参考仓库：
 
 ```bash
-node packages/onebot/scripts/generate-catalog.mjs          # 重新生成
-node packages/onebot/scripts/generate-catalog.mjs --check  # 只校验
+node packages/onebot-actions/scripts/generate-catalog.mjs          # 重新生成
+node packages/onebot-actions/scripts/generate-catalog.mjs --check  # 只校验
 ```
 
 脚本读取 `NAPCAT_DOCS` 与 `SNOWLUMA_DOCS` 指向的仓库，默认 `D:/Codespace/references/NapCatDocs` 与 `D:/Codespace/references/SnowLumaDocs`。
@@ -22,18 +22,18 @@ node packages/onebot/scripts/generate-catalog.mjs --check  # 只校验
 
 ## 启用
 
-构建并链接 `packages/onebot`（包名 `koishi-plugin-ishiki-onebot`），在 `koishi.yml` 启用：
+在 Koishi 插件市场安装 `koishi-plugin-ishiki-onebot-actions`，再到「插件配置」启用：
 
 ```yaml
 plugins:
-  ishiki-onebot: {}
+  ishiki-onebot-actions: {}
 ```
 
 然后在 profile 中声明：
 
 ```yaml
 extends:
-  onebot:
+  onebot-actions:
     config:
       backend: napcat   # 必填：napcat | snowluma
       mode: read        # docs | read | write，默认 read
@@ -89,7 +89,7 @@ extends:
 
 ```yaml
 extends:
-  onebot:
+  onebot-actions:
     config:
       backend: snowluma
       mode: read

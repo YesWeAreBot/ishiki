@@ -13,34 +13,13 @@ Three mutually exclusive engine families cover **Context** construction, **Toolc
 
 ## Install and connect
 
-Prepare:
+Requires Koishi **4.18.11 or a later 4.x release**, a configured chat-platform adapter, and a working model API with credentials. The default `native` toolcall engine requires native tool-calling support.
 
-- Koishi **4.18.11 or a later 4.x release**, with a configured chat-platform adapter.
-- Node.js **20+** and Bun.
-- A working model API and credentials. The default `native` toolcall engine requires native tool-calling support.
-
-The current setup builds from source. These commands assume sibling directories named `koishi-app` and `ishiki`, starting from their common parent:
-
-```bash
-git clone https://github.com/YesWeAreBot/ishiki.git
-cd ishiki
-bun install
-bun run build
-
-cd packages/koishi-plugin-ishiki
-bun link
-cd ../../../koishi-app
-bun link koishi-plugin-ishiki
-```
-
-Enable the plugin in your Koishi application's `koishi.yml`:
-
-```yaml
-plugins:
-  ishiki: {}
-```
+The plugin is available in the Koishi plugin market. Open the plugin market from the Koishi console, search for `koishi-plugin-ishiki`, click "Add" and "Install", then enable it under plugin configuration. The published package includes the runtime and console assets; you do not need to clone the source, run `bun install`, or link the plugin manually.
 
 The default data directory is `data/ishiki/` inside the Koishi application. Change it with the plugin's `dataPath` setting.
+
+See the [quick start](https://ishiki.js.org/docs/tutorial/quickstart/) for installation and the first conversation.
 
 ## Create your first Agent
 
@@ -155,7 +134,7 @@ Resources in tool results can be carried as URLs. The core provides `asset://`, 
 
 ## Connect extensions and engines
 
-Build and link an extension package, enable its Koishi plugin, then enable its capabilities for a persona through the profile's `extends`. For workspace:
+Install the extension from the Koishi plugin market, enable it under plugin configuration, then enable its capabilities for a persona through the profile's `extends`. For workspace (package name `koishi-plugin-ishiki-workspace`):
 
 ```yaml
 # The plugins section in koishi.yml
@@ -186,20 +165,20 @@ Developers have three extension points:
 
 ## Management console
 
-With `@koishijs/plugin-console` enabled alongside this plugin, the console registers a single Ishiki entry. Models, profiles, sessions, runtimes, usage, audit and cache pages switch through the in-page sidebar. Pages read snapshots from `src/management/` and write through authority-checked console listeners.
+The published plugin package already includes the console assets. With `@koishijs/plugin-console` enabled alongside this plugin, the console registers a single Ishiki entry. Models, profiles, sessions, runtimes, usage, audit and cache pages switch through the in-page sidebar. Pages read snapshots from `src/management/` and write through authority-checked console listeners.
 
 - Model saves compare a revision digest and replace `models.yaml` atomically. Secrets report configuration state only; plaintext never reaches pages, logs or audit records.
 - Profile save and apply are separate: save writes files, apply re-resolves the config and rebuilds the runtime. Removal requires typing the full profile id.
 - Sessions page through `events.jsonl` with byte cursors; corrupt lines are reported individually while the remaining entries stay readable.
 - Usage and audit come from real messages and lifecycle events; missing cache data produces an explicit status.
 
-Build the console bundle:
+Only rebuild the console bundle in a development environment after changing files under `client/`:
 
 ```bash
 bun run --cwd packages/koishi-plugin-ishiki console:build
 ```
 
-The console entry serves the built `dist` directory; rebuild after changing files under `client/`.
+The console entry serves the built `dist` directory. Users installing the published package do not need to run this build command.
 
 ## Startup issues
 
@@ -211,6 +190,8 @@ The console entry serves the built `dist` directory; rebuild after changing file
 | Model request fails                                | Check the API dialect, endpoint, credentials, model name, and tool-calling support       |
 
 Reload the plugin after changing configuration. The [debugging guide](https://ishiki.js.org/docs/guides/debugging/) covers request records and logs. The documentation site is currently in Chinese.
+
+See [troubleshooting](https://ishiki.js.org/docs/guides/troubleshooting/) for other common symptoms. If you cannot locate the problem, post redacted logs in [GitHub Issues](https://github.com/YesWeAreBot/ishiki/issues). QQ group: [857518324](https://qm.qq.com/q/EeL0FDu3JK).
 
 ## License
 

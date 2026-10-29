@@ -1,6 +1,6 @@
-# Ishiki OneBot
+# Ishiki OneBot Actions
 
-`koishi-plugin-ishiki-onebot` gives an Ishiki agent the OneBot v11 actions that core tools do not cover: group administration, group files and albums, message history, reactions, friend management, and profile edits.
+`koishi-plugin-ishiki-onebot-actions` gives an Ishiki agent the OneBot v11 actions that core tools do not cover: group administration, group files and albums, message history, reactions, friend management, and profile edits.
 
 It supports two protocol backends, NapCat and SnowLuma. Ordinary conversation still goes through `send_message`; this pack only fills in protocol-specific operations.
 
@@ -23,16 +23,18 @@ The two backends differ in more than naming. Of 205 canonical actions, 160 exist
 
 ## Install and enable
 
-Build and link `packages/onebot` (`koishi-plugin-ishiki-onebot`) the same way as the other extension packs, enable it in `koishi.yml`, then declare it in a profile:
+Install `koishi-plugin-ishiki-onebot-actions` from the Koishi plugin market and enable it under plugin configuration:
 
 ```yaml
 plugins:
-  ishiki-onebot: {}
+  ishiki-onebot-actions: {}
 ```
+
+Then declare it in a profile:
 
 ```yaml
 extends:
-  onebot:
+  onebot-actions:
     config:
       backend: napcat # required: napcat | snowluma
       mode: read # docs | read | write, default read
@@ -81,7 +83,7 @@ Published URLs live under `/ishiki-onebot/<profile token>/resources/<id>`, one r
 
 ```yaml
 extends:
-  onebot:
+  onebot-actions:
     config:
       backend: snowluma
       mode: read
@@ -95,8 +97,8 @@ This needs Koishi's HTTP service (`@koishijs/plugin-server`). Without it, only U
 `src/catalog/generated.ts` is committed, so neither building nor running needs the reference repositories. Regenerate it after updating either documentation checkout:
 
 ```bash
-node packages/onebot/scripts/generate-catalog.mjs
-node packages/onebot/scripts/generate-catalog.mjs --check   # exits non-zero when stale
+node packages/onebot-actions/scripts/generate-catalog.mjs
+node packages/onebot-actions/scripts/generate-catalog.mjs --check   # exits non-zero when stale
 ```
 
 The script reads `NAPCAT_DOCS` and `SNOWLUMA_DOCS`, defaulting to `D:/Codespace/references/NapCatDocs` and `D:/Codespace/references/SnowLumaDocs`. It uses the newest NapCat OpenAPI document for parameters and scans every version to record when an action first appeared; SnowLuma's `catalog.json` supplies its read-only flags and aliases, since its OpenAPI does not carry them.

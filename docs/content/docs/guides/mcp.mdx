@@ -12,7 +12,7 @@ MCP（Model Context Protocol）服务器是标准化的外部工具来源：抓�
 
 ### 启用扩展
 
-扩展是独立 Koishi 插件，按[快速上手](/docs/tutorial/quickstart)同样的方式构建并链接（构建目录为 `packages/mcp-client`，包名 `koishi-plugin-ishiki-mcp-client`），在 `koishi.yml` 启用：
+扩展是独立 Koishi 插件。在 Koishi 插件市场搜索并安装 `koishi-plugin-ishiki-mcp-client`，再到「插件配置」启用：
 
 ```yaml
 plugins:
@@ -26,7 +26,7 @@ extends:
   mcp-client: {}     # 只写包名即启用，无需 config
 ```
 
-<Callout title="extends 的键是扩展包名">
+<Callout title="extends 的键是扩展名称">
 profile 缺少某个已声明的扩展服务时会停在等待态并报 `missing required service`；插件装好、Koishi 重载后自动装配。
 </Callout>
 

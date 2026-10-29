@@ -112,23 +112,16 @@ flowchart TD
 
 [编写 profile →](https://ishiki.js.org/docs/guides/profile/) · [理解实例与共享范围 →](https://ishiki.js.org/docs/explanations/profiles-runtimes/)
 
-## 开始构建
+## 开始使用
 
 [`koishi-plugin-ishiki`](packages/koishi-plugin-ishiki/README.md) 是当前基于 Koishi 的核心运行时，使用 Koishi 适配器连接聊天平台。
 
-准备好 Koishi 应用、平台适配器与模型接口后，从源码构建：
-
-```bash
-git clone https://github.com/YesWeAreBot/ishiki.git
-cd ishiki
-bun install
-bun run build
-```
-
-随后链接核心插件，填写 `models.yaml`，创建第一份 `profile.yml` 与它引用的指令文件：
+插件已经发布在 Koishi 插件市场。在 Koishi 控制台的「插件市场」搜索 `koishi-plugin-ishiki`，添加并安装后，再到「插件配置」启用。首次使用空数据目录启动时，插件会自动释放预设；随后在 `Ishiki` 控制台填写模型 API Key 与 Bot 的 `platform:selfId`，应用默认 profile，就可以在认领的频道中开始对话。
 
 - [核心运行时 README](packages/koishi-plugin-ishiki/README.md)：安装与最小配置。
-- [快速上手](https://ishiki.js.org/docs/tutorial/quickstart/)：从源码接入到第一次对话。
+- [快速上手](https://ishiki.js.org/docs/tutorial/quickstart/)：从插件市场安装到第一次对话。
+- [常见问题与排查](https://ishiki.js.org/docs/guides/troubleshooting/)：处理安装、启动、消息与图片问题。
+- [交给 AI 部署](https://ishiki.js.org/docs/guides/ai-deploy/)：把部署与验证交给 AI Agent。
 - [扩展 API](https://ishiki.js.org/docs/reference/api/)：编写工具、引擎和资源 handler。
 
 Ishiki 的设计围绕 Agent 本身展开。未来希望进一步提供独立于 Koishi 的运行方式，让这些组件与概念服务于更广泛的宿主环境。
@@ -141,8 +134,8 @@ Ishiki 的设计围绕 Agent 本身展开。未来希望进一步提供独立于
 | [`koishi-plugin-ishiki-workspace`](https://ishiki.js.org/docs/guides/workspace/) | 工作区、文件操作、命令执行与技能          |
 | [`koishi-plugin-ishiki-mcp-client`](https://ishiki.js.org/docs/guides/mcp/)      | MCP 工具与资源接入                        |
 | [`koishi-plugin-ishiki-narrative`](packages/narrative/README.zh-CN.md)           | 叙事上下文与多角色模型交互                |
-| [`koishi-plugin-ishiki-onebot`](packages/onebot/README.zh-CN.md)                 | OneBot 动作目录与协议特有操作             |
+| [`koishi-plugin-ishiki-onebot-actions`](packages/onebot-actions/README.md)       | OneBot 动作目录与协议特有操作             |
 
-欢迎通过 [Issues](https://github.com/YesWeAreBot/ishiki/issues) 分享使用体验与设计想法，或提交 Pull Request 参与开发。构建与文档工作流见[维护手册](https://ishiki.js.org/docs/dev/maintenance/)。
+欢迎通过 [Issues](https://github.com/YesWeAreBot/ishiki/issues) 分享使用体验与设计想法，或提交 Pull Request 参与开发。构建与文档工作流见[维护手册](https://ishiki.js.org/docs/dev/maintenance/)。QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)。
 
 Ishiki 由 [Yes! We Are Bot!](https://github.com/YesWeAreBot) 开发，采用 [MIT 许可证](LICENSE)。

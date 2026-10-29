@@ -1,6 +1,6 @@
-# Ishiki OneBot
+# Ishiki OneBot Actions
 
-`koishi-plugin-ishiki-onebot` 把核心工具没有覆盖的 OneBot v11 动作交给 Ishiki Agent：群管理、群文件与群相册、历史消息、表情回应、好友管理、资料修改。
+`koishi-plugin-ishiki-onebot-actions` 把核心工具没有覆盖的 OneBot v11 动作交给 Ishiki Agent：群管理、群文件与群相册、历史消息、表情回应、好友管理、资料修改。
 
 它支持 NapCat 与 SnowLuma 两种协议后端。普通对话仍走 `send_message`；这个插件只补足协议特有的操作。
 
@@ -23,16 +23,18 @@ flowchart LR
 
 ## 安装与启用
 
-按其他扩展包同样的方式构建并链接 `packages/onebot`（包名 `koishi-plugin-ishiki-onebot`），在 `koishi.yml` 启用，然后在 profile 中声明：
+在 Koishi 插件市场搜索并安装 `koishi-plugin-ishiki-onebot-actions`，再到「插件配置」启用：
 
 ```yaml
 plugins:
-  ishiki-onebot: {}
+  ishiki-onebot-actions: {}
 ```
+
+启用后在 profile 中声明：
 
 ```yaml
 extends:
-  onebot:
+  onebot-actions:
     config:
       backend: napcat # 必填：napcat | snowluma
       mode: read # docs | read | write，默认 read
@@ -81,7 +83,7 @@ extends:
 
 ```yaml
 extends:
-  onebot:
+  onebot-actions:
     config:
       backend: snowluma
       mode: read
@@ -95,8 +97,8 @@ extends:
 `src/catalog/generated.ts` 已提交进仓库，构建与运行都不需要参考仓库。更新任何一边的文档后重新生成：
 
 ```bash
-node packages/onebot/scripts/generate-catalog.mjs
-node packages/onebot/scripts/generate-catalog.mjs --check   # 过期时退出非零
+node packages/onebot-actions/scripts/generate-catalog.mjs
+node packages/onebot-actions/scripts/generate-catalog.mjs --check   # 过期时退出非零
 ```
 
 脚本读取 `NAPCAT_DOCS` 与 `SNOWLUMA_DOCS`，默认是 `D:/Codespace/references/NapCatDocs` 与 `D:/Codespace/references/SnowLumaDocs`。参数取自最新的 NapCat OpenAPI 文档；脚本会扫描全部版本，记录每个动作首次出现的版本。SnowLuma 的只读标记与别名取自它的 `catalog.json`，因为它的 OpenAPI 没有这两项。

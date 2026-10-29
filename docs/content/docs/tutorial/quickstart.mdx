@@ -1,186 +1,185 @@
 ---
 title: 快速上手
-description: 从源码接入到第一个 Agent 的完整配置流程
+description: 从 Koishi 插件市场安装到第一次对话
 ---
 
-完成这篇教程后，你会有一份已激活的 profile：它拥有自己的模型、人格和认领频道，可以通过 Koishi 接收消息、使用工具并发送回复。
+完成这篇教程后，你会得到一份正在运行的默认 profile：它带着预设模型、人格、引擎与频道认领规则，可以在 Koishi 中接收消息、调用工具并回复。
 
-## 准备环境
+## 开始前
 
-- 一个 **Koishi 4.18.11 或更高的 4.x 应用**，并且已经配置至少一个聊天平台适配器。
-- **Node.js 20+** 与 **Bun**。
-- 一个支持原生工具调用的模型接口及 API Key。本教程使用 OpenAI 兼容接口与默认 `native` 工具调用引擎。
+请准备：
 
-以下使用 Bun 接入插件，假设 Koishi 应用目录 `koishi-app` 与 Ishiki 源码目录 `ishiki` 位于同一个父目录。
+- 一个 **Koishi 4.18.11 或更高的 4.x 应用**，控制台可以正常打开。
+- 正式接入时需要一个已经连接真实账号的聊天平台适配器。下面以 OneBot 适配器为例；只验证插件、profile 与回复链路时，可以使用 Koishi 自带沙箱频道。
+- 一个模型接口及其 API Key。默认 `native` 工具调用引擎需要模型支持原生工具调用。
 
-## 接入核心运行时
+Ishiki 已经发布在 Koishi 插件市场。安装过程不需要下载源码、安装 Bun 或手动编译。
+
+## 安装并启用插件
 
 <Steps>
 <Step>
 
-### 构建源码
+### 从插件市场安装
 
-从两个目录的共同父目录开始执行：
+在 Koishi 控制台左侧打开「插件市场」，搜索 `ishiki`，选择 `koishi-plugin-ishiki`，依次点击「添加」和「安装」。
 
-```bash
-git clone https://github.com/YesWeAreBot/ishiki.git
-cd ishiki
-bun install
-bun run build
-```
-
-构建产物位于 `packages/koishi-plugin-ishiki/lib/`。本教程只需接入核心包；workspace、MCP、narrative 等扩展可以按需启用。
+插件市场负责下载并安装发布包，控制台页面已经包含在发布包中。
 
 </Step>
 <Step>
 
-### 链接到 Koishi 应用
+### 在插件配置中启用
 
-接着在当前 `ishiki` 目录执行：
+打开左侧「插件配置」，找到 `koishi-plugin-ishiki`，点击「启用插件」。
 
-```bash
-cd packages/koishi-plugin-ishiki
-bun link
-cd ../../../koishi-app
-bun link koishi-plugin-ishiki
-```
-
-相对路径按上述同级目录布局计算。如果应用位于其他位置，请将 `../../../koishi-app` 替换为应用目录。
-
-在 Koishi 应用的 `koishi.yml` 中启用插件：
-
-```yaml
-plugins:
-  ishiki: {}
-```
+插件安装后不会自动启用。确认插件状态为已启用，再启动或重载 Koishi。
 
 </Step>
 <Step>
 
-### 配置模型
+### 确认预设已经释放
 
-先启动一次 Koishi，让插件在全新的 `data/ishiki` 数据目录释放预设；随后编辑 `models.yaml`：
+首次使用空数据目录启动时，插件会自动释放一套预设，并把日志写到控制台：
 
-```yaml
-providers:
-  openai:
-    api: openai-completions
-    baseUrl: https://api.openai.com/v1
-    apiKey: YOUR_API_KEY
-    models:
-      - id: gpt-4.1-mini
-        toolCall: true
-        input: [text]
-        contextWindow: 1047576
-        maxTokens: 32768
+```text
+Default preset created under .../data/ishiki.
 ```
 
-替换供应商名称、`baseUrl`、`apiKey` 和模型 `id`，并按模型能力填写上下文窗口与输出上限。profile 通过 `<供应商>:<模型>` 引用模型。
+预设包含：
 
-`data/ishiki` 是默认数据目录，可以在插件的 `dataPath` 配置中修改。其他接口方言与模型组见[接入模型供应商](/docs/guides/models)。
+- `models.yaml`：DeepSeek 兼容接口与 `deepseek:deepseek-flash` 模型声明。
+- `profiles/default/profile.yaml`：`channel` 模式、三组引擎、codemode 与频道认领规则。
+- `profiles/default/PERSONA.md`：可以直接开始对话的中文人格。
 
-<Callout type="warn" title="保存好模型凭据">
-API Key 以明文保存在文件中。请限制文件访问权限，避免将数据目录提交到版本库。
+默认数据目录是 Koishi 应用下的 `data/ishiki`，可以在插件配置的 `dataPath` 中修改。预设只在目录不存在或为空时释放，已有文件不会被覆盖。
+
+</Step>
+</Steps>
+
+## 获取 Bot 的账号与频道标识
+
+profile 使用 `<platform>:<selfId>` 识别 Bot 账号。`platform` 来自平台适配器，`selfId` 是平台上的 Bot 账号；两者合起来才是完整的 `sid`。
+
+OneBot 适配器的 `platform` 是 `onebot`。QQ 号码可以作为 OneBot 的 `selfId`，不能单独作为 `sid`。
+
+取得这些值不一定要发送 `inspect`。`inspect` 是推荐方法，已经知道适配器配置或能从控制台日志核对时，也可以使用那些来源。
+
+<Steps>
+<Step>
+
+### 启用 inspect 插件（推荐）
+
+Koishi 已经预置 `inspect` 插件，但需要手动启用。打开「插件配置」，找到 `inspect`，点击「启用插件」，然后启动或重载 Koishi。
+
+</Step>
+<Step>
+
+### 发送 inspect
+
+使用一个真实聊天账号，在 Bot 所在的群聊或私聊中向 Bot 发送：
+
+```text
+inspect
+```
+
+也可以先在 Koishi 自带的沙箱频道发送同样的指令，确认插件已经正常加载。沙箱返回的是沙箱适配器的数据，配置真实平台时不能混用。
+
+</Step>
+<Step>
+
+### 记录三个值
+
+`inspect` 会返回平台名、消息 ID、频道 ID、群组 ID、用户 ID 与 Bot 自身 ID。无论使用 `inspect`、适配器配置还是日志，部署都需要确认以下值：
+
+| 值 | 用途 |
+| --- | --- |
+| `platform` | 平台适配器名称；OneBot 填写 `onebot` |
+| `selfId` | Bot 在该平台上的账号 |
+| `channelId` | 当前群聊或私聊的频道标识 |
+
+由前两个值组成 `sid`。例如平台为 `onebot`、Bot 账号为 `123456789` 时：
+
+```text
+onebot:123456789
+```
+
+如果只希望响应当前群聊，把该群聊返回的 `channelId` 原样填入频道名单；如果希望响应这个 Bot 账号下的全部频道，填写 `*`。
+
+</Step>
+</Steps>
+
+已经知道适配器实际使用的平台名与 Bot 账号时，可以直接填写这些值，再用一条真实消息核对结果。缺少 `channelId` 或无法确认账号时，优先启用 `inspect`。
+
+## 填写模型 API Key
+
+打开 Koishi 控制台左侧的 `Ishiki`，进入「模型目录」。页面标题为「模型配置」，可以可视化编辑供应商、模型与模型组。
+
+1. 找到预设供应商 `deepseek`。
+2. 打开供应商编辑器，把 `YOUR_API_KEY` 替换成实际 API Key。
+3. 保存模型配置。
+4. 如果运行中的实例仍报鉴权错误，在「人格配置」中点击「重新加载」，或者重载插件。
+
+模型声明的引用是 `<供应商>:<模型>`。预设 profile 已经引用 `deepseek:deepseek-flash`，替换 API Key 后可以直接使用。
+
+<Callout type="warn" title="凭据保存位置">
+API Key 以明文保存在 `<dataPath>/models.yaml`。请限制数据目录的访问权限，不要把它提交到版本库，也不要发到公开 issue 中。
 </Callout>
 
-</Step>
-<Step>
+## 配置频道并应用 profile
 
-### 创建 profile
+进入 `Ishiki` 的「人格配置」，打开预设 `default`。点击「编辑」后，在频道认领区域完成两项修改：
 
-编辑 `data/ishiki/profiles/default/profile.yaml`，把账号与频道占位项换成实际值：
+1. 把账号 `onebot:BOT_ID` 替换成上一步得到的真实 `sid`。
+2. 把频道名单设为 `*`，或者换成当前群聊的 `channelId`。
 
-```yaml
-model: openai:gpt-4.1-mini
-mode: channel
+保存后，配置只会写入磁盘。点击「应用」后，新的 profile 配置才会启动并接管频道。
 
-channels:
-  "onebot:BOT_ID":
-    - "*"
+<Callout type="warn" title="平台名称必须匹配">
+OneBot 适配器使用 `onebot`，不要写成 `qq`。其他平台请使用适配器实际配置的 `platform`，或者使用 `inspect` 返回的原值。
+</Callout>
 
-context:
-  engine: chat
-wakeup:
-  engine: standard
-toolcall:
-  engine: native
-codemode:
-  enable: true
-```
+频道匹配规则、`channel` 与 `cross` 两种运行模式的差别，见[编写 profile](/docs/guides/profile)。第一次上手保留预设的 `channel` 模式即可，每个群聊会拥有独立的会话与资源。
 
-将 `onebot:BOT_ID` 替换为机器人账号的 `platform:selfId`。这里的 `onebot` 对应 OneBot 适配器；使用其他平台时，填写该适配器的 platform。
+## 在频道中发送第一条消息
 
-每份 profile 是一份稳定人格的配置，`channels` 声明它接管的账号与频道。`"*"` 可以认领该账号的全部频道，`"!CHANNEL_ID"` 可以排除指定频道，完整规则见[编写 profile](/docs/guides/profile)。
+回到已经认领的群聊，@ Bot 或引用 Bot 的消息，然后发送一条简单消息。预设唤醒引擎会处理这次输入。
 
-预设显式声明了 `context.engine: chat`、`wakeup.engine: standard`、`toolcall.engine: native`，并开启 codemode。`channel` 模式为各频道分别创建 runtime。
-
-</Step>
-<Step>
-
-### 写下指令文件
-
-修改同目录下的 `PERSONA.md`（`instructions` 的缺省值）：
-
-```markdown
-你是一位清晰、耐心、可靠的对话伙伴。
-
-先理解对方真正想解决的问题，再给出直接、可执行的回应。需要查证时使用工具确认事实；能够完成的操作直接完成，并把结果说明白。
-
-保持稳定的判断，不迎合，也不把责任推回给对方。
-```
-
-`instructions` 列出注入系统提示词末尾的文件，按声明顺序拼接；相对路径以 profile 目录为准，也可以写绝对路径。文件缺失只记录日志警告，profile 仍会启动。
-
-</Step>
-<Step>
-
-### 启动并发送消息
-
-重新加载插件或重启 Koishi。日志中应出现：
+查看 Koishi 控制台日志，正常启动时应该出现：
 
 ```text
 profile "default" activated: mode=channel, accounts=1
 ```
 
-在已认领的频道中 @ 机器人，或引用它的消息。已认领的私聊也会命中默认唤醒规则。第一次输入路由到该频道时，会创建 runtime，日志包含：
+第一次收到该频道的消息时，还会出现：
 
 ```text
-[default] runtime created: default/onebot:BOT_ID/CHANNEL_ID
+[default] runtime created: default/onebot:123456789/CHANNEL_ID
 ```
 
-Agent 运行后，通过 `send_message` 将可见消息发送到平台。若没有收到回复，检查本页的故障排查表。
+第一条消息会创建 runtime，模型调用成功后通过 `send_message` 发回平台。之后可以继续在「人格配置」中调整模型、引擎与频道，也可以直接编辑 `PERSONA.md` 定制人格。
 
-</Step>
-</Steps>
+<Callout title="先用沙箱验证">
+Koishi 自带沙箱频道。让 profile 认领沙箱会话的 `platform:selfId` 与 `channelId` 后，可以在沙箱中检查插件加载、profile 激活与模型回复。正式接入时仍需在真实适配器会话中发送一条消息。
+</Callout>
 
-## 检查配置与实例数据
+<Callout title="网页控制台已经可用">
+安装发布包后即可使用控制台，不需要执行 `console:build`。只有修改 `client/` 源码的开发者才需要重新构建控制台资源。
+</Callout>
 
-运行前可维护的文件包括：
+## 遇到问题
 
-- `data/ishiki/models.yaml`
-- `data/ishiki/profiles/default/profile.yaml`
-- `data/ishiki/profiles/default/PERSONA.md`
+按现象查找[常见问题与排查](/docs/guides/troubleshooting)，其中覆盖插件安装、启动失败、收不到消息、收到消息没有回复、不同群聊表现不一致与图片问题。
 
-runtime 创建后，profile 下会生成 `runtimes/`，保存实例的会话日志和资源。修改模型、profile 或指令文件后，需要重新加载插件；更新源码后，需要重新执行 `bun run build`。
+需要更详细的运行期日志时，开启 `logLevel: 3`；需要查看模型请求时，开启 `dumpRequests`。完整用法见[调试与排障](/docs/guides/debugging)。
 
-## 增加能力
+如果按文档检查后仍未解决，可以在 [GitHub Issues](https://github.com/YesWeAreBot/ishiki/issues) 附上 Koishi 版本、插件版本、报错日志与已经执行的检查。QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)。
+
+## 继续配置
 
 <Cards>
+  <Card title="接入模型供应商" description="配置接口方言、模型能力与模型组" href="/docs/guides/models" />
+  <Card title="编写 profile" description="调整频道范围、人格、引擎与扩展" href="/docs/guides/profile" />
   <Card title="启用工作区" description="让 Agent 读写文件、执行命令与使用技能" href="/docs/guides/workspace" />
   <Card title="连接 MCP" description="接入已有 MCP 服务的工具与资源" href="/docs/guides/mcp" />
-  <Card title="选择运行节律" description="配置内置唤醒策略，了解等待与自主调度" href="/docs/guides/wakeup" />
-  <Card title="组织多个实例" description="选择按频道隔离或跨频道共享上下文" href="/docs/explanations/profiles-runtimes" />
 </Cards>
-
-## 故障排查
-
-| 现象 | 原因 | 处理 |
-| --- | --- | --- |
-| 模型请求返回鉴权错误 | `YOUR_API_KEY` 尚未替换 | 在 `models.yaml` 填入实际凭据，重新加载插件 |
-| `missing required service`，profile 等待 | 引擎或扩展服务缺失 | 核对名称，安装并启用对应 Koishi 插件 |
-| profile 因认领冲突被跳过 | 多份 profile 接管了相同账号和频道 | 用 `!` 排除重叠频道，或调整认领范围 |
-| `claims no accounts` | `channels` 缺失或为空 | 声明至少一个账号及其频道名单 |
-| profile 已激活，输入没有触发运行 | 频道未被认领，或未命中唤醒条件 | 核对 `platform:selfId` 与频道标识，在认领频道中 @ 机器人 |
-| 模型请求失败 | 接口配置有误或模型不支持所需能力 | 核对接口方言、地址、凭据、模型名称与工具调用支持情况 |
-
-请求记录与详细日志的使用方法见[调试与排障](/docs/guides/debugging)。

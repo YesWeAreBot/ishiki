@@ -63,7 +63,7 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
       description: '频道认领名单；* 全部、尾随 * 前缀、! 排除',
     },
     extends: {
-      type: 'Record<扩展包名, { enable?, config? }>',
+      type: 'Record<扩展名称, { enable?, config? }>',
       default: '{}',
       description: '启用的扩展及其实例配置；enable: false 静态剔除',
     },

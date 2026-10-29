@@ -1,0 +1,248 @@
+---
+title: 交给 AI 部署
+description: 给 AI Agent 的可执行安装、配置、验证与排障任务说明
+---
+
+这份说明适合直接交给能够读取文件、执行终端命令并检查 Koishi 日志的 AI Agent。大多数 Agent 的浏览器操作与视觉能力有限，也无法直接接管运行中的 Koishi，所以应当优先编辑配置文件、执行包管理命令和读取日志。真实平台验证与 API Key 仍需要用户参与，或者由用户明确授权。
+
+AI Agent 可以先读取站点的机器可读文档：
+
+- `https://ishiki.js.org/llms-full.txt`：全部文档正文。
+- `https://ishiki.js.org/llms.txt`：文档索引。
+- `https://ishiki.js.org/docs/tutorial/quickstart`：用户安装流程。
+- `https://ishiki.js.org/docs/guides/troubleshooting`：按现象排查。
+
+## 可直接交给 Agent 的任务说明
+
+```text
+你负责在现有 Koishi 4.x 应用中部署并验证 koishi-plugin-ishiki。
+
+先读取 https://ishiki.js.org/llms-full.txt，重点查看快速上手、常见问题与排查、编写 profile、模型供应商和调试文档。
+
+优先通过文件与命令完成任务，不要假定自己可以操作浏览器界面或直接接管运行中的 Koishi。需要浏览器或真实平台身份的操作，交给用户完成并回传结果。
+
+开始操作前，先探测部署环境：
+1. 判断 Koishi 运行在 Docker 还是本机。Docker 部署使用 docker ps 与 docker inspect 找到容器、应用目录和挂载点，后续命令通过 docker exec 在对应目录执行；本机部署通过运行进程、koishi.yml 和 package.json 找到应用根目录。
+2. 读取 package.json 的 packageManager 字段和锁文件，确认项目使用 npm、yarn、pnpm 或 bun。只使用项目当前的包管理器，不要混入另一种包管理器。
+3. 检查 node_modules/koishi-plugin-ishiki 是否指向源码目录，以及项目是否通过 link、file 或 workspace 依赖引用源码。发现源码链接时，先使用当前包管理器的 unlink 操作解除全局与项目链接，确认该路径不再指向外部源码，再安装发布包。保留 dataPath 与用户配置。
+4. 确认 Koishi 版本不低于 4.18.11，并记录 dataPath、运行方式、包管理器与平台适配器。
+
+部署必须经过以下检查点：
+1. 使用当前包管理器安装 koishi-plugin-ishiki 发布包，并在 koishi.yml 的 plugins 中启用 ishiki。保持现有 YAML 结构、插件组和注释。
+2. 需要 inspect 时，在插件配置中启用 Koishi 已预置的 inspect 插件。首次空目录启动需要释放预设时，确认配置文件与 dataPath 正确。
+3. 从适配器配置、控制台日志或推荐的 inspect 输出确认 platform、selfId 与 channelId，不得猜测。可以使用 Koishi 沙箱验证基础回复，沙箱坐标不能用于真实平台配置。
+4. 直接编辑 dataPath 下的 models.yaml 配置 API Key，并确认 default profile 引用的模型存在；无法安全编辑时再交给用户通过控制台完成。
+5. 编辑 default profile 的频道认领，写入真实 sid 与 channelId，随后重载插件或重启 Koishi 使配置生效。
+6. 先在沙箱确认基础回复，再在真实认领频道发送测试消息，确认收到平台回复；只看到配置保存成功不算部署完成。
+
+每次修改配置后都检查对应日志。遇到第一条错误就停下，保留原始错误文本，不要连续修改无关配置，也不要删除已有数据目录。若出现 import_core3.jsonSchema is not a function，先使用当前包管理器的 why 或 explain 命令检查 ai 包依赖链，排查 YesImBot v4 锁定的旧版本。
+
+不要在任何输出、日志、issue 或提交中暴露 API Key、Token 与用户隐私。不要修改无关插件，不要自动提交或推送 Git。
+
+结束时报告：部署方式、包管理器、Koishi 与插件版本、dataPath、平台适配器、隐去敏感信息的 sid、执行的配置变更、沙箱验证、真实消息与回复、关键日志、尚未解决的问题。
+```
+
+## 执行规则
+
+Agent 应当：
+
+- 先读取 `package.json`、锁文件、`koishi.yml` 与日志，确认部署方式和当前包管理器。Docker 部署中的命令通过 `docker exec` 在应用目录执行。
+- 只使用当前项目已有的包管理器。安装、卸载、重建依赖与更新锁文件都使用同一种包管理器。
+- 安装插件市场的发布包。发现此前通过源码构建、`link`、`file` 或 `workspace` 安装时，先解除旧链接，再安装发布包。
+- 优先编辑 `koishi.yml`、`<dataPath>/models.yaml` 与 `<dataPath>/profiles/default/profile.yaml`。必须使用控制台时，把准确的点击路径交给用户。
+- 先读取现场配置与日志，再提出修改。
+- 每次只处理一个明确的故障层，并为每次修改给出可观察的验证条件。
+- 推荐使用真实 `inspect` 输出填写 `platform:selfId` 与 `channelId`。适配器配置或控制台日志能给出相同信息时，也可以从这些来源取得。
+- 在修改 API Key 时避免把明文写入终端历史、聊天记录或提交内容。
+- 保留已有数据目录。预设没有释放时，先说明原因并检查 `dataPath`。
+- 先在 Koishi 沙箱验证插件、profile 与回复链路，再检查真实平台消息与回复。不能把进程启动、profile 保存或模型返回误报为完整成功。
+- 在无法执行控制台操作时，向用户给出精确的点击路径和需要回传的日志，不自行猜测界面结果。
+
+Agent 不得：
+
+- 猜测 `platform`、`selfId` 或 `channelId`。
+- 把沙箱会话的 `inspect` 结果用于真实平台配置。
+- 覆盖已有 `models.yaml`、profile 或 `PERSONA.md` 后再声称用户配置已被保留。
+- 混用 npm、yarn、pnpm 与 bun，或者在未确认旧链接来源时直接覆盖 `node_modules`。
+- 为了绕过错误而关闭鉴权、放宽文件权限或引入未经验证的替代插件。
+- 在问题未定位时批量修改模型、引擎、频道和适配器配置。
+
+## 包管理器与部署环境
+
+先读取 `package.json` 的 `packageManager` 字段，再用锁文件确认现场使用的包管理器：
+
+| 包管理器 | 常见锁文件 | 安装插件 |
+| --- | --- | --- |
+| npm | `package-lock.json` | `npm install koishi-plugin-ishiki` |
+| yarn | `yarn.lock` | `yarn add koishi-plugin-ishiki` |
+| pnpm | `pnpm-lock.yaml` | `pnpm add koishi-plugin-ishiki` |
+| bun | `bun.lock` 或 `bun.lockb` | `bun add koishi-plugin-ishiki` |
+
+`packageManager` 字段与锁文件冲突时，先停止安装并说明冲突；两个线索都不能确认时，再询问用户。不要用另一种包管理器补装依赖。
+
+Docker 部署先定位容器与应用目录：
+
+```bash
+docker ps
+docker inspect <容器名>
+docker exec <容器名> sh -lc 'pwd'
+```
+
+读取容器的工作目录与挂载点，确认 `koishi.yml`、`package.json` 和 `node_modules` 位于同一个应用目录。后续安装、读取日志与编辑文件都在这个目录执行。
+
+此前从源码构建并 link 过插件时，先检查项目依赖声明，以及 `<应用目录>/node_modules/koishi-plugin-ishiki` 的真实路径：
+
+```bash
+readlink -f node_modules/koishi-plugin-ishiki
+```
+
+Windows 本机可以改用 PowerShell：
+
+```powershell
+Get-Item -LiteralPath node_modules/koishi-plugin-ishiki | Select-Object LinkType, Target
+```
+
+真实路径指向 Ishiki 源码仓库时，使用当前包管理器的 `unlink` 删除全局与项目链接，移除 `link`、`file` 或 `workspace` 依赖声明，再执行上表中的安装命令。安装完成后再次检查真实路径，确认它位于当前应用的 `node_modules`，并且不是指向源码仓库的符号链接。
+
+## 部署流程
+
+<Steps>
+<Step>
+
+### 读取现场事实
+
+记录部署方式、包管理器、Koishi 版本、操作系统、Koishi 应用目录、插件配置中的 `dataPath`、已启用平台适配器与控制台状态。Docker 部署同时记录容器名称、挂载点与容器内应用目录。
+
+检查 `dataPath` 是否已存在文件。空目录才可能释放预设；已有数据目录必须读取并保留现有配置。
+
+完成条件：Agent 已经说明部署方式、包管理器、安装状态、数据目录状态与平台适配器名称，并能指出下一步缺少的信息。
+
+</Step>
+<Step>
+
+### 安装并启用核心插件
+
+先按上一节检查源码链接。需要清理时，使用当前包管理器解除 `link`、`file` 或 `workspace` 依赖，再执行对应的安装命令。Docker 部署将命令放在 `docker exec` 中执行。
+
+安装完成后，在 `koishi.yml` 的 `plugins` 下启用 `ishiki`。保留现有插件组、注释与缩进；插件位于某个插件组时，把条目加入同一组。
+
+Koishi 已预置 `inspect` 插件，但默认没有启用。在插件配置中手动启用它，供后续取得频道坐标。
+
+重载插件或重启 Koishi。检查插件是否出现在已启用列表中，控制台左侧是否出现 `Ishiki` 入口，日志是否出现 `Default preset created under ...` 或与现有数据目录一致的加载信息。
+
+完成条件：`node_modules/koishi-plugin-ishiki` 来自发布包，`ishiki` 已启用，需要 inspect 时它也已启用，核心服务没有启动错误，控制台入口可以打开。
+
+</Step>
+<Step>
+
+### 获取频道坐标
+
+推荐让用户使用真实账号在 Bot 所在的群聊或私聊中发送 `inspect`，把返回的 `platform`、`selfId`、`channelId` 与 Bot 自身 ID 交给 Agent。适配器配置或控制台日志已经给出这些值时，也可以直接读取并核对，不必强制使用 `inspect`。
+
+OneBot 适配器的平台名是 `onebot`。由 `platform` 与 `selfId` 组成 `sid`，例如 `onebot:123456789`。
+
+没有真实适配器时，可以使用 Koishi 自带的沙箱频道验证基础回复。沙箱的 `sid` 与 `channelId` 只用于沙箱 profile，不能混入真实平台配置。
+
+完成条件：三个值来自同一个会话，并且 Agent 已经明确写出最终 `sid`；真实平台与沙箱坐标已经分开记录。
+
+</Step>
+<Step>
+
+### 配置模型
+
+读取 `<dataPath>/models.yaml`，编辑预设供应商 `deepseek`，填写实际 API Key。需要更换供应商或模型时，同时修改 profile 的模型引用。
+
+文件无法安全编辑时，再把「模型目录」中的准确操作路径交给用户。保存后重载插件或重启 Koishi，检查日志中没有模型配置校验错误，profile 引用的模型或模型组确实存在。不要把 API Key 贴进普通日志或公开报告。
+
+完成条件：模型声明有效，凭据已配置，profile 的模型引用可以通过校验。
+
+</Step>
+
+<Step>
+
+### 配置频道并应用
+
+编辑 `<dataPath>/profiles/default/profile.yaml`。把 `channels` 的账号从 `onebot:BOT_ID` 改为真实 `sid`，把频道名单设为 `*` 或真实的 `channelId`。
+
+保存后重载插件或重启 Koishi。检查日志中出现：
+
+```text
+profile "default" activated: mode=channel, accounts=1
+```
+
+完成条件：`default` 已应用，账号数量正确，没有 `missing required service`、认领冲突或配置解析错误。
+
+</Step>
+<Step>
+
+### 在沙箱和真实频道测试
+
+先使用 Koishi 沙箱频道验证消息能够触发 profile 并收到基础回复。需要真实平台身份时，由用户发送测试消息。
+
+再让用户在已经认领的真实群聊中 @ Bot 或引用 Bot 的消息，发送一条不会触发敏感操作的测试内容。检查日志中出现 runtime 创建记录、模型请求成功记录与消息发送记录，并确认用户在平台上实际看到回复。
+
+完成条件：沙箱先得到非空回复，真实频道随后收到非空回复；日志中没有 `no profile claims`、模型鉴权错误或 `Failed to send message`。
+
+</Step>
+</Steps>
+
+## 排障顺序
+
+按以下顺序检查，不要跳层：
+
+1. **插件层**：插件是否来自发布包并已启用，Koishi 版本是否兼容，启动日志是否有模块、`ai` 依赖或运行时错误。
+2. **路由层**：真实平台或沙箱坐标是否与 profile 一致，日志是否出现 `no profile claims`，是否存在多个 profile 争抢同一频道。
+3. **运行层**：profile 是否已应用，消息是否命中唤醒条件，是否创建了 runtime。
+4. **模型层**：API Key、接口地址、模型名称、原生工具调用能力与请求错误。
+5. **发送层**：模型是否调用 `send_message`，日志是否有 `Failed to send message`，目标频道是否正确。
+6. **媒体层**：入站图片是否同时开启 `attachment.imageInput` 并声明模型图片能力；出站图片是否使用 `send_message` 的 `element` 模式与允许的资源 URL。
+
+详细处理表见[常见问题与排查](/docs/guides/troubleshooting)。需要查看模型请求时，启用 `dumpRequests` 并检查最近的请求与响应文件；不要公开包含聊天内容的原始文件。
+
+## 人工交接点
+
+以下操作需要真实平台身份或用户授权，Agent 不应伪造结果：
+
+- 需要真实账号发送 `inspect` 时，由用户执行并回传结果。
+- 确认真实群聊中的消息与回复。
+- 提供模型 API Key。
+- 决定是否允许 Bot 访问工作区、执行命令或使用有副作用的工具。
+
+Agent 可以完成文件检查、配置修改、日志读取与验证，但这些人工步骤没有完成时，应明确标为阻塞项。
+
+## 完成报告
+
+部署完成后，Agent 可以按以下结构报告：
+
+```text
+环境
+- 部署方式：
+- 包管理器：
+- Koishi 版本：
+- ishiki 插件版本：
+- 插件来源（发布包或源码链接清理结果）：
+- 平台适配器：
+- dataPath：
+
+配置
+- 模型引用：
+- profile：
+- sid（已隐去敏感部分）：
+- 频道范围：
+
+验证
+- 插件启用：
+- inspect 或坐标来源：
+- 预设或现有配置：
+- profile 应用日志：
+- 沙箱测试消息：
+- 沙箱实际收到的回复：
+- runtime 创建日志：
+- 真实测试消息：
+- 实际收到的回复：
+
+未解决事项
+- ...
+```
+
+如果部署没有完成，附上第一条错误日志、出错的操作步骤、已经执行的检查与仍需要的用户输入。需要外部协助时，到 [GitHub Issues](https://github.com/YesWeAreBot/ishiki/issues) 提交脱敏信息。QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)。

@@ -67,6 +67,12 @@ export interface SessionAddress {
 
 class Ishiki extends Service<Ishiki.Config> {
   static name = "ishiki";
+  static readonly usage = `
+[快速上手](https://ishiki.js.org/docs/tutorial/quickstart/) · [常见问题与排查](https://ishiki.js.org/docs/guides/troubleshooting/)
+
+问题反馈：[GitHub Issues](https://github.com/YesWeAreBot/ishiki/issues)
+
+QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
 
   public readonly dataPath: string;
   public readonly logger: Logger;

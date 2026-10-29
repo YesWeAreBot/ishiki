@@ -72,7 +72,7 @@ description: 与常见_contacts 的关系与态度，涉及具体人时参考
 
 ## narrative：增量剧本与分阶段模型
 
-希望同一个角色持续记住先前剧情，并分别使用擅长决策、工具调用和写作的模型时，先构建并链接 `packages/narrative`（包名 `koishi-plugin-ishiki-narrative`），在 `koishi.yml` 启用 `ishiki-narrative: {}`，然后在 profile 中同时启用两个 `narrative` 引擎：
+希望同一个角色持续记住先前剧情，并分别使用擅长决策、工具调用和写作的模型时，先在 Koishi 插件市场安装 `koishi-plugin-ishiki-narrative`，再到「插件配置」启用。然后在 profile 中同时启用两个 `narrative` 引擎：
 
 ```yaml
 model: local:narrator

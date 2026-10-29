@@ -13,34 +13,13 @@
 
 ## 安装与接入
 
-准备好：
+需要 Koishi **4.18.11 或更高的 4.x 版本**、已经配置的聊天平台适配器，以及一个可用的模型接口及其凭据。默认 `native` 工具调用引擎需要模型支持原生工具调用。
 
-- Koishi **4.18.11 或更高的 4.x 版本**，以及已经配置的聊天平台适配器。
-- Node.js **20+** 与 Bun。
-- 一个可用的模型接口及其凭据。默认 `native` 工具调用引擎需要模型支持原生工具调用。
-
-当前使用源码构建接入。以下假设 Koishi 应用目录 `koishi-app` 与源码目录 `ishiki` 位于同一个父目录，从该父目录开始执行：
-
-```bash
-git clone https://github.com/YesWeAreBot/ishiki.git
-cd ishiki
-bun install
-bun run build
-
-cd packages/koishi-plugin-ishiki
-bun link
-cd ../../../koishi-app
-bun link koishi-plugin-ishiki
-```
-
-在 Koishi 应用的 `koishi.yml` 中启用：
-
-```yaml
-plugins:
-  ishiki: {}
-```
+插件已经发布在 Koishi 插件市场。在 Koishi 控制台左侧打开「插件市场」，搜索 `koishi-plugin-ishiki`，依次点击「添加」与「安装」，再到「插件配置」启用。市场安装的发布包已经包含运行时与控制台资源，不需要下载源码、运行 `bun install` 或手动链接插件。
 
 默认数据目录为 Koishi 应用下的 `data/ishiki/`，可以通过插件配置 `dataPath` 修改。
+
+安装与首次对话的完整步骤见[快速上手](https://ishiki.js.org/docs/tutorial/quickstart/)。
 
 ## 创建第一个 Agent
 
@@ -158,7 +137,7 @@ codemode:
 
 ## 接入扩展与引擎
 
-先构建并链接扩展包，在 Koishi 中启用，再通过 profile 的 `extends` 为该人格启用能力。以 workspace 为例：
+从 Koishi 插件市场安装对应扩展，再到「插件配置」启用，然后通过 profile 的 `extends` 为该人格启用能力。以 workspace（包名 `koishi-plugin-ishiki-workspace`）为例：
 
 ```yaml
 # koishi.yml 的 plugins 段
@@ -189,7 +168,7 @@ workspace 提供文件与命令工具。MCP 接入、OneBot 协议操作等能�
 
 ## 管理控制台
 
-同时启用 `@koishijs/plugin-console` 与本插件后，控制台只注册一个 Ishiki 入口。模型、Profile、会话、运行时、用量与缓存页面在 Ishiki 内部侧栏切换。页面读取 `src/management/` 提供的快照，写入通过带权限校验的控制台接口完成。
+插件市场安装的发布包已经包含控制台产物。同时启用 `@koishijs/plugin-console` 与本插件后，控制台只注册一个 Ishiki 入口。模型、Profile、会话、运行时、用量与缓存页面在 Ishiki 内部侧栏切换。页面读取 `src/management/` 提供的快照，写入通过带权限校验的控制台接口完成。
 
 - 模型保存按文件摘要校验修订版本，先写临时文件再原子替换；密钥只回传配置状态，明文不会进入页面、日志或审计。
 - 模型编辑器按模型类型切换字段，可以从提供商的在线名单导入声明（服务端代理请求，密钥不下发到页面）；模型与 Profile 编辑器都支持表单与 RAW（YAML）双向同步，保存前统一校验。
@@ -198,13 +177,13 @@ workspace 提供文件与命令工具。MCP 接入、OneBot 协议操作等能�
 - 会话按字节游标分页读取 `events.jsonl`，损坏行单独报告，其余条目继续返回。
 - 用量页基于原始用量记录展示按天折线图；模型组、具体模型与缺少映射的引用分开统计，缓存缺失时显示明确的数据状态。
 
-构建控制台产物：
+只有修改 `client/` 下的源码后，开发环境才需要重新构建控制台产物：
 
 ```bash
 bun run --cwd packages/koishi-plugin-ishiki console:build
 ```
 
-控制台入口加载构建后的 `dist` 目录，修改 `client/` 后需要重新构建。
+控制台入口加载构建后的 `dist` 目录。使用插件市场发布包的用户无需执行这条构建命令。
 
 ## 启动问题
 
@@ -216,6 +195,8 @@ bun run --cwd packages/koishi-plugin-ishiki console:build
 | 模型请求失败                     | 检查接口方言、地址、凭据、模型名称与工具调用支持情况 |
 
 配置变更后重新加载插件。请求记录、日志与详细排障见[调试指南](https://ishiki.js.org/docs/guides/debugging/)。
+
+其他常见现象见[常见问题与排查](https://ishiki.js.org/docs/guides/troubleshooting/)。无法自行定位时，可以到 [GitHub Issues](https://github.com/YesWeAreBot/ishiki/issues) 提交脱敏日志。QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)。
 
 ## 许可证
 

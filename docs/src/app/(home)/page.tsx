@@ -8,7 +8,7 @@ const sections = [
   {
     href: "/docs/tutorial/quickstart",
     label: "教程",
-    description: "从源码构建到第一次对话，跟着做就能跑起来",
+    description: "从插件市场安装，用控制台完成配置并开始第一次对话",
   },
   {
     href: "/docs/guides/profile",
