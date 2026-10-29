@@ -66,7 +66,7 @@ export interface SessionAddress {
 }
 
 class Ishiki extends Service<Ishiki.Config> {
-  static name = "ishiki";
+  static readonly name = "ishiki";
   static readonly usage = `
 [快速上手](https://ishiki.js.org/docs/tutorial/quickstart/) · [常见问题与排查](https://ishiki.js.org/docs/guides/troubleshooting/)
 
