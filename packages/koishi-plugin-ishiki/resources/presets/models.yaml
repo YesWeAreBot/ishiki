@@ -6,6 +6,7 @@ providers:
     api: openai-completions
     models:
       - id: deepseek-flash
+        toolCall: true
         reasoning: true
         input: [text, image]
         contextWindow: 1000000

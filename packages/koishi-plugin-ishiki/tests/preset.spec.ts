@@ -32,7 +32,7 @@ describe("default preset", () => {
     const profileRoot = path.join(dataPath, "profiles", "default");
     const rawProfile = parse(await readFile(path.join(profileRoot, "profile.yaml"), "utf8"));
     const profile = resolveProfile(rawProfile, "default", profileRoot);
-    expect(profile.settings.model).toBe("openai:gpt-4.1-mini");
+    expect(profile.settings.model).toBe("deepseek:deepseek-flash");
     expect(profile.mode).toBe("channel");
     expect(profile.settings.instructions).toEqual(["PERSONA.md"]);
     expect(profile.settings.context.engine).toBe("chat");
@@ -44,8 +44,8 @@ describe("default preset", () => {
     const models = parse(await readFile(path.join(dataPath, "models.yaml"), "utf8")) as {
       providers: Record<string, { models: Array<{ id: string; toolCall?: boolean }> }>;
     };
-    expect(models.providers.openai.models.map((model) => model.id)).toEqual(["gpt-4.1-mini"]);
-    expect(models.providers.openai.models[0].toolCall).toBe(true);
+    expect(models.providers.deepseek.models.map((model) => model.id)).toEqual(["deepseek-flash"]);
+    expect(models.providers.deepseek.models[0].toolCall).toBe(true);
 
     const persona = await readFile(path.join(profileRoot, "PERSONA.md"), "utf8");
     expect(persona).toContain("清晰、耐心、可靠");
@@ -72,7 +72,7 @@ describe("default preset", () => {
     await app.start();
 
     const service = app.get("ishiki") as Ishiki;
-    expect(service.gateway.providers()).toContain("openai");
+    expect(service.gateway.providers()).toContain("deepseek");
     expect(await readFile(path.join(dataPath, "models.yaml"), "utf8")).toContain("YOUR_API_KEY");
     await vi.waitFor(() => expect(service.profiles.has("default")).toBe(true));
   });
