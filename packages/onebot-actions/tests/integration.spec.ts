@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 function config(overrides: Partial<Config> = {}): Config {
-  return OneBotExtensionConfig({ backend: "napcat", mode: "read", maxInlineBytes: 1024, resourceBaseUrl: "", denyActions: [], ...overrides }) as Config;
+  return OneBotExtensionConfig(overrides) as Config;
 }
 
 function context(domain: ExtensionContext["domain"], resources: ResourceCenter): ExtensionContext {
@@ -53,9 +53,10 @@ function context(domain: ExtensionContext["domain"], resources: ResourceCenter):
 
 async function assemble(
   overrides: Partial<Config> = {},
+  defaults: Partial<ConstructorParameters<typeof OneBotExtension>[1]> = {},
 ): Promise<{ tools: ToolSet; instructions: string; resources: ResourceCenter; stop: () => Promise<void> }> {
   const settings = config(overrides);
-  const extension = new OneBotExtension(app, { defaultBackend: "napcat", defaultMode: "read", logLevel: 1 });
+  const extension = new OneBotExtension(app, { defaultBackend: "napcat", defaultMode: "read", logLevel: 1, ...defaults });
   const resources = new ResourceCenter("rt", home);
   const instance = extension[Service.invoke](settings, context({ mode: "channel", platform: "onebot", selfId: "10000", channelId: "group:1" }, resources));
   if (instance === undefined) throw new Error("extension returned no instance");
@@ -86,6 +87,18 @@ describe("extension assembly", () => {
     const assembled = await assemble({ mode: "docs" });
     expect(assembled.tools.query_action).toBeUndefined();
     expect(assembled.tools.invoke_action).toBeUndefined();
+    await assembled.stop();
+  });
+
+  it("applies plugin defaults when the instance config omits backend and mode", async () => {
+    const assembled = await assemble({}, { defaultBackend: "snowluma", defaultMode: "docs" });
+    expect(assembled.tools.query_action).toBeUndefined();
+    expect(assembled.tools.invoke_action).toBeUndefined();
+    expect(assembled.instructions).toContain("Protocol backend: snowluma");
+
+    const tool = assembled.tools.list_actions as { execute: (input: unknown, options: unknown) => Promise<{ count: number }> };
+    const result = await tool.execute({}, {});
+    expect(result.count).toBeGreaterThan(0);
     await assembled.stop();
   });
 });

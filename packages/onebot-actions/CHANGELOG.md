@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Per-profile `backend` and `mode` are now optional and fall back to the extension `defaultBackend` and `defaultMode`
 ## [0.0.3] - 2026-10-29
 
 ### Breaking Changes

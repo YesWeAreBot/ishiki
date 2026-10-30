@@ -7,8 +7,8 @@ import { CatalogScheme } from "./scheme.js";
 import { createTools, instructions } from "./tools.js";
 
 export interface OneBotExtensionConfig {
-  backend: Backend;
-  mode: Mode;
+  backend?: Backend;
+  mode?: Mode;
   maxInlineBytes: number;
   resourceBaseUrl: string;
   denyActions: string[];
@@ -16,7 +16,7 @@ export interface OneBotExtensionConfig {
 
 export const OneBotExtensionConfig: Schema<OneBotExtensionConfig> = Schema.object({
   backend: Schema.union(["napcat", "snowluma"]).description("协议后端：两个实现的动作集合与参数形状不同，目录和只读判定都按它选择。"),
-  mode: Schema.union(["docs", "read", "write"]).description("工具档位。docs 只提供目录查询；read 增加只读动作执行；write 增加全部动作执行。").default("read"),
+  mode: Schema.union(["docs", "read", "write"]).description("工具档位。docs 只提供目录查询；read 增加只读动作执行；write 增加全部动作执行。"),
   maxInlineBytes: Schema.number()
     .min(1)
     .description("资源 URL 转 base64:// 的字节上限；超过时报错，不做截断。")
@@ -37,19 +37,25 @@ class OneBotExtension extends Extension<OneBotExtensionConfig> {
 
   /** 每个 profile 一份发布器：同一 profile 的 runtime 共享同一组临时 URL。 */
   private readonly publishers = new Map<string, MediaPublisher>();
+  private readonly defaultBackend: Backend;
+  private readonly defaultMode: Mode;
 
   constructor(ctx: Context, config: OneBotExtension.Config) {
     super(ctx, "onebot-actions");
+    this.defaultBackend = config.defaultBackend;
+    this.defaultMode = config.defaultMode;
     this.logger.level = config.logLevel;
   }
 
   public [Service.invoke](config: OneBotExtensionConfig, context: ExtensionContext) {
+    const backend = config.backend ?? this.defaultBackend;
+    const mode = config.mode ?? this.defaultMode;
     const publisher = this.publisher(context);
     const options = {
       ctx: context.fiber,
       domain: context.domain,
-      backend: config.backend,
-      mode: config.mode,
+      backend,
+      mode,
       deny: config.denyActions,
       resources: context.resources,
       publisher,
@@ -58,7 +64,7 @@ class OneBotExtension extends Extension<OneBotExtensionConfig> {
       logger: context.logger,
     };
 
-    const dispose = context.resources.attach(new CatalogScheme(config.backend));
+    const dispose = context.resources.attach(new CatalogScheme(backend));
     return {
       name: "ishiki.onebot-actions",
       extendTools: async () => createTools(options),
