@@ -23,6 +23,39 @@ async function applyProfile(setup: TestSetup, id: string, operator = "alice"): P
 }
 
 describe("ishiki commands", () => {
+  it("registers the bypass option on every command that asks for confirmation", async () => {
+    const setup = await startApp();
+    try {
+      const commands = [
+        "ishiki.session.archive",
+        "ishiki.channel.release",
+        "ishiki.channel.move",
+        "ishiki.model.provider.remove",
+        "ishiki.model.decl.remove",
+        "ishiki.model.group.remove",
+        "ishiki.profile.stop",
+        "ishiki.profile.remove",
+        "ishiki.runtime.restart",
+        "ishiki.runtime.stop",
+        "ishiki.runtime.reload",
+        "ishiki.chat.shake",
+        "ishiki.chat.compact",
+        "ishiki.standard.compact",
+      ];
+
+      for (const name of commands) {
+        const command = setup.app.$commander.get(name);
+        expect(command?._options.yes).toMatchObject({
+          name: "yes",
+          type: "boolean",
+          syntax: "-y, --yes",
+        });
+      }
+    } finally {
+      await setup.stop();
+    }
+  });
+
   it("enforces authority levels on commands and the api-key option", async () => {
     const setup = await startApp({
       users: [
@@ -274,8 +307,10 @@ describe("ishiki commands", () => {
       expect(existsSync(path.join(home, "events.jsonl"))).toBe(true);
       expect(existsSync(path.join(home, "resources"))).toBe(true);
 
-      const output = await executeWithReply(setup, "carol", `ishiki.session.archive ${sessionId}`, "确认");
+      await setup.session("carol").execute(`ishiki.session.archive ${sessionId} -y`);
+      const output = lastOutput(setup);
       expect(output).toContain(`已归档会话 ${sessionId}`);
+      expect(output).not.toContain('回复"确认"继续执行');
       expect(existsSync(path.join(home, "events.jsonl"))).toBe(false);
       expect(existsSync(path.join(home, "resources"))).toBe(false);
 

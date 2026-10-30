@@ -3,7 +3,7 @@ import type { Command, Context } from "koishi";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import type { RuntimeState } from "../management/types.js";
-import { confirm, operatorOf, optionNumber, optionText, positional } from "./context.js";
+import { CONFIRM_OPTION, confirm, operatorOf, optionNumber, optionText, positional } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatEnginesDirectory, formatExtensionsDirectory, formatSessionList, formatStatusOverview } from "./format.js";
 import { sessionAddress } from "./targets.js";
@@ -42,25 +42,27 @@ export function registerEngineCommands(_ctx: Context, host: Ishiki, root: Comman
       }),
     );
 
-  session.subcommand(".archive [runtimeId]", "归档会话日志与资源（缺省为当前频道的会话）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const address = sessionAddress(argv.session);
-      const fallback = address === undefined ? undefined : host.findSessionId(address);
-      const id = positional(argv, 0) ?? fallback;
-      if (id === undefined) {
-        throw new ManagementError(
-          "invalid",
-          address === undefined ? "请提供 Runtime 标识，或在频道会话内执行" : "当前频道没有归属的 Profile，请提供 Runtime 标识",
-        );
-      }
-      const plan = await host.management.sessions.planArchive(id);
-      const proceed = await confirm(argv.session, `将把会话 ${id} 的 ${plan.files.join("、")} 移到实例 archives 目录，归档后该会话不再出现在会话列表`);
-      if (proceed !== true) return proceed;
-      const result = await host.management.sessions.archive(plan, operatorOf(argv.session));
-      return `已归档会话 ${id}（${result.files.join("、")}）到 ${result.path}`;
-    }),
-  );
+  session
+    .subcommand(".archive [runtimeId]", "归档会话日志与资源（缺省为当前频道的会话）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const address = sessionAddress(argv.session);
+        const fallback = address === undefined ? undefined : host.findSessionId(address);
+        const id = positional(argv, 0) ?? fallback;
+        if (id === undefined) {
+          throw new ManagementError(
+            "invalid",
+            address === undefined ? "请提供 Runtime 标识，或在频道会话内执行" : "当前频道没有归属的 Profile，请提供 Runtime 标识",
+          );
+        }
+        const plan = await host.management.sessions.planArchive(id);
+        const proceed = await confirm(argv, `将把会话 ${id} 的 ${plan.files.join("、")} 移到实例 archives 目录，归档后该会话不再出现在会话列表`);
+        if (proceed !== true) return proceed;
+        const result = await host.management.sessions.archive(plan, operatorOf(argv.session));
+        return `已归档会话 ${id}（${result.files.join("、")}）到 ${result.path}`;
+      }),
+    );
 
   root
     .subcommand(".engine", "引擎目录")

@@ -2,7 +2,7 @@ import type { Command, Context } from "koishi";
 
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
-import { confirm, operatorOf, optionText, positional, restArguments } from "./context.js";
+import { CONFIRM_OPTION, confirm, operatorOf, optionText, positional, restArguments } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatRuntimeList, formatRuntimeView } from "./format.js";
 import { resolveRuntime, sessionAddress } from "./targets.js";
@@ -90,43 +90,49 @@ export function registerRuntimeCommands(_ctx: Context, host: Ishiki, root: Comma
     }),
   );
 
-  runtime.subcommand(".restart <runtimeId>", "重启 Runtime（停止后按原域重建）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const id = positional(argv, 0);
-      if (id === undefined) throw new ManagementError("invalid", "请提供 Runtime 标识");
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const proceed = await confirm(argv.session, `将重启 Runtime ${id}（会话中断后按原域重建，不读新配置）`);
-      if (proceed !== true) return proceed;
-      await runtimes.restart(id, operatorOf(argv.session));
-      return `已重启 Runtime ${id}`;
-    }),
-  );
+  runtime
+    .subcommand(".restart <runtimeId>", "重启 Runtime（停止后按原域重建）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const id = positional(argv, 0);
+        if (id === undefined) throw new ManagementError("invalid", "请提供 Runtime 标识");
+        const proceed = await confirm(argv, `将重启 Runtime ${id}（会话中断后按原域重建，不读新配置）`);
+        if (proceed !== true) return proceed;
+        await runtimes.restart(id, operatorOf(argv.session));
+        return `已重启 Runtime ${id}`;
+      }),
+    );
 
-  runtime.subcommand(".stop [runtimeId]", "停止 Runtime（临时性：Profile 保持激活时下一条匹配消息会自动重建）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const target = await resolveRuntime(host, positional(argv, 0), {}, argv.session);
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const profileActive = host.profiles.has(target.view.profileId);
-      const notice = profileActive
-        ? `将停止 Runtime ${target.view.id}。Profile ${target.view.profileId} 仍处于激活状态，下一条匹配消息会自动重建；持久摘除请用 ishiki.channel.release`
-        : `将停止 Runtime ${target.view.id}`;
-      const proceed = await confirm(argv.session, notice);
-      if (proceed !== true) return proceed;
-      await runtimes.stop(target.view.id, operatorOf(argv.session));
-      return `已停止 Runtime ${target.view.id}`;
-    }),
-  );
+  runtime
+    .subcommand(".stop [runtimeId]", "停止 Runtime（临时性：Profile 保持激活时下一条匹配消息会自动重建）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const target = await resolveRuntime(host, positional(argv, 0), {}, argv.session);
+        const profileActive = host.profiles.has(target.view.profileId);
+        const notice = profileActive
+          ? `将停止 Runtime ${target.view.id}。Profile ${target.view.profileId} 仍处于激活状态，下一条匹配消息会自动重建；持久摘除请用 ishiki.channel.release`
+          : `将停止 Runtime ${target.view.id}`;
+        const proceed = await confirm(argv, notice);
+        if (proceed !== true) return proceed;
+        await runtimes.stop(target.view.id, operatorOf(argv.session));
+        return `已停止 Runtime ${target.view.id}`;
+      }),
+    );
 
-  runtime.subcommand(".reload <runtimeId>", "重载所属 Profile（全部 Runtime 重建）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const id = positional(argv, 0);
-      if (id === undefined) throw new ManagementError("invalid", "请提供 Runtime 标识");
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const view = runtimes.read(id);
-      const proceed = await confirm(argv.session, `Runtime ${id} 属于 Profile ${view.profileId}，重载将重建该 Profile 的全部 Runtime`);
-      if (proceed !== true) return proceed;
-      await host.management.profiles.reload(view.profileId, operatorOf(argv.session));
-      return `Profile ${view.profileId} 的全部 Runtime 已重建`;
-    }),
-  );
+  runtime
+    .subcommand(".reload <runtimeId>", "重载所属 Profile（全部 Runtime 重建）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const id = positional(argv, 0);
+        if (id === undefined) throw new ManagementError("invalid", "请提供 Runtime 标识");
+        const view = runtimes.read(id);
+        const proceed = await confirm(argv, `Runtime ${id} 属于 Profile ${view.profileId}，重载将重建该 Profile 的全部 Runtime`);
+        if (proceed !== true) return proceed;
+        await host.management.profiles.reload(view.profileId, operatorOf(argv.session));
+        return `Profile ${view.profileId} 的全部 Runtime 已重建`;
+      }),
+    );
 }

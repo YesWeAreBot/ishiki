@@ -1,6 +1,6 @@
 import type { Context } from "koishi";
 
-import { confirm } from "../commands/context.js";
+import { CONFIRM_OPTION, confirm } from "../commands/context.js";
 import { expectRuntime, type ExtensionCommandDecl } from "../commands/contribute.js";
 import { ManagementError } from "../management/errors.js";
 import type { RuntimeView } from "../management/types.js";
@@ -78,6 +78,7 @@ export function registerStandardCommands(ctx: Context): void {
       name: "ishiki.standard.compact",
       description: "手动压缩上下文（回显压缩计划，回复“确认”后执行）",
       decl: "[runtimeId]",
+      options: [{ name: CONFIRM_OPTION.name, decl: CONFIRM_OPTION.decl }],
       authority: 2,
       target,
       requires,
@@ -87,9 +88,8 @@ export function registerStandardCommands(ctx: Context): void {
         const stats = await instance.stats();
         if (stats.ceilingChars <= 0) throw new ManagementError("rejected", "该 Profile 关闭了上下文预算，没有可压缩的内容");
         if (stats.plan === undefined) return "当前无需压缩";
-        if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
         const proceed = await confirm(
-          argv.session,
+          argv,
           `将把约 ${stats.plan.droppedEntries} 条消息（${stats.plan.droppedChars} 字符）压入摘要，保留最近 ${stats.plan.keptChars} 字符`,
         );
         if (proceed !== true) return proceed;

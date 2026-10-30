@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added an opt-in `pacing.terminalGuard` that nudges the agent to send, wait, or finish when a step ends with plain text
 - Added per-attempt compaction usage records reported under a new maintenance source
+- Added a `-y/--yes` option to every command that requires interactive confirmation so the 60-second prompt can be skipped
+- Confirmation commands now reject up front when the invocation has no session to prompt
 
 ### Changed
 - Compaction is now gated only by covered tokens; the minimum new-token throttle was removed

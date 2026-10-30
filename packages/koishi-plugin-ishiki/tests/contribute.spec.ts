@@ -24,17 +24,6 @@ class ProbeContextEngine extends ContextEngine<"probe"> {
   }
 }
 
-async function executeWithReply(setup: TestSetup, userId: string, command: string, reply: string, channelId?: string): Promise<string> {
-  const outputsBefore = setup.outputs().length;
-  const execution = setup.session(userId, channelId).execute(command);
-  await vi.waitFor(() => {
-    expect(setup.outputs().length).toBeGreaterThan(outputsBefore);
-  });
-  await setup.reply(userId, reply, channelId);
-  await execution;
-  return lastOutput(setup);
-}
-
 function crossRuntime(setup: TestSetup, profileId: string): AgentRuntime {
   const profile = setup.host.findProfile(profileId);
   return setup.host.ensureRuntime(profileId, { mode: "cross", channels: profile!.channels });
@@ -94,8 +83,10 @@ describe("contributed standard context commands", () => {
       expect(stats.plan?.throughEntryId).toBe(throughEntryId);
       expect(stats.plan?.droppedEntries).toBe(0);
 
-      const output = await executeWithReply(setup, "alice", "ishiki.standard.compact tiny/main", "确认");
+      await setup.session("alice").execute("ishiki.standard.compact tiny/main -y");
+      const output = lastOutput(setup);
       expect(output).toContain("压缩完成");
+      expect(output).not.toContain('回复"确认"继续执行');
       const entries = await runtime.storage.read();
       const anchor = entries.findLast((entry) => entry.type === "ishiki.compact");
       expect(anchor?.data.lastEntryId).toBe(throughEntryId);

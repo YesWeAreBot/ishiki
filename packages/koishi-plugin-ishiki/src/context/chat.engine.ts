@@ -14,7 +14,7 @@ import { Service, type Context } from "koishi";
 import type Logger from "reggol";
 import Schema from "schemastery";
 
-import { confirm } from "../commands/context.js";
+import { CONFIRM_OPTION, confirm } from "../commands/context.js";
 import { expectRuntime, type ExtensionCommandDecl } from "../commands/contribute.js";
 import type { ExtensionContext } from "../extension.js";
 import { ManagementError } from "../management/errors.js";
@@ -975,6 +975,7 @@ export function registerChatCommands(ctx: Context): void {
       name: "ishiki.chat.shake",
       description: "手动折叠工具内容（回显计划，回复“确认”后执行）",
       decl: "[runtimeId]",
+      options: [{ name: CONFIRM_OPTION.name, decl: CONFIRM_OPTION.decl }],
       authority: 2,
       target,
       requires,
@@ -984,9 +985,8 @@ export function registerChatCommands(ctx: Context): void {
         const stats = await instance.stats();
         if (stats.maxTokens === 0) throw new ManagementError("rejected", "该 Profile 关闭了上下文预算，没有可折叠的内容");
         if (stats.plan?.shake === undefined) return "当前没有可折叠的工具内容";
-        if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
         const proceed = await confirm(
-          argv.session,
+          argv,
           `将折叠 ${stats.plan.shake.coveredMessages} 条消息中的工具内容（约 ${stats.plan.shake.toolTokens} tokens），释放约 ${stats.plan.shake.freedTokens} tokens，原文写入 artifact`,
         );
         if (proceed !== true) return proceed;
@@ -1001,6 +1001,7 @@ export function registerChatCommands(ctx: Context): void {
       name: "ishiki.chat.compact",
       description: "手动压缩聊天上下文（回显计划，回复“确认”后执行）",
       decl: "[runtimeId]",
+      options: [{ name: CONFIRM_OPTION.name, decl: CONFIRM_OPTION.decl }],
       authority: 2,
       target,
       requires,
@@ -1010,8 +1011,7 @@ export function registerChatCommands(ctx: Context): void {
         const stats = await instance.stats();
         if (stats.maxTokens === 0) throw new ManagementError("rejected", "该 Profile 关闭了上下文预算，没有可压缩的内容");
         if (stats.plan?.compact === undefined) return "当前无需压缩";
-        if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-        const proceed = await confirm(argv.session, `将把约 ${stats.plan.compact.coveredTokens} tokens 压入摘要，保留最近 ${stats.hotTokens} tokens`);
+        const proceed = await confirm(argv, `将把约 ${stats.plan.compact.coveredTokens} tokens 压入摘要，保留最近 ${stats.hotTokens} tokens`);
         if (proceed !== true) return proceed;
         const result = await instance.forceCompact();
         return result.appended ? `压缩完成：摘要 ${result.summaryChars} 字符，锚点 ${result.throughEntryId}` : "当前无需压缩";

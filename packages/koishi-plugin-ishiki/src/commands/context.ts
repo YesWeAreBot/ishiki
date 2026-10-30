@@ -8,8 +8,14 @@ export function operatorOf(session: Session | undefined): string {
   return `command:${session.platform}:${session.userId ?? "unknown"}`;
 }
 
-/** 破坏性操作二次确认：先回显影响范围，60 秒内回复"确认"返回 true，其余情况返回取消文案。 */
-export async function confirm(session: Session, notice: string): Promise<true | string> {
+/** 所有二次确认指令共用的跳过选项。 */
+export const CONFIRM_OPTION = { name: "yes", decl: "-y, --yes" } as const;
+
+/** 破坏性操作二次确认：带 -y 时直接放行，否则回显影响范围并等待 60 秒内的确认回复。 */
+export async function confirm(argv: Argv, notice: string): Promise<true | string> {
+  if (optionFlag(argv, "yes")) return true;
+  const session = argv.session;
+  if (session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
   await session.send(`${notice}\n回复"确认"继续执行`);
   const reply = await session.prompt(60_000);
   if (reply?.includes("确认")) return true;

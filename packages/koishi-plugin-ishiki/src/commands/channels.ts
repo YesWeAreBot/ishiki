@@ -5,7 +5,7 @@ import type { Command, Context } from "koishi";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import { overlaps, readProfileRaw, resolveProfile, type ChannelFilter } from "../profile/index.js";
-import { confirm, hasAuthority, operatorOf, optionText, positional } from "./context.js";
+import { CONFIRM_OPTION, confirm, hasAuthority, operatorOf, optionText, positional } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatChannelClaim, formatChannelList } from "./format.js";
 import { resolveChannelAddress } from "./targets.js";
@@ -88,39 +88,40 @@ export function registerChannelCommands(_ctx: Context, host: Ishiki, root: Comma
     }),
   );
 
-  channel.subcommand(".release [address]", "从当前归属 Profile 移除精确认领（通配模式请用 ishiki.profile.channel.remove）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const explicit = positional(argv, 0);
-      const address = resolveChannelAddress(explicit, argv.session);
-      const current = await channels.lookup(address);
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const proceed = await confirm(
-        argv.session,
-        `将把 ${current.address} 从 Profile ${current.profileId ?? "（无归属）"} 的认领表移除，其 Runtime 将停止并重应用`,
-      );
-      if (proceed !== true) return proceed;
-      const view = await channels.release(address, operatorOf(argv.session));
-      return `${formatChannelClaim(view)}\n释放完成。`;
-    }),
-  );
+  channel
+    .subcommand(".release [address]", "从当前归属 Profile 移除精确认领（通配模式请用 ishiki.profile.channel.remove）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const explicit = positional(argv, 0);
+        const address = resolveChannelAddress(explicit, argv.session);
+        const current = await channels.lookup(address);
+        const proceed = await confirm(argv, `将把 ${current.address} 从 Profile ${current.profileId ?? "（无归属）"} 的认领表移除，其 Runtime 将停止并重应用`);
+        if (proceed !== true) return proceed;
+        const view = await channels.release(address, operatorOf(argv.session));
+        return `${formatChannelClaim(view)}\n释放完成。`;
+      }),
+    );
 
-  channel.subcommand(".move <profileId> [address]", "把频道从当前归属迁移到目标 Profile（释放 + 认领的原子组合）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const profileId = positional(argv, 0);
-      const explicit = positional(argv, 1);
-      if (profileId === undefined) throw new ManagementError("invalid", "请提供目标 Profile 标识");
-      const address = resolveChannelAddress(explicit, argv.session);
-      const current = await channels.lookup(address);
-      if (current.profileId === undefined) throw new ManagementError("not-found", `频道 ${current.address} 当前没有激活的归属`);
-      const affected = (await host.management.profiles.status(current.profileId)).runtimes.length;
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const proceed = await confirm(
-        argv.session,
-        `频道 ${current.address}：Profile ${current.profileId} → Profile ${profileId}，${current.profileId} 的 ${affected} 个 Runtime 将停止重建`,
-      );
-      if (proceed !== true) return proceed;
-      const view = await channels.move(profileId, address, operatorOf(argv.session));
-      return `${formatChannelClaim(view)}\n迁移完成。`;
-    }),
-  );
+  channel
+    .subcommand(".move <profileId> [address]", "把频道从当前归属迁移到目标 Profile（释放 + 认领的原子组合）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const profileId = positional(argv, 0);
+        const explicit = positional(argv, 1);
+        if (profileId === undefined) throw new ManagementError("invalid", "请提供目标 Profile 标识");
+        const address = resolveChannelAddress(explicit, argv.session);
+        const current = await channels.lookup(address);
+        if (current.profileId === undefined) throw new ManagementError("not-found", `频道 ${current.address} 当前没有激活的归属`);
+        const affected = (await host.management.profiles.status(current.profileId)).runtimes.length;
+        const proceed = await confirm(
+          argv,
+          `频道 ${current.address}：Profile ${current.profileId} → Profile ${profileId}，${current.profileId} 的 ${affected} 个 Runtime 将停止重建`,
+        );
+        if (proceed !== true) return proceed;
+        const view = await channels.move(profileId, address, operatorOf(argv.session));
+        return `${formatChannelClaim(view)}\n迁移完成。`;
+      }),
+    );
 }

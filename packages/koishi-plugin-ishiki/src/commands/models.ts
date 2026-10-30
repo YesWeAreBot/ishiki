@@ -3,7 +3,18 @@ import type { Command, Context } from "koishi";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import type { ModelDecl, ProviderInput } from "../management/types.js";
-import { confirm, hasAuthority, operatorOf, optionFlag, optionNumber, optionText, parseJsonArgument, positional, positionalText } from "./context.js";
+import {
+  CONFIRM_OPTION,
+  confirm,
+  hasAuthority,
+  operatorOf,
+  optionFlag,
+  optionNumber,
+  optionText,
+  parseJsonArgument,
+  positional,
+  positionalText,
+} from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatGroupDetail, formatModelsList, formatProviderDetail } from "./format.js";
 
@@ -113,24 +124,26 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
     }),
   );
 
-  provider.subcommand(".remove <id>", "删除供应商（被引用时拒绝并列出引用）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const id = positional(argv, 0);
-      if (id === undefined) throw new ManagementError("invalid", "请提供供应商标识");
-      const operator = operatorOf(argv.session);
-      const references = await models.references(id);
-      if (references.profiles.length > 0 || references.runtimes.length > 0) {
+  provider
+    .subcommand(".remove <id>", "删除供应商（被引用时拒绝并列出引用）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const id = positional(argv, 0);
+        if (id === undefined) throw new ManagementError("invalid", "请提供供应商标识");
+        const operator = operatorOf(argv.session);
+        const references = await models.references(id);
+        if (references.profiles.length > 0 || references.runtimes.length > 0) {
+          await models.removeProvider(id, operator);
+          return;
+        }
+        const modelCount = (await models.read()).providers.find((entry) => entry.id === id)?.models.length ?? 0;
+        const proceed = await confirm(argv, `将删除供应商 ${id} 及其 ${modelCount} 个模型声明`);
+        if (proceed !== true) return proceed;
         await models.removeProvider(id, operator);
-        return;
-      }
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const modelCount = (await models.read()).providers.find((entry) => entry.id === id)?.models.length ?? 0;
-      const proceed = await confirm(argv.session, `将删除供应商 ${id} 及其 ${modelCount} 个模型声明`);
-      if (proceed !== true) return proceed;
-      await models.removeProvider(id, operator);
-      return `已删除供应商 ${id}`;
-    }),
-  );
+        return `已删除供应商 ${id}`;
+      }),
+    );
 
   const decl = model.subcommand(".decl", "模型声明管理");
 
@@ -175,25 +188,27 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
     }),
   );
 
-  decl.subcommand(".remove <provider> <id>", "删除模型声明（被引用时拒绝并列出引用）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const providerId = positional(argv, 0);
-      const modelId = positional(argv, 1);
-      if (providerId === undefined || modelId === undefined) throw new ManagementError("invalid", "请提供供应商与模型标识");
-      const operator = operatorOf(argv.session);
-      const reference = `${providerId}:${modelId}`;
-      const references = await models.references(reference);
-      if (references.profiles.length > 0 || references.runtimes.length > 0) {
+  decl
+    .subcommand(".remove <provider> <id>", "删除模型声明（被引用时拒绝并列出引用）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const providerId = positional(argv, 0);
+        const modelId = positional(argv, 1);
+        if (providerId === undefined || modelId === undefined) throw new ManagementError("invalid", "请提供供应商与模型标识");
+        const operator = operatorOf(argv.session);
+        const reference = `${providerId}:${modelId}`;
+        const references = await models.references(reference);
+        if (references.profiles.length > 0 || references.runtimes.length > 0) {
+          await models.removeDecl(providerId, modelId, operator);
+          return;
+        }
+        const proceed = await confirm(argv, `将删除模型 ${reference}`);
+        if (proceed !== true) return proceed;
         await models.removeDecl(providerId, modelId, operator);
-        return;
-      }
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const proceed = await confirm(argv.session, `将删除模型 ${reference}`);
-      if (proceed !== true) return proceed;
-      await models.removeDecl(providerId, modelId, operator);
-      return `已删除模型 ${reference}`;
-    }),
-  );
+        return `已删除模型 ${reference}`;
+      }),
+    );
 
   const group = model.subcommand(".group", "模型组管理");
 
@@ -235,23 +250,25 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
     }),
   );
 
-  group.subcommand(".remove <name>", "删除模型组（被引用时拒绝并列出引用）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const name = positional(argv, 0);
-      if (name === undefined) throw new ManagementError("invalid", "请提供模型组名称");
-      const operator = operatorOf(argv.session);
-      const references = await models.references(name);
-      if (references.profiles.length > 0 || references.runtimes.length > 0) {
+  group
+    .subcommand(".remove <name>", "删除模型组（被引用时拒绝并列出引用）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const name = positional(argv, 0);
+        if (name === undefined) throw new ManagementError("invalid", "请提供模型组名称");
+        const operator = operatorOf(argv.session);
+        const references = await models.references(name);
+        if (references.profiles.length > 0 || references.runtimes.length > 0) {
+          await models.removeGroup(name, operator);
+          return;
+        }
+        const proceed = await confirm(argv, `将删除模型组 ${name}`);
+        if (proceed !== true) return proceed;
         await models.removeGroup(name, operator);
-        return;
-      }
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const proceed = await confirm(argv.session, `将删除模型组 ${name}`);
-      if (proceed !== true) return proceed;
-      await models.removeGroup(name, operator);
-      return `已删除模型组 ${name}`;
-    }),
-  );
+        return `已删除模型组 ${name}`;
+      }),
+    );
 }
 
 function coerceDeclValue(field: string, text: string): unknown {

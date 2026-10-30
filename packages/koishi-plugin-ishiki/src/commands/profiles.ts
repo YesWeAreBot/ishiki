@@ -4,7 +4,7 @@ import { Extension } from "../extension.js";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import { serviceName } from "../registry.js";
-import { confirm, hasAuthority, operatorOf, optionText, parseJsonArgument, positional, positionalText, restArguments } from "./context.js";
+import { CONFIRM_OPTION, confirm, hasAuthority, operatorOf, optionText, parseJsonArgument, positional, positionalText, restArguments } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatCheckReport, formatPersona, formatProfileList, formatProfileView } from "./format.js";
 
@@ -167,28 +167,32 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
     }),
   );
 
-  profile.subcommand(".stop <id>", "停用 Profile（Runtime 停止，磁盘保留）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const id = positional(argv, 0);
-      if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const runtimes = (await profiles.status(id)).runtimes.length;
-      const proceed = await confirm(argv.session, `将停止 Profile ${id}（当前 ${runtimes} 个 Runtime），磁盘记录保留`);
-      if (proceed !== true) return proceed;
-      const status = await profiles.stop(id, operatorOf(argv.session));
-      return `已停用 Profile ${id}（状态 ${status.state}）`;
-    }),
-  );
+  profile
+    .subcommand(".stop <id>", "停用 Profile（Runtime 停止，磁盘保留）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const id = positional(argv, 0);
+        if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
+        const runtimes = (await profiles.status(id)).runtimes.length;
+        const proceed = await confirm(argv, `将停止 Profile ${id}（当前 ${runtimes} 个 Runtime），磁盘记录保留`);
+        if (proceed !== true) return proceed;
+        const status = await profiles.stop(id, operatorOf(argv.session));
+        return `已停用 Profile ${id}（状态 ${status.state}）`;
+      }),
+    );
 
-  profile.subcommand(".remove <id>", "删除 Profile（仅停用状态允许）", { authority: write }).action(
-    wrapAction(logger, async (argv) => {
-      const id = positional(argv, 0);
-      if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
-      if (argv.session === undefined) throw new ManagementError("rejected", "该操作需要会话确认");
-      const proceed = await confirm(argv.session, `将删除 Profile ${id} 的全部文件（含 Runtime 记录与会话日志），不可恢复`);
-      if (proceed !== true) return proceed;
-      await profiles.remove(id, operatorOf(argv.session));
-      return `已删除 Profile ${id}`;
-    }),
-  );
+  profile
+    .subcommand(".remove <id>", "删除 Profile（仅停用状态允许）", { authority: write })
+    .option(CONFIRM_OPTION.name, CONFIRM_OPTION.decl)
+    .action(
+      wrapAction(logger, async (argv) => {
+        const id = positional(argv, 0);
+        if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
+        const proceed = await confirm(argv, `将删除 Profile ${id} 的全部文件（含 Runtime 记录与会话日志），不可恢复`);
+        if (proceed !== true) return proceed;
+        await profiles.remove(id, operatorOf(argv.session));
+        return `已删除 Profile ${id}`;
+      }),
+    );
 }
