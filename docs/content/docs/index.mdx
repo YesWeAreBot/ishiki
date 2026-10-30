@@ -24,7 +24,7 @@ description: 用于构建自主 Agent 的 Bot 开发元框架
 | 引擎族 | 回答的问题 | 内置变体 |
 | --- | --- | --- |
 | 上下文（context） | 本轮向模型提供哪些输入 | standard、v3 |
-| 唤醒（wakeup） | Agent 何时运行、如何安排节律 | standard、v3、jev |
+| 唤醒（wakeup） | Agent 何时运行、如何安排节律 | standard、willingness、jev |
 | 工具调用（toolcall） | 模型交互如何组织、如何产生工具调用 | native、v3、hermes、qwen3coder、morph-xml、yaml-xml |
 
 同一个 runtime 在每一族里选择一个变体。上下文引擎检索与组织信息，形成模型输入；工具调用引擎通过 `LanguageModelV4` 中间件定义交互流程；唤醒引擎自行安排运行时机，可以基于事件判断，也可以在没有外部输入时持续调度。

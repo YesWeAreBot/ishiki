@@ -37,12 +37,12 @@ Ishiki 的模型侧行为分成三族可替换的引擎。profile 的 `context`�
 
 订阅回调会被 core 等待，耗时的判断要另起任务并自行捕获错误。开启轮次前检查 `agent.isIdle()`；异步判断返回后再检查一次。忙碌时等待、跳过还是排队，由引擎按自己的策略决定。
 
-内置的 `standard`、`v3`、`jev` 都在消息提交后判定，是三种具体的消息判定策略：私聊、@、引用与关键词命中；响应意愿累计后按概率开口；调用轻量模型判断是否值得接话。接口本身不限定触发来源。模型声明的 `wait` 条件与扩展或宿主调用的 `runtime.wake()` 是独立触发路径，直接调用 core 的 `continue`，不经过唤醒引擎。
+内置的 `standard`、`willingness`、`jev` 都在消息提交后判定，是三种具体的消息判定策略：私聊、@、引用与关键词命中；响应意愿累计后按概率开口；调用轻量模型判断是否值得接话。接口本身不限定触发来源。模型声明的 `wait` 条件与扩展或宿主调用的 `runtime.wake()` 是独立触发路径，直接调用 core 的 `continue`，不经过唤醒引擎。
 
 ## 组合：同族互斥，跨族独立
 
 - 每一族选一个变体：同一族里没有叠加或链式组合，profile 里写出的那个变体就是该 runtime 在该族使用的实现。
-- 三族分别选择：`wakeup.engine: v3` 可以搭配 `context.engine: standard` 和 `toolcall.engine: native`，每一族的参数只作用于自己。
+- 三族分别选择：`wakeup.engine: willingness` 可以搭配 `context.engine: standard` 和 `toolcall.engine: native`，每一族的参数只作用于自己。
 - `narrative` 的两个变体由独立插件 `koishi-plugin-ishiki-narrative` 提供，并按约定配套：叙事上下文在输入前放入带标记的消息，叙事工具调用读取该标记来划分历史与本轮证据。只启用 `toolcall.engine: narrative` 时，包装器找不到标记并在该轮报错；只启用 `context.engine: narrative` 可以运行，但模型拿不到叙事约定，流程不会按叙事方式推进。
 - 唤醒引擎可以独立选择，根据自己的策略安排 Agent 的运行时机。
 
@@ -59,7 +59,7 @@ profile 激活时，内核按三段配置里的名字取服务并调用 `[Servic
 | context | `standard` | 线性历史，超预算后把旧段摘要成 `ishiki.compact` 条目 |
 | context | `v3` | `<world_state>` 视窗，注入 `memory/` 记忆块 |
 | wakeup | `standard` | 私聊、@、引用与关键词四条规则 |
-| wakeup | `v3` | 响应意愿累计、衰减与概率开口 |
+| wakeup | `willingness` | 响应意愿累计、衰减与概率开口 |
 | wakeup | `jev` | 调用轻量模型判断是否值得接话 |
 | toolcall | `native` | 原生 function call |
 | toolcall | `v3`、`hermes`、`qwen3coder`、`morph-xml`、`yaml-xml` | 文本工具协议的解析与生成 |
@@ -137,7 +137,7 @@ wakeup:
 <Cards>
   <Card
     title="调整唤醒行为"
-    description="standard、v3、jev 三种变体的配置与调参"
+    description="standard、willingness、jev 三种变体的配置与调参"
     href="/docs/guides/wakeup"
   />
   <Card

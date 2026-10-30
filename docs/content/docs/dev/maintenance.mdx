@@ -70,10 +70,10 @@ bun run --filter @ishiki/docs types:check # next typegen + tsc --noEmit
 
 现有测试覆盖（vitest）：
 
-- `packages/koishi-plugin-ishiki/tests/`：toolsearch（发现/目录去重）、attachment（配额投影）、read（行选择器/截断锚点）、resources（存储/scheme 解析）。
+- `packages/koishi-plugin-ishiki/tests/`：wakeup（standard、JEV、willingness）、toolsearch（发现/目录去重）、attachment（配额投影）、read（行选择器/截断锚点）、resources（存储/scheme 解析）。
 - `packages/workspace/tests/native.spec.ts`：shell 判定、参数拼装、msys 路径转换、超时 124、输出上限。
 
-**没有自动化测试的部分**（改动时手工验证）：sandbox 的虚拟文件系统与挂载、引擎实例行为（standard 压缩、v3 意愿、jev 判定）、mcp-client 连接池、profile 装配流水线。这些依赖 Koishi 运行时或外部进程，回归验证走真实启动。
+**没有自动化测试的部分**（改动时手工验证）：sandbox 的虚拟文件系统与挂载、mcp-client 连接池、profile 装配流水线。这些依赖外部进程或完整启动环境，回归验证走真实启动。
 
 手工验证的最小路径：把三个包 link 进本地 Koishi 应用（bun link），用测试 profile 启动，观察装配日志与一次完整对话。`dumpRequests` + `debugStream` 打开可看到全部请求细节。
 

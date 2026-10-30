@@ -360,7 +360,7 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 | engine | 配置段 | 字段 |
 | --- | --- | --- |
 | `standard` | `standard` | `direct/atSelf/quoteSelf: boolean`（均默认 true）、`keywords: string[]`（默认空） |
-| `v3` | `v3` | `base: 12`、`atMention: 100`、`isQuote: 15`、`isDirectMessage: 40`、`keywords: []`、`keywordMultiplier: 1.2`、`defaultMultiplier: 1`、`maxWillingness: 100`、`decayHalfLifeSeconds: 600`、`probabilityThreshold: 55`、`probabilityAmplifier: 0.04`、`replyCost: 35` |
+| `willingness` | `willingness` | `base: 12`、`atMention: 100`、`isQuote: 15`、`isDirectMessage: 40`、`imageGain: 8`、`keywords: []`、`keywordMultiplier: 1.2`、`defaultMultiplier: 1`、`maxWillingness: 100`、`initialWillingness: 0`、`decayHalfLifeSeconds: 600`、`hotWindowSeconds: 15`、`warmWindowSeconds: 60`、`hotDecayWeight: 0.3`、`warmDecayWeight: 0.7`、`probabilityThreshold: 55`、`probabilityAmplifier: 0.04`、`replyCost: 35`、`atMentionForce/quoteForce/directForce: false`、`participationWindowSeconds: 60`、`participationInfluence: 0.5` |
 | `jev` | `jev` | `apiKey`（或环境变量 `TYPESAFE_API_KEY`，**必需**）、`model: "jev-latest"`、`endpoint: "https://api.typesafe.ai/v1/systemone"`、`threshold: 0.5`、`cooldownMs: 30000`、`timeoutMs: 1500`、`historyMessages: 8`、`instruction: ""`、`interests: []`、`rules: Partial<standard>`（默认 `{ direct: true, atSelf: true, quoteSelf: false, keywords: [] }`） |
 
 ### toolcall
@@ -375,7 +375,7 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 
 ## 默认 profile 示例
 
-仓库 `packages/koishi-plugin-ishiki/resources/profile.example.yml` 是带逐段注释的官方示例，提供 channel、cross、v3、jev 的配置示例。实际字段与默认值以各引擎和 profile 的 Schema 为准。
+仓库 `packages/koishi-plugin-ishiki/resources/profile.example.yml` 是带逐段注释的官方示例，提供 channel、cross、willingness、jev 的配置示例。实际字段与默认值以各引擎和 profile 的 Schema 为准。
 
 ## 旧字段迁移
 

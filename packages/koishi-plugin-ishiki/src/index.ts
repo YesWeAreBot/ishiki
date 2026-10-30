@@ -38,7 +38,7 @@ import {
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import type { IshikiEvent } from "./types.js";
-import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine } from "./wakeup/index.js";
+import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
 interface Route {
@@ -114,6 +114,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
 
     ctx.plugin(StandardWakeupEngine);
     ctx.plugin(JevWakeupEngine);
+    ctx.plugin(WillingnessWakeupEngine);
 
     ctx.plugin(NativeToolcallEngine);
     ctx.plugin(HermesToolcallEngine);

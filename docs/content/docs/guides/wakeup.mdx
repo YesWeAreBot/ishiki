@@ -1,6 +1,6 @@
 ---
 title: 调整唤醒行为
-description: 三种触发来源、wait 条件声明，与 standard、v3、jev 的配置
+description: 三种触发来源、wait 条件声明，与 standard、willingness、jev 的配置
 ---
 
 唤醒引擎决定 runtime 在什么时候开始一轮。输入提交与开启轮次是两条路径：消息到达只负责写入事实流，是否因此开启轮次由引擎判断；接口也允许引擎自己计时，在没有新输入时按计划运行。
@@ -75,7 +75,7 @@ runtime 负责把入站事件写进事实流，引擎在提交之后观察它们
 
 以下三种变体在消息提交后判定，适合配置消息驱动的触发策略。
 
-<Tabs groupId="wakeup-engine" items={['standard｜固定规则', 'v3｜响应意愿', 'jev｜模型判定']}>
+<Tabs groupId="wakeup-engine" items={['standard｜固定规则', 'willingness｜响应意愿', 'jev｜模型判定']}>
 <Tab value="standard｜固定规则">
 
 ### 按固定规则判定，不额外调用模型
@@ -99,28 +99,39 @@ wakeup:
 默认值：`direct`、`atSelf`、`quoteSelf` 均为 `true`，`keywords` 为空。
 
 </Tab>
-<Tab value="v3｜响应意愿">
+<Tab value="willingness｜响应意愿">
 
 ### 意愿值：多数时候沉默，偶尔自然插话
 
-v3 引擎按频道维护一个「意愿值」：被 @、被引用、私聊与普通消息分别加分，命中关键词再乘系数；分数越高，继续加分的幅度越小。意愿随时间衰减，每轮结束扣掉 `replyCost`，超过阈值后按概率开口。
+willingness 引擎按完整频道地址维护「意愿值」：平台、机器人账号与频道三者任一不同，分数就彼此独立。被 @、被引用、私聊、普通消息与图片分别加分，命中关注词再乘系数；分数越高，继续加分的幅度越小。意愿随时间衰减，确认消息发送成功后扣掉 `replyCost`，超过阈值后按概率开口。
 
 ```yaml
 wakeup:
-  engine: v3
-  v3:
+  engine: willingness
+  willingness:
     base: 12                      # 一条普通消息的基础分
     atMention: 100                # 被 @ 的加成
     isQuote: 15                   # 引用 bot 消息的加成
     isDirectMessage: 40           # 私聊的加成
+    imageGain: 8                  # 包含图片的加成
     keywords: [neko, 喵酱]        # 命中任一即乘 keywordMultiplier
     keywordMultiplier: 1.2
     defaultMultiplier: 1
     maxWillingness: 100           # 意愿上限
+    initialWillingness: 0         # 频道首次出现时的起始意愿
     decayHalfLifeSeconds: 600     # 衰减尺度（秒），数值越大衰减越慢
+    hotWindowSeconds: 15          # 最近对话窗口（秒）
+    warmWindowSeconds: 60         # 温对话窗口（秒）
+    hotDecayWeight: 0.3           # 热窗口内每秒衰减折算的权重
+    warmDecayWeight: 0.7          # 温窗口内每秒衰减折算的权重
     probabilityThreshold: 55      # 意愿超过此值才有概率开口
     probabilityAmplifier: 0.04    # 超出阈值部分换算成开口概率的系数
-    replyCost: 35                 # 每轮结束扣掉的意愿
+    replyCost: 35                 # 成功发送消息后扣掉的意愿
+    atMentionForce: false         # 被 @ 时跳过概率直接唤醒
+    quoteForce: false             # 被引用时跳过概率直接唤醒
+    directForce: false            # 收到私聊时跳过概率直接唤醒
+    participationWindowSeconds: 60 # 回复后参与加成保留的秒数
+    participationInfluence: 0.5   # 参与窗口内最高的额外加成比例
 ```
 
 调节思路：
@@ -128,8 +139,11 @@ wakeup:
 - **太话痨**：调高 `probabilityThreshold` 或 `replyCost`，或调低 `base`。
 - **太沉默**：反向调节，或调高 `decayHalfLifeSeconds` 让意愿保留更久。
 - `keywords` 命中会把本轮加分乘以 `keywordMultiplier`，话题相关时更容易被唤醒。
+- `atMentionForce`、`quoteForce`、`directForce` 分别让对应情形跳过概率判断；引擎仍会在 Agent 空闲时才开启轮次。
 
-意愿值按 `channelId` 分开记录。channel 模式下每个 runtime 只对应一个频道；cross 模式下各频道的分数独立累计，任一条消息所属的频道过线时，按概率打开共享 runtime 的一轮。
+图片加成来自平台附件事件，并与同一条入站消息的 `messageId` 关联；文本中的媒体标记不参与判定。成功发送的确认来自 `send_message` 的返回结果。脚本内调用 `send_message` 时，codemode 外层只暴露调用名称与完成状态，无法看到脚本内部的失败返回值，此时按调用完成扣费。
+
+channel 模式下每个 runtime 只对应一个频道；cross 模式下各频道的分数独立累计，任一条消息所属的完整地址过线时，按概率打开共享 runtime 的一轮。成功回复后，同一参与者、私聊或被点名的消息会在一段时间内获得参与加成；明确 @ 或引用其他人的消息不享受这项加成。
 
 </Tab>
 <Tab value="jev｜模型判定">
@@ -188,7 +202,7 @@ runtime 按需创建，计时器从引擎的 `attach` 开始。当前平台接�
 
 ## 验证与排错
 
-修改 profile 后重启插件生效。验证 standard：空闲时发一条私聊消息应立即唤醒。验证 jev 的兜底规则：空闲时，命中 `rules` 的私聊消息应直接开启轮次；判定模型的调用与冷却可以看 debug 日志中的 `wakeup jev [...]` 行。验证 v3：连续普通消息后再 @ 一次，观察是否开口；v3 不输出引擎日志，需要观察行为，或临时把 `probabilityThreshold` 调到 0 附近观察触发情况。验证 `wait`：让模型声明 `wait({ secs: 5 })`，之后不再说话，5 秒后应看到它自己开了一轮；debug 日志会出现 `wake: timer 5s expired`。等待条件只活在内存里，重启后不会恢复。
+修改 profile 后重启插件生效。验证 standard：空闲时发一条私聊消息应立即唤醒。验证 jev 的兜底规则：空闲时，命中 `rules` 的私聊消息应直接开启轮次；判定模型的调用与冷却可以看 debug 日志中的 `wakeup jev [...]` 行。验证 willingness：连续普通消息后再 @ 一次，观察是否开口；willingness 不输出引擎日志，可以临时打开 `atMentionForce`，或调低 `probabilityThreshold` 观察触发情况。验证 `wait`：让模型声明 `wait({ secs: 5 })`，之后不再说话，5 秒后应看到它自己开了一轮；debug 日志会出现 `wake: timer 5s expired`。等待条件只活在内存里，重启后不会恢复。
 
 常见问题：
 

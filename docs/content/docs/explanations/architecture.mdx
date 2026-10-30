@@ -23,7 +23,7 @@ core 暴露的 AgentPlugin 接口很宽，包含决策与改写两类钩子。Is
 
 Koishi 的 `internal/session` 事件由 `session-handler` 整形为 `ishiki.message.created` 或 `ishiki.message.deleted`，再按账号与频道找到 route，进入对应 runtime 的 `deliver(event)`。`deliver` 只做摄取：捕获平台附件，然后 `agent.send(event, { trigger: false, ifBusy: "join" })`。它不做判定，也不开启轮次。调用返回表示事件已交给 Agent；写入事实日志由存储层异步完成，提交完成的信号是 `message.appended` 通知。如果某一轮正在运行，新输入会并入该轮，并在这一步的输出批次之后一起提交。
 
-唤醒引擎可以订阅 `message.appended`，从已提交的消息中选择调度依据，也可以自行维护定时器与运行计划，调用 `agent.continue()` 开始一轮。内置的 standard、v3、jev 都在消息提交之后做判定；事件记录与这些判定分别进行。
+唤醒引擎可以订阅 `message.appended`，从已提交的消息中选择调度依据，也可以自行维护定时器与运行计划，调用 `agent.continue()` 开始一轮。内置的 standard、willingness、jev 都在消息提交之后做判定；事件记录与这些判定分别进行。
 
 唤醒还有两条不经过引擎的来路：
 

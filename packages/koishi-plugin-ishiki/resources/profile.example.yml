@@ -157,6 +157,31 @@ attachment:
 #     quoteSelf: true
 #     keywords: [neko, 喵酱]
 
+# ── profiles/willingness/profile.yaml ───────────────────────────────────────
+# 唤醒由累积意愿决定：不同消息按各自加成累计，超过阈值后按概率开口；
+# 意愿随时间衰减，确认发送成功后扣除 replyCost。
+#
+# model: openai:gpt-5.6-luna
+# context:
+#   engine: standard
+# wakeup:
+#   engine: willingness
+#   willingness:
+#     base: 12                     # 普通消息的基础分
+#     atMention: 100               # 被 @ 的加成
+#     isQuote: 15                  # 引用 bot 消息的加成
+#     isDirectMessage: 40          # 私聊的加成
+#     imageGain: 8                 # 包含图片的加成
+#     keywords: [neko, 喵酱]       # 命中任一即乘 keywordMultiplier
+#     decayHalfLifeSeconds: 600    # 意愿衰减到一半所需的加权秒数
+#     probabilityThreshold: 55     # 超过这个分数才开始产生开口概率
+#     probabilityAmplifier: 0.04   # 超出阈值部分换算成概率的系数
+#     replyCost: 35                # 成功发送后扣除的意愿
+#     atMentionForce: false        # 被 @ 时直接唤醒
+#     directForce: false           # 收到私聊时直接唤醒
+#     participationWindowSeconds: 60 # 成功回复后参与加成保留的秒数
+#     participationInfluence: 0.5  # 参与窗口内最高的额外加成比例
+
 # ── profiles/jev/profile.yaml ───────────────────────────────────────────────
 # 唤醒交给 Jev（TypeSafe）判定：规则只兜私聊与 @，其余消息都问一次模型。
 # 需要 apiKey，或环境变量 TYPESAFE_API_KEY；缺了这份 profile 会在装载时被跳过。

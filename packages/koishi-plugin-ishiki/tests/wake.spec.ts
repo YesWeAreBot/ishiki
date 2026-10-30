@@ -13,7 +13,13 @@ import { CodemodeConfig } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime } from "../src/runtime.js";
 import type { IshikiMessageCreated } from "../src/types.js";
-import { StandardWakeupInstance, type WakeupEngineInstance } from "../src/wakeup/index.js";
+import {
+  StandardWakeupInstance,
+  WillingnessWakeupConfig,
+  WillingnessWakeupInstance,
+  type WakeupEngineInstance,
+  type WillingnessAddress,
+} from "../src/wakeup/index.js";
 import { JevWakeupInstance } from "../src/wakeup/jev.engine.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY7sAAAAASUVORK5CYII=";
@@ -70,17 +76,22 @@ function reply(calls: Call[]): Response {
   );
 }
 
-function created(messageId: string, content = "hello"): CustomMessages {
+function createdIn(channelId: string, messageId: string, content = "hello", overrides: Partial<IshikiMessageCreated> = {}): CustomMessages {
   return createCustomMessage("ishiki.message.created", {
     platform: "test",
     selfId: "bot",
-    channelId: "channel",
+    channelId,
     messageId,
     timestamp: 1,
     content,
     isDirect: true,
     user: { id: "u" },
+    ...overrides,
   });
+}
+
+function created(messageId: string, content = "hello"): CustomMessages {
+  return createdIn("channel", messageId, content);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -124,6 +135,28 @@ const speakTool: ToolSet = {
     execute: async (input) => ({ ok: true, text: input.text }),
   }),
 };
+
+function sendMessageTool(success: boolean): ToolSet {
+  return {
+    send_message: tool({
+      description: "send a message",
+      inputSchema: jsonSchema<{ messages: string[] }>({
+        type: "object",
+        properties: { messages: { type: "array", items: { type: "string" } } },
+        required: ["messages"],
+      }),
+      execute: async () =>
+        success
+          ? { ok: true, ids: ["sent"] }
+          : {
+              ok: false,
+              error: { name: "SendError", message: "failed" },
+              sent: [],
+              failedAt: 0,
+            },
+    }),
+  };
+}
 
 /**
  * 订阅式测试唤醒引擎：对提交后的 created 事实逐条判定，判定为醒且空闲时直接 continue()。
@@ -187,6 +220,8 @@ async function makeRuntime(options: {
   gate?: (call: number) => Promise<void>;
   extensions?: ExtensionInstance[];
   externalPlugins?: readonly AgentPlugin[];
+  tools?: ToolSet;
+  codemode?: boolean;
 }): Promise<{ runtime: AgentRuntime; bodies: unknown[] }> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-wake-"));
   homes.push(home);
@@ -216,13 +251,13 @@ async function makeRuntime(options: {
     home,
     model: gateway.languageModel("mock:vision"),
     instructions: "test",
-    tools: { finish: createFinish(), ...speakTool },
+    tools: { finish: createFinish(), ...speakTool, ...options.tools },
     extensions: options.extensions ?? [],
     externalPlugins: options.externalPlugins,
     // 真实 standard 引擎的投影：created 折成 user 行。
     context: { renderMessages: (messages) => collapse(messages) },
     wakeup: options.wakeup ?? judgeWakeup(() => false),
-    codemode: CodemodeConfig({ enable: false }),
+    codemode: CodemodeConfig({ enable: options.codemode ?? false }),
     pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0 },
     debugStream: false,
     logger: logger as never,
@@ -541,6 +576,198 @@ describe("JEV wakeup subscription", () => {
     expect(runtime.agent.isIdle()).toBe(true);
     expect(await terminalTurns(runtime)).toBe(0);
     expect(bodies).toHaveLength(0);
+  });
+});
+
+describe("willingness wakeup engine", () => {
+  const context = {
+    domain: { mode: "channel", platform: "test", selfId: "bot", channelId: "channel" },
+    logger,
+  } as never;
+
+  it("keeps state isolated by platform, account, and channel", async () => {
+    const engine = new WillingnessWakeupInstance(
+      {
+        base: 0,
+        atMention: 100,
+        isQuote: 15,
+        isDirectMessage: 40,
+        probabilityThreshold: 100,
+        probabilityAmplifier: 0,
+      },
+      context,
+    );
+    const { runtime } = await makeRuntime({ steps: () => [], wakeup: engine });
+    const platformAddress: WillingnessAddress = { platform: "test", selfId: "bot", channelId: "shared" };
+    const accountAddress: WillingnessAddress = { platform: "other", selfId: "bot", channelId: "shared" };
+    const selfAddress: WillingnessAddress = { platform: "test", selfId: "other", channelId: "shared" };
+
+    await runtime.deliver(createdIn("shared", "platform", '<at id="bot"/>', { platform: "test", selfId: "bot", isDirect: false }));
+    await runtime.deliver(createdIn("shared", "account", "plain", { platform: "other", selfId: "bot" }));
+    await runtime.deliver(
+      createdIn("shared", "self", "quoted", {
+        platform: "test",
+        selfId: "other",
+        isDirect: false,
+        quote: { id: "quoted", user: { id: "other" } },
+      }),
+    );
+
+    await until(async () => engine.getCurrentWillingness(platformAddress) >= 99);
+    await until(async () => engine.getCurrentWillingness(accountAddress) >= 39);
+    await until(async () => engine.getCurrentWillingness(selfAddress) >= 14);
+    expect(engine.getCurrentWillingness(platformAddress)).toBeGreaterThan(99);
+    expect(engine.getCurrentWillingness(accountAddress)).toBeLessThan(41);
+    expect(engine.getCurrentWillingness(selfAddress)).toBeLessThan(16);
+  });
+
+  it("adds image willingness only to the matching message", async () => {
+    const engine = new WillingnessWakeupInstance(
+      {
+        base: 1,
+        isDirectMessage: 0,
+        imageGain: 60,
+        probabilityThreshold: 100,
+        probabilityAmplifier: 0,
+      },
+      context,
+    );
+    const { runtime } = await makeRuntime({ steps: () => [], wakeup: engine });
+    const address: WillingnessAddress = { platform: "test", selfId: "bot", channelId: "channel" };
+
+    await runtime.deliver(createdIn("channel", "plain", "plain", { isDirect: false }));
+    await until(async () => engine.getCurrentWillingness(address) >= 0.9);
+    await runtime.deliver(createdIn("channel", "image", `<img src="data:image/png;base64,${PNG}"/>`, { isDirect: false }));
+
+    await until(async () => engine.getCurrentWillingness(address) > 60);
+    expect(engine.getCurrentWillingness(address)).toBeLessThan(62);
+  });
+
+  it("charges reply cost once after a successful send_message call", async () => {
+    const engine = new WillingnessWakeupInstance(
+      {
+        base: 0,
+        isDirectMessage: 20,
+        replyCost: 7,
+        probabilityThreshold: 100,
+        probabilityAmplifier: 0,
+        directForce: true,
+        participationWindowSeconds: 0,
+      },
+      context,
+    );
+    const { runtime } = await makeRuntime({
+      steps: (index) => (index === 0 ? [{ name: "send_message", input: { messages: ["reply"] } }] : []),
+      wakeup: engine,
+      tools: sendMessageTool(true),
+    });
+    const address: WillingnessAddress = { platform: "test", selfId: "bot", channelId: "channel" };
+
+    await runtime.deliver(created("m1"));
+    await waitForTurns(runtime, 1);
+    await until(async () => engine.getCurrentWillingness(address) < 20);
+    expect(engine.getCurrentWillingness(address)).toBeGreaterThan(12);
+  });
+
+  it("leaves willingness unchanged when send_message reports failure", async () => {
+    const engine = new WillingnessWakeupInstance(
+      {
+        base: 0,
+        isDirectMessage: 20,
+        replyCost: 7,
+        probabilityThreshold: 100,
+        probabilityAmplifier: 0,
+        directForce: true,
+        participationWindowSeconds: 0,
+      },
+      context,
+    );
+    const { runtime } = await makeRuntime({
+      steps: (index) => (index === 0 ? [{ name: "send_message", input: { messages: ["reply"] } }] : []),
+      wakeup: engine,
+      tools: sendMessageTool(false),
+    });
+    const address: WillingnessAddress = { platform: "test", selfId: "bot", channelId: "channel" };
+
+    await runtime.deliver(created("m1"));
+    await waitForTurns(runtime, 1);
+    await sleep(20);
+    expect(engine.getCurrentWillingness(address)).toBeGreaterThan(19);
+  });
+
+  it("does not apply the participation bonus to a quote of someone else", async () => {
+    const engine = new WillingnessWakeupInstance(
+      {
+        base: 10,
+        atMention: 0,
+        isQuote: 0,
+        isDirectMessage: 0,
+        replyCost: 0,
+        probabilityThreshold: 100,
+        probabilityAmplifier: 0,
+        directForce: true,
+        participationInfluence: 1,
+      },
+      context,
+    );
+    const { runtime } = await makeRuntime({
+      steps: (index) => (index === 0 ? [{ name: "send_message", input: { messages: ["reply"] } }] : []),
+      wakeup: engine,
+      tools: sendMessageTool(true),
+    });
+    const address: WillingnessAddress = { platform: "test", selfId: "bot", channelId: "channel" };
+
+    await runtime.deliver(created("m1"));
+    await waitForTurns(runtime, 1);
+    const before = engine.getCurrentWillingness(address);
+    await runtime.deliver(
+      createdIn("channel", "quoted", "quoted", {
+        isDirect: false,
+        quote: { id: "quoted", user: { id: "other" } },
+      }),
+    );
+    await until(async () => engine.getCurrentWillingness(address) > before + 5);
+    expect(engine.getCurrentWillingness(address) - before).toBeLessThan(15);
+  });
+
+  it("charges codemode sends from a channel without a turn source", async () => {
+    const engine = new WillingnessWakeupInstance(
+      {
+        base: 20,
+        isDirectMessage: 0,
+        replyCost: 7,
+        probabilityThreshold: 100,
+        probabilityAmplifier: 0,
+        participationWindowSeconds: 0,
+      },
+      context,
+    );
+    const { runtime } = await makeRuntime({
+      steps: (index) => (index === 0 ? [{ name: "codemode", input: { i: "发送消息", js: 'await tools.send_message({ messages: ["reply"] });' } }] : []),
+      wakeup: engine,
+      tools: sendMessageTool(true),
+      codemode: true,
+    });
+    const address: WillingnessAddress = { platform: "test", selfId: "bot", channelId: "channel" };
+
+    await runtime.deliver(createdIn("channel", "m1", "plain", { isDirect: false }));
+    await until(async () => engine.getCurrentWillingness(address) >= 19);
+    runtime.wake();
+    await waitForTurns(runtime, 1);
+    await until(async () => engine.getCurrentWillingness(address) < 14);
+    expect(engine.getCurrentWillingness(address)).toBeLessThan(14);
+  });
+
+  it("exports the wakeup schema with the documented defaults", () => {
+    expect(WillingnessWakeupConfig({})).toMatchObject({
+      base: 12,
+      isDirectMessage: 40,
+      imageGain: 8,
+      maxWillingness: 100,
+      probabilityThreshold: 55,
+      replyCost: 35,
+      participationInfluence: 0.5,
+    });
   });
 });
 

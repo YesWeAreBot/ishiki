@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 - Removed the `compactMinNewRatio` pacing/context option together with the `compactMinNew` budget field
+- Replaced the `v3` wakeup engine and its config section with `willingness`; profiles must update the engine name and options
 
 ### Added
 - Added an opt-in `pacing.terminalGuard` that nudges the agent to send, wait, or finish when a step ends with plain text
@@ -18,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a two-pane sessions console with a filterable session list panel and a workspace view for the selected session
 - Added backward session entry paging so the newest records load first, with previous and tail cursors returned alongside the existing next cursor
 - Added date-range filtering for session lists through a shared date helper
+- Added a built-in `willingness` wakeup engine that accumulates a decaying score per channel and wakes probabilistically once a threshold is reached
+- Added optional force flags so mentions, quotes of the bot, or direct messages can bypass the probability roll
+- Charged the configured reply cost only after a send is confirmed and applied a short participation bonus for the same participant
 
 ### Changed
 - Compaction is now gated only by covered tokens; the minimum new-token throttle was removed

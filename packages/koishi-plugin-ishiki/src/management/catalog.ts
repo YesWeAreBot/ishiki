@@ -15,6 +15,7 @@ import type { EngineDescriptor, EnginesDirectory, ExtensionDescriptor, Extension
 const ENGINE_LABELS: Record<string, string> = {
   standard: "标准",
   jev: "Jev 判定",
+  willingness: "响应意愿",
   native: "原生工具调用",
   hermes: "Hermes",
   qwen3coder: "Qwen3 Coder",
