@@ -183,8 +183,8 @@ attachment:
 #     participationInfluence: 0.5  # 参与窗口内最高的额外加成比例
 
 # ── profiles/jev/profile.yaml ───────────────────────────────────────────────
-# 唤醒交给 Jev（TypeSafe）判定：规则只兜私聊与 @，其余消息都问一次模型。
-# 需要 apiKey，或环境变量 TYPESAFE_API_KEY；缺了这份 profile 会在装载时被跳过。
+# 唤醒交给 Jev 决策模型判定：规则命中时直接唤醒，其余消息合并后询问模型。
+# 模型密钥和地址写在 models.yaml；本段只保存该目录中的模型引用与本地判定参数。
 #
 # model: openai:gpt-5.6-luna
 # context:
@@ -192,33 +192,46 @@ attachment:
 # wakeup:
 #   engine: jev
 #   jev:
-#     # 三个问句各判一维，再合成一个量：
-#     #   addressed  这条是不是在跟本 bot 说
-#     #   interested  本 bot 对这个话题有没有话说（读下面的 interests）
-#     #   others     是不是别人之间的对话
-#     # 合成式 sqrt(max(addressed, interested) × (1 - others))，过 threshold 才开口。
-#     # 拆成三维而不是一个数，是因为「没人在找它，但它正好有话想说」在单问句里只能给低分。
 #
-#     # 补充判据：语气、什么时候该闭嘴都写在这里。三个问句的 criteria 是判定下限，
-#     # 这段在它之上加约束——写得好是加分，写漏了也不塌下限。身份与兴趣不进这里，见 interests。
+#     # models.yaml 需要先声明一个 type: decision、支持 choice 与 boolean 的模型：
+#     # providers:
+#     #   typesafe:
+#     #     api: typesafe-ai
+#     #     apiKey: ${TYPESAFE_API_KEY}
+#     #     models:
+#     #       - id: jev-latest
+#     #         type: decision
+#     model: typesafe:jev-latest
+#
+#     # 人格与发言约束。消息内容、引用文本和作者名字都只作为待判定数据。
 #     instruction: |
 #       neko，猫娘，话不多但会接梗。
 #       只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
 #       几个人互相寒暄时保持安静。
-#     # 本 bot 关心的话题，逐条写。只 interested 那一维读它，也是它唯一的信息来源：
-#     # 留空 = 不偏袒任何话题，判定只靠 addressed 与 others 两维。
+#     # 本 bot 关心的话题，供 interested 证据使用。
 #     interests:
 #       - LLM 工程与调试
 #       - 群聊 bot 的行为设计
 #       - TypeScript
-#     # 合成量的下限，不是单个问句的置信度：三个问句都给 0.5（都没证据）时合成恰好 0.5。
-#     # 因此 0.5 是「毫无证据也开口」的临界值，调高它收紧的是合成量。
-#     threshold: 0.5
-#     cooldownMs: 30000 # 上次开口后的静默期（毫秒）；硬命中的规则不受它约束
-#     historyMessages: 8 # 喂给模型的最近消息条数
-#     timeoutMs: 1500 # 单次判定等待上限（毫秒），超时按不唤醒处理
-#     # 兜底规则：命中即唤醒、不问模型。默认只开私聊与 @，其余交给模型。
-#     # 只在 engine: jev 这一段里写——写成 jev 同级的 standard 段不会被读。
+#
+#     threshold: 0.7 # 主动加入时的贡献门槛
+#     addressedThreshold: 0.7 # 定向消息的地址证据门槛
+#     cooldownMs: 30000 # 主动加入的冷却时间（毫秒）
+#     minIntervalMs: 2000 # 连续主动判定之间的最小间隔
+#     debounceMs: 800 # 同批消息的合并等待时间
+#     maxWaitMs: 2500 # 首批消息等待合并的最长时间
+#     conversationMs: 120000 # bot 发言后的对话延续窗口
+#     contextMaxAgeMs: 900000 # 判定可读取的历史消息最大年龄
+#     decisionMaxAgeMs: 10000 # 消息与判定结果允许等待的最长时间
+#     participationWindowMs: 300000 # 参与比例统计窗口
+#     maxParticipation: 0.25 # 窗口内主动发言允许占比
+#     minParticipationTurns: 6 # 参与比例开始生效的消息数量
+#     maxConsecutiveReplies: 4 # 连续定向回复次数上限
+#     timeoutMs: 3000 # 单次决策调用超时（毫秒）
+#     historyMessages: 16 # 判定上下文中的最近消息数量
+#     contextChars: 3000 # 判定上下文的最大字符数
+#     # 兜底规则：命中即唤醒，不调用模型。默认只开私聊与 @。
+#     # 只在 engine: jev 这一段里写；写成 jev 同级的 standard 段不会被读。
 #     rules:
 #       direct: true
 #       atSelf: true

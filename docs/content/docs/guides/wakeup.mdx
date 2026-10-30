@@ -150,27 +150,51 @@ channel 模式下每个 runtime 只对应一个频道；cross 模式下各频道
 
 ### 让模型自己判断此刻该不该开口
 
-jev 引擎把「要不要说话」交给一次轻量模型调用。它分别询问是不是在跟 bot 说话（addressed）、bot 对这个话题有没有话说（interested）、是不是别人之间的对话（others），再按 `sqrt(max(addressed, interested) × (1 - others))` 合成 0 到 1 的量，超过阈值才开口：
+jev 引擎把一批新消息合并后交给 `DecisionModelV4`。模型先给出消息关系分布，再回答七项证据概率；引擎在本地应用门槛、对话预算和参与比例，决定回复、主动加入或保持安静。多条新消息来自不同作者时，模型会先选择一个当前焦点作者，后续判定只围绕该作者的请求展开。
+
+模型目录中的决策模型需要支持 `choice` 与 `boolean` 两类问题。TypeSafe 供应商可直接声明一个 `type: decision` 的模型：
+
+```yaml
+providers:
+  typesafe:
+    api: typesafe-ai
+    apiKey: ${TYPESAFE_API_KEY}
+    models:
+      - id: jev-latest
+        type: decision
+```
+
+profile 通过模型引用选择这个条目，密钥与地址留在 `models.yaml`：
 
 ```yaml
 wakeup:
   engine: jev
   jev:
-    apiKey: your-typesafe-key      # 也可以省略，改用环境变量 TYPESAFE_API_KEY
-    model: jev-latest              # 判定模型
-    # endpoint: https://api.typesafe.ai/v1/systemone   # 默认判定服务
-    threshold: 0.5                 # 合成量的开口下限
-    cooldownMs: 30000              # 距上次开口的静默期（毫秒）
-    historyMessages: 8             # 每次判定喂给模型的最近消息条数
-    timeoutMs: 1500                # 判定超时（毫秒），超时按不唤醒处理
-    instruction: |                 # 判定的补充约束（语气、何时闭嘴）
+    model: typesafe:jev-latest     # models.yaml 中的决策模型引用
+    threshold: 0.7                 # 主动加入时的贡献门槛
+    addressedThreshold: 0.7        # 定向消息的地址证据门槛
+    cooldownMs: 30000              # 主动加入的冷却时间（毫秒）
+    minIntervalMs: 2000            # 连续主动判定之间的最小间隔
+    debounceMs: 800                # 同批消息的合并等待时间
+    maxWaitMs: 2500                # 首批消息等待合并的最长时间
+    conversationMs: 120000         # bot 发言后的对话延续窗口
+    contextMaxAgeMs: 900000        # 判定可读取的历史消息最大年龄
+    decisionMaxAgeMs: 10000        # 消息与判定结果允许等待的最长时间
+    participationWindowMs: 300000  # 参与比例统计窗口
+    maxParticipation: 0.25         # 窗口内主动发言允许占比
+    minParticipationTurns: 6       # 参与比例开始生效的消息数量
+    maxConsecutiveReplies: 4       # 连续定向回复次数上限
+    timeoutMs: 3000                # 单次决策调用超时（毫秒）
+    historyMessages: 16            # 判定上下文中的最近消息数量
+    contextChars: 3000             # 判定上下文的最大字符数
+    instruction: |                 # 人格与发言约束
       neko，猫娘，话不多但会接梗。
       只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
       几个人互相寒暄时保持安静。
-    interests:                     # 「感兴趣的话题」，只影响 interested 维度
+    interests:                     # 判断兴趣匹配时使用的议题
       - LLM 工程与调试
       - TypeScript
-    rules:                         # 兜底规则：命中即醒，不问模型
+    rules:                         # 命中后直接唤醒，不调用模型
       direct: true
       atSelf: true
       quoteSelf: false
@@ -179,16 +203,18 @@ wakeup:
 
 要点：
 
-- `threshold: 0.5` 是中性判定的边界：三个维度都给 0.5 时合成恰好 0.5。
-- `interests` 决定「bot 对什么话题有话说」，是 interested 维度唯一的信息来源；留空则该维度不偏袒任何话题。
-- 兜底 `rules` 的结构与 standard 那四项相同，只写在 `jev` 段内部。默认 `direct` 与 `atSelf` 开启，`quoteSelf` 关闭。
+- 关系分为 `addressed`、`followup`、`open`、`other`、`ambient`：直接对 bot 说话、延续 bot 刚参与的对话、向全群邀请、明确对另一个参与者说话、没有具体对象的群聊环境音。
+- `ready` 判断消息是否完整，`receptive` 判断当前氛围是否接受插话，`worthwhile` 与 `social` 分别衡量信息价值和社交理由，`closed` 判断话题是否已经结束，`withdrawn` 识别撤回或明确拒绝，`interested` 衡量与 `interests` 的匹配程度。
+- `addressed` 与未过期的 `followup` 共同构成定向信号。定向消息通过 `ready` 等门槛后可以直接回复；主动加入还要通过 `threshold`、开放度、冷却时间与参与比例。
+- 消息出现明显撤回时不回复。已结束的话题会阻止主动加入，未完成的消息会让引擎等待，避免在别人收尾或补句时强行接话。
+- `rules` 的结构与 standard 的四项相同，只写在 `jev` 段内部。默认 `direct` 与 `atSelf` 开启，`quoteSelf` 关闭。
 
 <Callout type="warn" title="前置条件">
-需要 `apiKey`（写在配置里或环境变量 `TYPESAFE_API_KEY` 中）。判定请求直接发往 `endpoint`，不经过 `models.yaml` 的模型网关。缺少密钥时，该地址首次创建 runtime 会失败，日志出现 `routing failed: wakeup engine "jev" needs an apiKey`。
+`wakeup.jev.model` 必须指向 `models.yaml` 中声明为 `type: decision` 的模型。供应商实现需要支持 `choice` 与 `boolean` 问题；缺少模型、引用类型不符或能力不足时，创建 runtime 会直接报错。
 </Callout>
 
 <Callout type="warn">
-未命中兜底规则、不在冷却期且 Agent 空闲时，每条新消息会产生一次判定调用；忙碌或冷却中的消息只进入判定窗口。
+未命中兜底规则时，一批消息在 `debounceMs` 与 `maxWaitMs` 的范围内合并，再由 Agent 空闲状态决定何时请求模型。忙碌期间的新消息进入等待队列；成功发言后，同一轮已经覆盖的消息会被清除。
 </Callout>
 
 </Tab>
@@ -202,12 +228,13 @@ runtime 按需创建，计时器从引擎的 `attach` 开始。当前平台接�
 
 ## 验证与排错
 
-修改 profile 后重启插件生效。验证 standard：空闲时发一条私聊消息应立即唤醒。验证 jev 的兜底规则：空闲时，命中 `rules` 的私聊消息应直接开启轮次；判定模型的调用与冷却可以看 debug 日志中的 `wakeup jev [...]` 行。验证 willingness：连续普通消息后再 @ 一次，观察是否开口；willingness 不输出引擎日志，可以临时打开 `atMentionForce`，或调低 `probabilityThreshold` 观察触发情况。验证 `wait`：让模型声明 `wait({ secs: 5 })`，之后不再说话，5 秒后应看到它自己开了一轮；debug 日志会出现 `wake: timer 5s expired`。等待条件只活在内存里，重启后不会恢复。
+修改 profile 后重启插件生效。验证 standard：空闲时发一条私聊消息应立即唤醒。验证 jev 的兜底规则：空闲时，命中 `rules` 的私聊消息应直接开启轮次。验证 jev 的模型判定：关闭 `rules.direct` 与 `rules.atSelf`，发送一条完整、明确的请求，观察 debug 日志中的 `JEV wakes`、`JEV waits` 与模型调用。验证 willingness：连续普通消息后再 @ 一次，观察是否开口；willingness 不输出引擎日志，可以临时打开 `atMentionForce`，或调低 `probabilityThreshold` 观察触发情况。验证 `wait`：让模型声明 `wait({ secs: 5 })`，之后不再说话，5 秒后应看到它自己开了一轮；debug 日志会出现 `wake: timer 5s expired`。等待条件只活在内存里，重启后不会恢复。
 
 常见问题：
 
-- **日志 `routing failed: wakeup engine "jev" needs an apiKey`**：补密钥或环境变量 `TYPESAFE_API_KEY`，然后重启。该地址在补齐之前无法建立 runtime。
-- **jev 判定永远不醒**：检查 `timeoutMs` 是否过短、`endpoint` 是否可达、`threshold` 是否过高；冷却期与忙碌状态也会跳过判定。
+- **创建 runtime 时提示模型不存在或类型错误**：检查 `models.yaml` 是否存在 `wakeup.jev.model` 指向的条目，并把模型声明为 `type: decision`。
+- **创建 runtime 时提示必须支持 `choice` 与 `boolean`**：当前决策模型的能力不足，需要更换为支持这两类问题类型的供应商模型。
+- **jev 判定永远不醒**：检查 `timeoutMs` 是否过短、模型接口是否可达、`threshold` 与 `addressedThreshold` 是否过高；冷却期、连续回复预算与参与比例也会让引擎保持安静。
 - **rules 写成 `jev` 的同级段不生效**：兜底规则必须写在 `jev:` 段内部。
 - **消息进来却迟迟没有回应**：可能还在 `wait` 声明的窗口里，也可能被引擎的冷却期或概率跳过。消息已在事实流中，下一次醒来会一并处理。
 - **它再也不自动醒来了**：上一轮可能没有排定 `wait`，或轮次以失败结束导致声明被丢弃；引擎规则、冷却期与外部唤醒仍按各自条件生效。

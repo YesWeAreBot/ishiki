@@ -361,7 +361,7 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 | --- | --- | --- |
 | `standard` | `standard` | `direct/atSelf/quoteSelf: boolean`（均默认 true）、`keywords: string[]`（默认空） |
 | `willingness` | `willingness` | `base: 12`、`atMention: 100`、`isQuote: 15`、`isDirectMessage: 40`、`imageGain: 8`、`keywords: []`、`keywordMultiplier: 1.2`、`defaultMultiplier: 1`、`maxWillingness: 100`、`initialWillingness: 0`、`decayHalfLifeSeconds: 600`、`hotWindowSeconds: 15`、`warmWindowSeconds: 60`、`hotDecayWeight: 0.3`、`warmDecayWeight: 0.7`、`probabilityThreshold: 55`、`probabilityAmplifier: 0.04`、`replyCost: 35`、`atMentionForce/quoteForce/directForce: false`、`participationWindowSeconds: 60`、`participationInfluence: 0.5` |
-| `jev` | `jev` | `apiKey`（或环境变量 `TYPESAFE_API_KEY`，**必需**）、`model: "jev-latest"`、`endpoint: "https://api.typesafe.ai/v1/systemone"`、`threshold: 0.5`、`cooldownMs: 30000`、`timeoutMs: 1500`、`historyMessages: 8`、`instruction: ""`、`interests: []`、`rules: Partial<standard>`（默认 `{ direct: true, atSelf: true, quoteSelf: false, keywords: [] }`） |
+| `jev` | `jev` | `model`（默认 `typesafe:jev-latest`，必须是 `models.yaml` 中的 `decision` 模型）、`threshold: 0.7`、`addressedThreshold: 0.7`、`cooldownMs: 30000`、`minIntervalMs: 2000`、`debounceMs: 800`、`maxWaitMs: 2500`、`conversationMs: 120000`、`contextMaxAgeMs: 900000`、`decisionMaxAgeMs: 10000`、`participationWindowMs: 300000`、`maxParticipation: 0.25`、`minParticipationTurns: 6`、`maxConsecutiveReplies: 4`、`timeoutMs: 3000`、`historyMessages: 16`、`contextChars: 3000`、`instruction: "你叫石矶。结合群聊语境，只在该说话时说话。"`、`interests: []`、`rules: Partial<standard>`（默认 `{ direct: true, atSelf: true, quoteSelf: false, keywords: [] }`） |
 
 ### toolcall
 
