@@ -1,7 +1,8 @@
 import path from "node:path";
 
-import { Bash, InMemoryFs, MountableFs, OverlayFs, ReadWriteFs, type FsStat } from "just-bash";
+import type { FsStat } from "just-bash";
 
+import { JAVASCRIPT_FS_BOOTSTRAP } from "./js-bootstrap.js";
 import { HOME_MOUNT, ISHIKI_MOUNT, WORKSPACE_MOUNT } from "./mounts.js";
 import { ResourceFs } from "./resource-fs.js";
 import type { ShellOptions, WorkspaceLayout, WorkspaceShell } from "./shell.js";
@@ -11,6 +12,8 @@ function traversable(stat: FsStat): FsStat {
 }
 
 export async function createSandbox(layout: WorkspaceLayout, options: ShellOptions): Promise<WorkspaceShell> {
+  // CommonJS 入口必须加载 just-bash 的 ESM 构建，它的 CJS 包无法解析 Python worker 路径。
+  const { Bash, InMemoryFs, MountableFs, OverlayFs, ReadWriteFs } = await import("just-bash");
   const { home } = options;
   class Writable extends ReadWriteFs {
     override async stat(path: string): Promise<FsStat> {
@@ -40,7 +43,7 @@ export async function createSandbox(layout: WorkspaceLayout, options: ShellOptio
     fs,
     cwd: layout.cwd,
     network: layout.network ? { dangerouslyAllowFullInternetAccess: true, denyPrivateRanges: true } : undefined,
-    javascript: layout.javascript,
+    javascript: layout.javascript ? { bootstrap: JAVASCRIPT_FS_BOOTSTRAP } : false,
     python: layout.python,
     executionLimits: { maxOutputSize: layout.maxExecutionOutputBytes },
   });

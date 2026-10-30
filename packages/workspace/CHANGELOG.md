@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added a Node-compatible `fs` bootstrap to the JavaScript sandbox so guest code gets `Stats`, `Dirent`, `readdir` options, and error codes instead of the flattened bridge shapes
 ## [0.0.3] - 2026-10-29
 
 ### Changed
