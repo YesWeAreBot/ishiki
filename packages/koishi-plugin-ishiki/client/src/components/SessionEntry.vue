@@ -126,6 +126,12 @@ const kind = computed(() => {
   return "unknown";
 });
 
+const entryClass = computed(() => ({
+  [`is-${kind.value}`]: true,
+  "is-outgoing": kind.value === "user" || kind.value === "created",
+  "is-meta": kind.value === "event" || kind.value === "state" || kind.value === "compact" || kind.value === "projection",
+}));
+
 const label = computed(() => {
   switch (kind.value) {
     case "assistant":
@@ -322,7 +328,7 @@ function eventLabel(type: string): string {
 </script>
 
 <template>
-  <article class="log-entry">
+  <article class="log-entry" :class="entryClass">
     <div class="log-marker" :style="markerTone" :title="label">
       <Icon :name="marker" :size="12" />
     </div>

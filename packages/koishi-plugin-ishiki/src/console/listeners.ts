@@ -146,9 +146,11 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   );
 
   ctx.console.addListener("ishiki/sessions/list", (filters) => run(() => host.management.sessions.list(filters)), { authority: READ });
-  ctx.console.addListener("ishiki/sessions/entries", (id, cursor, limit, filters) => run(() => host.management.sessions.read(id, cursor, limit, filters)), {
-    authority: READ,
-  });
+  ctx.console.addListener(
+    "ishiki/sessions/entries",
+    (id, cursor, limit, filters, direction) => run(() => host.management.sessions.read(id, cursor, limit, filters, direction)),
+    { authority: READ },
+  );
 
   ctx.console.addListener("ishiki/observability/usage", (filters) => run(() => host.management.usage.snapshot(filters)), { authority: READ });
   ctx.console.addListener("ishiki/observability/cache", () => run(() => host.management.cache.read()), { authority: READ });

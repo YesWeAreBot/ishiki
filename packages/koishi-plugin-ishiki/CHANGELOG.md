@@ -15,10 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added per-attempt compaction usage records reported under a new maintenance source
 - Added a `-y/--yes` option to every command that requires interactive confirmation so the 60-second prompt can be skipped
 - Confirmation commands now reject up front when the invocation has no session to prompt
+- Added a two-pane sessions console with a filterable session list panel and a workspace view for the selected session
+- Added backward session entry paging so the newest records load first, with previous and tail cursors returned alongside the existing next cursor
+- Added date-range filtering for session lists through a shared date helper
 
 ### Changed
 - Compaction is now gated only by covered tokens; the minimum new-token throttle was removed
 - Maintenance and storage failures now surface instead of silently discarding shake and compact records
+- Session entry reads now accept an optional direction so entries can be paged forward or backward
 
 ### Fixed
 - Resolved chat compaction boundaries from the compact record's covered anchor instead of its list position

@@ -1694,61 +1694,88 @@
     font-weight: 600;
   }
 
-  .time-spine {
-    position: relative;
+  .log-entry {
     display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding-left: 4px;
+    width: min(100%, 860px);
+    margin-right: auto;
+    gap: 9px;
+    align-items: start;
   }
 
-  .log-entry {
-    display: grid;
-    grid-template-columns: 26px minmax(0, 1fr);
-    gap: 10px;
-    align-items: start;
+  .log-entry.is-outgoing {
+    flex-direction: row-reverse;
+    width: min(88%, 760px);
+    margin-right: 0;
+    margin-left: auto;
+  }
+
+  .log-entry.is-meta {
+    width: min(100%, 820px);
+    margin-right: auto;
+    margin-left: auto;
   }
 
   .log-marker {
     position: relative;
     display: grid;
     place-items: center;
-    width: 22px;
-    height: 22px;
-    margin-top: 10px;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    margin-top: 3px;
     border: 1px solid var(--line-strong);
-    border-radius: 50%;
-    background: var(--surface);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--surface) 88%, var(--surface-muted));
     color: var(--muted);
-    z-index: 1;
-  }
-
-  .log-entry:not(:last-child) .log-marker::after {
-    content: "";
-    position: absolute;
-    top: 23px;
-    bottom: -42px;
-    left: 10px;
-    width: 1px;
-    background: var(--line);
+    box-shadow: 0 1px 2px rgba(20, 32, 51, 0.05);
   }
 
   .log-card {
+    flex: 1;
     min-width: 0;
     border: 1px solid var(--line);
-    border-radius: var(--radius-lg);
+    border-radius: 6px var(--radius-lg) var(--radius-lg) var(--radius-lg);
     background: var(--surface);
+    box-shadow: 0 7px 22px -22px rgba(20, 32, 51, 0.6);
     overflow: hidden;
+  }
+
+  .log-entry.is-outgoing .log-card {
+    border-color: color-mix(in srgb, var(--accent) 76%, var(--line));
+    border-radius: var(--radius-lg) 6px var(--radius-lg) var(--radius-lg);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, var(--info)), var(--accent));
+    color: var(--on-ink);
+    box-shadow: 0 10px 26px -24px color-mix(in srgb, var(--accent) 72%, transparent);
+  }
+
+  .log-entry.is-tool .log-card {
+    background: var(--surface-inset);
+  }
+
+  .log-entry.is-meta .log-card {
+    border-style: dashed;
+    background: color-mix(in srgb, var(--surface-muted) 72%, transparent);
+    box-shadow: none;
   }
 
   .log-card-head {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 36px;
-    padding: 7px 12px;
+    min-height: 33px;
+    padding: 6px 11px;
     border-bottom: 1px solid var(--line);
     background: var(--surface-muted);
+  }
+
+  .log-entry.is-outgoing .log-card-head {
+    border-color: color-mix(in srgb, var(--on-ink) 16%, transparent);
+    background: color-mix(in srgb, var(--on-ink) 8%, transparent);
+  }
+
+  .log-entry.is-meta .log-card-head {
+    border-bottom-style: dashed;
+    background: transparent;
   }
 
   .log-who {
@@ -1764,10 +1791,17 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .log-entry.is-outgoing .log-time,
+  .log-entry.is-outgoing .log-who,
+  .log-entry.is-outgoing .muted,
+  .log-entry.is-outgoing .faint {
+    color: color-mix(in srgb, var(--on-ink) 76%, transparent);
+  }
+
   .log-body {
-    padding: 11px 13px;
-    font-size: 12.5px;
-    line-height: 1.65;
+    padding: 10px 13px 11px;
+    font-size: 13px;
+    line-height: 1.68;
   }
 
   .log-body p {
@@ -1778,6 +1812,12 @@
     max-width: 78ch;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .log-entry.is-outgoing .log-text,
+  .log-entry.is-outgoing .log-body p {
+    color: var(--on-ink);
   }
 
   .log-text.clamped {
@@ -1818,6 +1858,11 @@
     color: var(--accent-ink);
     font-size: 11px;
     font-weight: 600;
+  }
+
+  .log-entry.is-outgoing .log-toggle {
+    color: var(--on-ink);
+    text-decoration-color: color-mix(in srgb, var(--on-ink) 52%, transparent);
   }
 
   .log-toggle:hover {
@@ -1914,10 +1959,11 @@
     font-size: 10px;
   }
 
-  .load-more {
-    display: flex;
-    justify-content: center;
-    padding: 12px;
+  .log-entry.is-outgoing .badge,
+  .log-entry.is-outgoing .msg-target {
+    border-color: color-mix(in srgb, var(--on-ink) 28%, transparent);
+    background: color-mix(in srgb, var(--on-ink) 9%, transparent);
+    color: var(--on-ink);
   }
 
   /* Charts and data */

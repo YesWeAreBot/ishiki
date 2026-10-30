@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -169,10 +169,27 @@ describe("Ishiki management interfaces", () => {
     expect(second.entries.map((entry) => entry.id)).toEqual(["c", "d"]);
     expect(second.corrupt).toEqual([]);
     expect(second.nextCursor).toBeUndefined();
+    expect(second.tailCursor).toBeDefined();
+
+    const latest = await management.sessions.read("demo/main", undefined, 2, {}, "backward");
+    expect(latest.entries.map((entry) => entry.id)).toEqual(["c", "d"]);
+    expect(latest.corrupt).toEqual([]);
+    expect(latest.previousCursor).toBeDefined();
+    expect(latest.nextCursor).toBeUndefined();
+    expect(latest.tailCursor).toBe(second.tailCursor);
+
+    const older = await management.sessions.read("demo/main", latest.previousCursor, 10, {}, "backward");
+    expect(older.entries.map((entry) => entry.id)).toEqual(["a", "b"]);
+    expect(older.corrupt).toEqual([{ line: 2, error: expect.any(String) }]);
+    expect(older.previousCursor).toBeUndefined();
 
     const filtered = await management.sessions.read("demo/main", undefined, 1, { role: "assistant" });
     expect(filtered.entries.map((entry) => entry.id)).toEqual(["c"]);
     expect(filtered.nextCursor).toBeDefined();
+
+    const filteredBackward = await management.sessions.read("demo/main", undefined, 1, { role: "assistant" }, "backward");
+    expect(filteredBackward.entries.map((entry) => entry.id)).toEqual(["c"]);
+    expect(filteredBackward.previousCursor).toBeDefined();
 
     await Promise.all([management.usage.sync(), management.usage.sync(), management.usage.sync()]);
     const usage = await management.usage.snapshot();
@@ -180,6 +197,35 @@ describe("Ishiki management interfaces", () => {
     expect(usage.totals.input).toBe(10);
     expect(usage.totals.cacheRead).toBe(2);
     expect(usage.totals.output).toBe(5);
+  });
+
+  it("reads UTF-8 CRLF logs backward and resumes live from the tail cursor", async () => {
+    const instance = await start();
+    const management = instance.get("ishiki")!.management;
+    const home = path.join(dataPath!, "profiles", "demo", "runtimes", "unicode");
+    await mkdir(home, { recursive: true });
+    await writeFile(path.join(home, "runtime.json"), JSON.stringify({ id: "demo/unicode", profileId: "demo", domain: { mode: "cross" }, createdAt: 1 }));
+    const entries = ["第一条消息", "第二条消息", "第三条消息"].map((text, index) => ({
+      id: String(index + 1),
+      type: "message",
+      timestamp: index + 1,
+      data: { role: index === 1 ? "assistant" : "user", content: [{ type: "text", text }] },
+    }));
+    const file = path.join(home, "events.jsonl");
+    await writeFile(file, [JSON.stringify(entries[0]), JSON.stringify(entries[1])].join("\r\n"));
+
+    const latest = await management.sessions.read("demo/unicode", undefined, 1, {}, "backward");
+    expect(latest.entries.map((entry) => entry.id)).toEqual(["2"]);
+    expect(latest.previousCursor).toBeDefined();
+
+    const older = await management.sessions.read("demo/unicode", latest.previousCursor, 1, {}, "backward");
+    expect(older.entries.map((entry) => entry.id)).toEqual(["1"]);
+    expect(older.previousCursor).toBeUndefined();
+
+    await appendFile(file, `\r\n${JSON.stringify(entries[2])}\r\n`);
+    const live = await management.sessions.read("demo/unicode", latest.tailCursor, 10, {}, "forward");
+    expect(live.entries.map((entry) => entry.id)).toEqual(["3"]);
+    expect(live.nextCursor).toBeUndefined();
   });
 
   it("uses the recorded runtime id once and accepts a null cursor", async () => {

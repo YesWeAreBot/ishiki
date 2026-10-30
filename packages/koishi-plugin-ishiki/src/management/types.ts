@@ -254,6 +254,8 @@ export interface SessionEntries {
   entries: LogEntry[];
   corrupt: CorruptLine[];
   nextCursor?: string;
+  previousCursor?: string;
+  tailCursor?: string;
   stats: { entries: number; messages: number; turns: number; tokens: number; corrupt: number };
 }
 
@@ -263,6 +265,8 @@ export interface SessionEntryFilters {
   from?: number;
   to?: number;
 }
+
+export type SessionReadDirection = "forward" | "backward";
 
 /* Observability */
 

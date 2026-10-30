@@ -16,6 +16,7 @@ import type {
   SessionEntries,
   SessionEntryFilters,
   SessionFilters,
+  SessionReadDirection,
   SessionSummary,
   UsageRecord,
 } from "./types.js";
@@ -38,6 +39,7 @@ interface FileStats {
   tokens: number;
   corrupt: number;
   lastActivity?: number;
+  lines: number;
 }
 
 interface UsageScan {
@@ -111,6 +113,58 @@ async function scanLines(
     }
     buffer += decoder.end();
     if (buffer.length > 0) visit(buffer.replace(/\r$/, ""), lineStart, line, lineStart + Buffer.byteLength(buffer, "utf8"));
+  } finally {
+    await handle.close();
+  }
+}
+
+/** 从游标前一行开始反向读取 JSONL，用于优先返回最新记录。 */
+async function scanLinesBackward(
+  file: string,
+  endOffset: number,
+  endLine: number,
+  visit: (text: string, offset: number, line: number) => boolean | void,
+): Promise<void> {
+  const handle = await open(file, "r");
+  try {
+    const info = await handle.stat();
+    let lineEnd = Math.min(endOffset, info.size);
+    let line = endLine - 1;
+    if (lineEnd <= 0) return;
+
+    // 游标位于行首；文件末尾的换行不能生成一个额外空行。
+    const lastByte = Buffer.allocUnsafe(1);
+    await handle.read(lastByte, 0, 1, lineEnd - 1);
+    if (lastByte[0] === 10) lineEnd--;
+
+    while (lineEnd >= 0) {
+      let boundary = -1;
+      let scanEnd = lineEnd;
+      while (scanEnd > 0 && boundary < 0) {
+        const scanStart = Math.max(0, scanEnd - CHUNK);
+        const chunk = Buffer.allocUnsafe(scanEnd - scanStart);
+        const { bytesRead } = await handle.read(chunk, 0, chunk.length, scanStart);
+        if (bytesRead === 0) break;
+        const index = chunk.subarray(0, bytesRead).lastIndexOf(10);
+        if (index >= 0) boundary = scanStart + index;
+        scanEnd = scanStart;
+      }
+
+      const start = boundary < 0 ? 0 : boundary + 1;
+      const length = lineEnd - start;
+      const bytes = Buffer.allocUnsafe(length);
+      let filled = 0;
+      while (filled < length) {
+        const { bytesRead } = await handle.read(bytes, filled, length - filled, start + filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      const text = bytes.subarray(0, filled).toString("utf8").replace(/\r$/, "");
+      if (visit(text, start, line)) return;
+      if (start === 0) return;
+      lineEnd = start - 1;
+      line--;
+    }
   } finally {
     await handle.close();
   }
@@ -217,18 +271,69 @@ export class SessionsManager {
     return summaries.sort((left, right) => (right.lastActivity ?? 0) - (left.lastActivity ?? 0));
   }
 
-  public async read(sessionId: string, cursor: string | null | undefined, limit: number, filters: SessionEntryFilters = {}): Promise<SessionEntries> {
+  public async read(
+    sessionId: string,
+    cursor: string | null | undefined,
+    limit: number,
+    filters: SessionEntryFilters = {},
+    direction: SessionReadDirection = "forward",
+  ): Promise<SessionEntries> {
     const record = (await this.records()).find((entry) => entry.id === sessionId);
     if (record === undefined) throw new ManagementError("not-found", `会话不存在: ${sessionId}`);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
       throw new ManagementError("invalid", "单次读取条数需要在 1 到 500 之间");
+    }
+    if (direction !== "forward" && direction !== "backward") {
+      throw new ManagementError("invalid", `会话读取方向无效: ${direction}`);
     }
     if (!existsSync(record.file)) {
       return {
         sessionId,
         entries: [],
         corrupt: [],
+        tailCursor: "0:1",
         stats: { entries: 0, messages: 0, turns: 0, tokens: 0, corrupt: 0 },
+      };
+    }
+
+    const stats = await this.statsOf(record.file);
+    const tailCursor = `${stats.size}:${stats.lines + 1}`;
+    if (direction === "backward") {
+      const entries: LogEntry[] = [];
+      const corrupt: CorruptLine[] = [];
+      const boundary = cursor === undefined || cursor === null || cursor.length === 0 ? undefined : parseCursor(cursor);
+      let previousCursor: string | undefined;
+      await scanLinesBackward(record.file, boundary?.offset ?? stats.size, boundary?.line ?? stats.lines + 1, (text, offset, line) => {
+        if (text.length === 0) return false;
+        let entry: LogEntry;
+        try {
+          entry = JSON.parse(text) as LogEntry;
+        } catch (error) {
+          corrupt.push({ line, error: error instanceof Error ? error.message : String(error) });
+          return false;
+        }
+        if (!matches(entry, filters)) return false;
+        entries.push(entry);
+        if (entries.length < limit) return false;
+        // 已到文件起点时不能再向前分页，避免返回重复游标。
+        if (offset > 0) previousCursor = `${offset}:${line}`;
+        return true;
+      });
+      entries.reverse();
+      corrupt.reverse();
+      return {
+        sessionId,
+        entries,
+        corrupt,
+        previousCursor,
+        tailCursor,
+        stats: {
+          entries: stats.entries,
+          messages: stats.messages,
+          turns: stats.turns,
+          tokens: stats.tokens,
+          corrupt: stats.corrupt,
+        },
       };
     }
 
@@ -238,8 +343,6 @@ export class SessionsManager {
     let nextCursor: string | undefined;
     let lastOffset = start.offset;
     let lastLine = start.line;
-
-    const size = (await stat(record.file)).size;
 
     await scanLines(record.file, start.offset, start.line, (text, offset, line, nextOffset) => {
       lastOffset = nextOffset;
@@ -259,12 +362,12 @@ export class SessionsManager {
       return true;
     });
 
-    const stats = await this.statsOf(record.file);
     return {
       sessionId,
       entries,
       corrupt,
-      nextCursor: nextCursor ?? (lastOffset < size ? `${lastOffset}:${lastLine}` : undefined),
+      nextCursor: nextCursor ?? (lastOffset < stats.size ? `${lastOffset}:${lastLine}` : undefined),
+      tailCursor,
       stats: {
         entries: stats.entries,
         messages: stats.messages,
@@ -415,13 +518,14 @@ export class SessionsManager {
 
   private async statsOf(file: string): Promise<FileStats> {
     if (!existsSync(file)) {
-      return { size: 0, mtimeMs: 0, entries: 0, messages: 0, turns: 0, tokens: 0, corrupt: 0 };
+      return { size: 0, mtimeMs: 0, entries: 0, messages: 0, turns: 0, tokens: 0, corrupt: 0, lines: 0 };
     }
     const info = await stat(file);
     const cached = this.statsCache.get(file);
     if (cached !== undefined && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached;
-    const stats: FileStats = { size: info.size, mtimeMs: info.mtimeMs, entries: 0, messages: 0, turns: 0, tokens: 0, corrupt: 0 };
+    const stats: FileStats = { size: info.size, mtimeMs: info.mtimeMs, entries: 0, messages: 0, turns: 0, tokens: 0, corrupt: 0, lines: 0 };
     await scanLines(file, 0, 1, (text) => {
+      stats.lines++;
       if (text.length === 0) return false;
       let entry: LogEntry;
       try {

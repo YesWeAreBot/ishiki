@@ -17,6 +17,7 @@ import type {
   SessionEntries,
   SessionEntryFilters,
   SessionFilters,
+  SessionReadDirection,
   SessionSummary,
   UsageFilters,
   UsageSnapshot,
@@ -77,7 +78,13 @@ declare module "@koishijs/console" {
     "ishiki/runtimes/interrupt": (id: string) => Promise<ConsoleResult<RuntimeView>>;
 
     "ishiki/sessions/list": (filters?: SessionFilters) => Promise<ConsoleResult<SessionSummary[]>>;
-    "ishiki/sessions/entries": (id: string, cursor: string | undefined, limit: number, filters?: SessionEntryFilters) => Promise<ConsoleResult<SessionEntries>>;
+    "ishiki/sessions/entries": (
+      id: string,
+      cursor: string | undefined,
+      limit: number,
+      filters?: SessionEntryFilters,
+      direction?: SessionReadDirection,
+    ) => Promise<ConsoleResult<SessionEntries>>;
 
     "ishiki/observability/usage": (filters?: UsageFilters) => Promise<ConsoleResult<UsageSnapshot>>;
     "ishiki/observability/cache": () => Promise<ConsoleResult<CacheSnapshot>>;
