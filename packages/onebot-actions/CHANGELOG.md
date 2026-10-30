@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-30
+
 ### Changed
 - Per-profile `backend` and `mode` are now optional and fall back to the extension `defaultBackend` and `defaultMode`
+
 ## [0.0.3] - 2026-10-29
 
 ### Breaking Changes
@@ -41,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution.
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.3...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.4...HEAD
+[0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.3...koishi-plugin-ishiki-onebot-actions@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.2...koishi-plugin-ishiki-onebot-actions@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-onebot-actions@0.0.2

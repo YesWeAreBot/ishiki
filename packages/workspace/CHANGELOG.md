@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-30
+
 ### Added
 - Added a Node-compatible `fs` bootstrap to the JavaScript sandbox so guest code gets `Stats`, `Dirent`, `readdir` options, and error codes instead of the flattened bridge shapes
+
 ## [0.0.3] - 2026-10-29
 
 ### Changed
@@ -51,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native file tools resolve the git-bash path `/tmp` to the folder the shell itself reports, so tool paths and shell commands name the same file instead of `D:\tmp`.
 - Workspace tool descriptions state which path spellings the shell converts and that drive paths inside values handed to another program must be written `D:/...`.
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.3...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.4...HEAD
+[0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.3...koishi-plugin-ishiki-workspace@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.2...koishi-plugin-ishiki-workspace@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-workspace@0.0.2

@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-ishiki",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Ishiki core runtime for Koishi: agent loop, model gateway, profiles, engines, tools and resources",
   "keywords": [
     "agent",

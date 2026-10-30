@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-30
+
 ### Breaking Changes
 - Removed the `compactMinNewRatio` pacing/context option together with the `compactMinNew` budget field
 - Replaced the `v3` wakeup engine and its config section with `willingness`; profiles must update the engine name and options
@@ -33,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolved chat compaction boundaries from the compact record's covered anchor instead of its list position
 - Passed wait wake reasons into the continuation context so wakeups no longer start empty
 - Fell back to the author name or user id when a session author has no nickname instead of rendering `undefined`
+
 ## [0.0.3] - 2026-10-29
 
 ### Added
@@ -160,6 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attachment extraction requires a payload or URL up front.
 - The first request carries the baseline tool catalog instead of an empty one.
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.3...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.4...HEAD
+[0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.3...koishi-plugin-ishiki@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.2...koishi-plugin-ishiki@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki@0.0.2
