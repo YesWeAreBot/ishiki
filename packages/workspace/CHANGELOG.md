@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added a bundled `sandbox-environment` skill that routes work across just-bash, QuickJS, WebAssembly Python, SQLite, networking, and sandbox files, with detailed runtime references loaded only when needed
+
+### Changed
+- The sandbox prompt now names just-bash, describes the partial Node.js module surface and missing Python modules, and points to the environment skill for runtime-specific details
+
+### Fixed
+- The JavaScript `fs` bootstrap now provides `constants`, `Stats` and `Dirent` instances, `accessSync`, file URL path arguments, `COPYFILE_EXCL`, and `Buffer` results from `readFileBuffer`
+- Sandbox commands now pass the configured timeout to just-bash's overall, JavaScript, Python, and SQLite limits, so `js-exec` no longer stops at its built-in 30-second limit
+
 ## [0.0.4] - 2026-10-30
 
 ### Added

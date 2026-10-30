@@ -6,6 +6,7 @@ import type { Logger } from "koishi";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { WorkspaceConfig } from "../src/config.js";
+import { sandboxExecutionLimits } from "../src/execution-limits.js";
 import { createSandbox } from "../src/sandbox.js";
 import { resolveLayout, type ShellOptions } from "../src/shell.js";
 
@@ -49,6 +50,33 @@ async function mount(overrides: Partial<WorkspaceConfig> = {}) {
   const shellOptions = options(overrides);
   return createSandbox(resolveLayout(shellOptions), shellOptions);
 }
+
+describe("sandbox execution limits", () => {
+  it("applies the command timeout to every sandboxed runtime", () => {
+    expect(sandboxExecutionLimits({ timeoutMs: 45_000, maxExecutionOutputBytes: 1024 })).toEqual({
+      maxOutputSize: 1024,
+      maxExecutionTimeMs: 45_000,
+      maxSqliteTimeoutMs: 45_000,
+      maxPythonTimeoutMs: 45_000,
+      maxJsTimeoutMs: 45_000,
+    });
+  });
+
+  it("uses the configured timeout for the just-bash execution deadline", async () => {
+    const shell = await mount({ timeoutMs: 300 });
+    const result = await shell.exec("sleep 30");
+    expect(result.exitCode).toBe(124);
+    expect(result.stderr).toContain("sleep exceeded its execution deadline");
+  });
+
+  it("uses the configured timeout for the JavaScript runtime", async () => {
+    const shell = await mount({ timeoutMs: 300, javascript: true });
+    await shell.write("/home/workspace/loop.mjs", "while (true) {}");
+    const result = await shell.exec("js-exec /home/workspace/loop.mjs");
+    expect(result.exitCode).toBe(124);
+    expect(result.stderr).toContain("js-exec exceeded its execution deadline");
+  });
+});
 
 describe("sandbox Python", () => {
   it("keeps Python disabled unless configured", async () => {
@@ -104,6 +132,69 @@ describe("sandbox Python", () => {
 });
 
 describe("sandbox JavaScript fs", () => {
+  it("bridges Node fs constants, classes, access checks, URLs and buffer reads", async () => {
+    const shell = await mount({ javascript: true });
+    await shell.write("/home/workspace/input.txt", "hello");
+    await shell.write(
+      "/home/workspace/check.mjs",
+      [
+        "import fs from 'node:fs';",
+        "const input = '/home/workspace/input.txt';",
+        "const url = new URL('file:///home/workspace/input.txt');",
+        "fs.accessSync(url, fs.constants.R_OK);",
+        "let accessError;",
+        "try {",
+        "  fs.accessSync('/home/workspace/missing.txt', fs.constants.F_OK);",
+        "} catch (error) {",
+        "  accessError = { code: error.code, syscall: error.syscall, path: error.path };",
+        "}",
+        "let copyError;",
+        "fs.writeFileSync('/home/workspace/copy.txt', 'old');",
+        "try {",
+        "  fs.copyFileSync(url, new URL('file:///home/workspace/copy.txt'), fs.constants.COPYFILE_EXCL);",
+        "} catch (error) {",
+        "  copyError = { code: error.code, syscall: error.syscall };",
+        "}",
+        "const entries = fs.readdirSync('/home/workspace', { withFileTypes: true });",
+        "const urlEntries = fs.readdirSync(new URL('file:///home/workspace/'), { withFileTypes: true });",
+        "console.log(JSON.stringify({",
+        "  constants: {",
+        "    fok: fs.constants.F_OK,",
+        "    rok: fs.constants.R_OK,",
+        "    wok: fs.constants.W_OK,",
+        "    xok: fs.constants.X_OK,",
+        "    excl: fs.constants.COPYFILE_EXCL,",
+        "  },",
+        "  accessError,",
+        "  copyError,",
+        "  statClass: fs.statSync(input) instanceof fs.Stats,",
+        "  direntClass: entries.every((entry) => entry instanceof fs.Dirent),",
+        "  urlEntries: urlEntries.map((entry) => entry.name).sort(),",
+        "  urlText: fs.readFileSync(url, 'utf8'),",
+        "  bufferText: fs.readFileBuffer(input).toString('utf8'),",
+        "  bufferClass: Buffer.isBuffer(fs.readFileBuffer(input)),",
+        "  promisedAccess: await fs.promises.access(input, fs.constants.R_OK).then(() => true),",
+        "}));",
+      ].join("\n"),
+    );
+
+    const executed = await shell.exec("js-exec /home/workspace/check.mjs");
+    expect(executed.stderr).toBe("");
+    expect(executed.exitCode).toBe(0);
+    expect(JSON.parse(executed.stdout)).toEqual({
+      constants: { fok: 0, rok: 4, wok: 2, xok: 1, excl: 1 },
+      accessError: { code: "ENOENT", syscall: "access", path: "/home/workspace/missing.txt" },
+      copyError: { code: "EEXIST", syscall: "copyfile" },
+      statClass: true,
+      direntClass: true,
+      urlEntries: ["check.mjs", "copy.txt", "input.txt"],
+      urlText: "hello",
+      bufferText: "hello",
+      bufferClass: true,
+      promisedAccess: true,
+    });
+  });
+
   it("matches Node behavior for errors, stats, readdir and recursive mkdir", async () => {
     const shell = await mount({ javascript: true });
     await shell.write("/home/workspace/input.txt", "hello");
@@ -216,5 +307,11 @@ describe("sandbox JavaScript fs", () => {
       { name: "input.txt", file: true, directory: false },
     ]);
     expect(result.recursive).toEqual(["nested"]);
+  });
+
+  it("mounts the bundled sandbox environment skill", async () => {
+    const shell = await mount();
+    expect(shell.skills.map((skill) => skill.name)).toContain("sandbox-environment");
+    expect(await shell.read("/home/skills/sandbox-environment/SKILL.md")).toContain("just-bash");
   });
 });

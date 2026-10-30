@@ -39,6 +39,27 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
     ELOOP: -40
   };
 
+  var constants = {
+    F_OK: 0,
+    R_OK: 4,
+    W_OK: 2,
+    X_OK: 1,
+    COPYFILE_EXCL: 1,
+    COPYFILE_FICLONE: 2,
+    COPYFILE_FICLONE_FORCE: 4,
+    S_IFMT: 61440,
+    S_IFREG: 32768,
+    S_IFDIR: 16384,
+    S_IFLNK: 40960,
+    O_RDONLY: 0,
+    O_WRONLY: 1,
+    O_RDWR: 2,
+    O_CREAT: 64,
+    O_EXCL: 128,
+    O_TRUNC: 512,
+    O_APPEND: 1024
+  };
+
   function failure(error, syscall, target, destination) {
     if (!(error instanceof Error)) error = new Error(String(error));
     var matched = /^([A-Z][A-Z0-9]+):/.exec(error.message);
@@ -53,6 +74,22 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
     }
     if (destination !== undefined) error.dest = String(destination);
     return error;
+  }
+
+  function filePath(value) {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      typeof value.href !== 'string' ||
+      typeof value.protocol !== 'string'
+    ) return value;
+    if (value.protocol !== 'file:') {
+      throw failure(new Error('ERR_INVALID_URL_SCHEME: The URL must be of scheme file, received ' + value.protocol), 'open', value.href);
+    }
+    if (value.hostname && value.hostname !== 'localhost') {
+      throw failure(new Error('ERR_INVALID_FILE_URL_HOST: File URL host must be "localhost" or empty, received ' + value.hostname), 'open', value.href);
+    }
+    return decodeURIComponent(value.pathname);
   }
 
   function bridge(hostName, syscall, target, args, destination) {
@@ -75,29 +112,31 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
     return String(value);
   }
 
+  function Stats() {}
+  function Dirent() {}
+
   function stats(value) {
     var mtime = value.mtime instanceof Date ? value.mtime : new Date(value.mtime);
     var size = Number(value.size);
-    var result = {
-      dev: 0,
-      ino: 0,
-      mode: Number(value.mode),
-      nlink: value.isDirectory ? 2 : 1,
-      uid: 1000,
-      gid: 1000,
-      rdev: 0,
-      size: size,
-      blksize: 4096,
-      blocks: Math.ceil(size / 512),
-      atime: mtime,
-      mtime: mtime,
-      ctime: mtime,
-      birthtime: mtime,
-      atimeMs: mtime.getTime(),
-      mtimeMs: mtime.getTime(),
-      ctimeMs: mtime.getTime(),
-      birthtimeMs: mtime.getTime()
-    };
+    var result = Object.create(Stats.prototype);
+    result.dev = 0;
+    result.ino = 0;
+    result.mode = Number(value.mode);
+    result.nlink = value.isDirectory ? 2 : 1;
+    result.uid = 1000;
+    result.gid = 1000;
+    result.rdev = 0;
+    result.size = size;
+    result.blksize = 4096;
+    result.blocks = Math.ceil(size / 512);
+    result.atime = mtime;
+    result.mtime = mtime;
+    result.ctime = mtime;
+    result.birthtime = mtime;
+    result.atimeMs = mtime.getTime();
+    result.mtimeMs = mtime.getTime();
+    result.ctimeMs = mtime.getTime();
+    result.birthtimeMs = mtime.getTime();
     result.isFile = function () { return value.isFile; };
     result.isDirectory = function () { return value.isDirectory; };
     result.isSymbolicLink = function () { return value.isSymbolicLink; };
@@ -109,7 +148,10 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
   }
 
   function dirent(name, parentPath, value) {
-    var result = { name: String(name), parentPath: String(parentPath), path: String(parentPath) };
+    var result = Object.create(Dirent.prototype);
+    result.name = String(name);
+    result.parentPath = String(parentPath);
+    result.path = String(parentPath);
     result.isFile = function () { return value.isFile; };
     result.isDirectory = function () { return value.isDirectory; };
     result.isSymbolicLink = function () { return value.isSymbolicLink; };
@@ -125,7 +167,8 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
   }
 
   function readStats(path, follow) {
-    return bridge('fsStat', follow ? 'stat' : 'lstat', path, [path, !follow]);
+    var target = filePath(path);
+    return bridge('fsStat', follow ? 'stat' : 'lstat', target, [target, !follow]);
   }
 
   function collect(path, relative, options, output) {
@@ -141,10 +184,11 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
   }
 
   function readdir(path, options) {
+    var target = filePath(path);
     if (typeof options === 'string') options = { encoding: options };
     options = options || {};
     var output = [];
-    collect(path, '', { recursive: Boolean(options.recursive), withFileTypes: Boolean(options.withFileTypes) }, output);
+    collect(target, '', { recursive: Boolean(options.recursive), withFileTypes: Boolean(options.withFileTypes) }, output);
     if (options.encoding === 'buffer') return output.map(function (entry) {
       return typeof entry === 'string' ? Buffer.from(entry) : entry;
     });
@@ -152,7 +196,7 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
   }
 
   function firstCreated(path) {
-    var text = String(path);
+    var text = String(filePath(path));
     var absolute = text.charAt(0) === '/';
     var parts = text.split('/');
     var current = '';
@@ -171,24 +215,28 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
   }
 
   fs.readFileBuffer = function (path) {
+    var target = filePath(path);
     try {
-      return raw.readFileBuffer(path);
+      return Buffer.from(raw.readFileBuffer(target));
     } catch (error) {
-      throw failure(error, 'open', path);
+      throw failure(error, 'open', target);
     }
   };
   fs.readFileSync = function (path, options) {
+    var target = filePath(path);
     try {
-      return raw.readFileSync(path, options);
+      return raw.readFileSync(target, options);
     } catch (error) {
-      throw failure(error, 'open', path);
+      throw failure(error, 'open', target);
     }
   };
   fs.writeFileSync = function (path, data) {
-    bridge('fsWrite', 'open', path, [path, bytes(data)]);
+    var target = filePath(path);
+    bridge('fsWrite', 'open', target, [target, bytes(data)]);
   };
   fs.appendFileSync = function (path, data) {
-    bridge('fsAppend', 'open', path, [path, bytes(data)]);
+    var target = filePath(path);
+    bridge('fsAppend', 'open', target, [target, bytes(data)]);
   };
   fs.statSync = function (path) {
     return stats(readStats(path, true));
@@ -198,45 +246,83 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
   };
   fs.readdirSync = readdir;
   fs.mkdirSync = function (path, options) {
+    var target = filePath(path);
     var recursive = Boolean(options && typeof options === 'object' && options.recursive);
-    var created = recursive ? firstCreated(path) : undefined;
-    bridge('fsMkdir', 'mkdir', path, [path, recursive]);
+    var created = recursive ? firstCreated(target) : undefined;
+    bridge('fsMkdir', 'mkdir', target, [target, recursive]);
     return created;
   };
   fs.rmSync = function (path, options) {
-    bridge('fsRm', 'rm', path, [path, Boolean(options && options.recursive), Boolean(options && options.force)]);
+    var target = filePath(path);
+    bridge('fsRm', 'rm', target, [target, Boolean(options && options.recursive), Boolean(options && options.force)]);
   };
   fs.existsSync = function (path) {
+    var target = filePath(path);
     try {
-      return bridge('fsExists', 'access', path, [path]);
+      return bridge('fsExists', 'access', target, [target]);
     } catch (error) {
       return false;
     }
   };
+  fs.accessSync = function (path, mode) {
+    var target = filePath(path);
+    if (!bridge('fsExists', 'access', target, [target])) {
+      throw failure(new Error("ENOENT: no such file or directory, access '" + target + "'"), 'access', target);
+    }
+    var flags = mode === undefined ? 0 : Number(mode);
+    if ((flags & ~7) !== 0) {
+      throw failure(new Error("EINVAL: invalid mode argument, access '" + target + "'"), 'access', target);
+    }
+    if (flags === 0) return;
+    var permissions = stats(readStats(target, true)).mode & 511;
+    var required = 0;
+    if (flags & constants.R_OK) required |= 256;
+    if (flags & constants.W_OK) required |= 128;
+    if (flags & constants.X_OK) required |= 64;
+    if ((permissions & required) !== required) {
+      throw failure(new Error("EACCES: permission denied, access '" + target + "'"), 'access', target);
+    }
+  };
   fs.symlinkSync = function (target, path) {
-    bridge('fsSymlink', 'symlink', path, [target, path]);
+    var link = filePath(path);
+    bridge('fsSymlink', 'symlink', link, [filePath(target), link]);
   };
   fs.readlinkSync = function (path) {
-    return bridge('fsReadlink', 'readlink', path, [path]);
+    var target = filePath(path);
+    return bridge('fsReadlink', 'readlink', target, [target]);
   };
   fs.chmodSync = function (path, mode) {
-    bridge('fsChmod', 'chmod', path, [path, Number(mode)]);
+    var target = filePath(path);
+    bridge('fsChmod', 'chmod', target, [target, Number(mode)]);
   };
   fs.realpathSync = function (path) {
-    return bridge('fsRealpath', 'realpath', path, [path]);
+    var target = filePath(path);
+    return bridge('fsRealpath', 'realpath', target, [target]);
   };
   fs.renameSync = function (from, to) {
-    bridge('fsRename', 'rename', from, [from, to], to);
+    var source = filePath(from);
+    var destination = filePath(to);
+    bridge('fsRename', 'rename', source, [source, destination], destination);
   };
-  fs.copyFileSync = function (from, to) {
-    bridge('fsCopy', 'copyfile', from, [from, to], to);
+  fs.copyFileSync = function (from, to, mode) {
+    var source = filePath(from);
+    var destination = filePath(to);
+    if ((Number(mode) || 0) & constants.COPYFILE_EXCL && fs.existsSync(destination)) {
+      throw failure(new Error("EEXIST: file already exists, copyfile '" + destination + "'"), 'copyfile', source, destination);
+    }
+    bridge('fsCopy', 'copyfile', source, [source, destination], destination);
   };
   fs.unlinkSync = function (path) {
-    bridge('fsRm', 'unlink', path, [path, false, false]);
+    var target = filePath(path);
+    bridge('fsRm', 'unlink', target, [target, false, false]);
   };
   fs.rmdirSync = function (path, options) {
-    bridge('fsRm', 'rmdir', path, [path, Boolean(options && options.recursive), false]);
+    var target = filePath(path);
+    bridge('fsRm', 'rmdir', target, [target, Boolean(options && options.recursive), false]);
   };
+  fs.constants = constants;
+  fs.Stats = Stats;
+  fs.Dirent = Dirent;
 
   var callbackNames = [
     ['readFile', fs.readFileSync],
@@ -293,10 +379,11 @@ export const JAVASCRIPT_FS_BOOTSTRAP = String.raw`
       });
     };
   })(promiseNames[index]);
-  fs.promises.access = function (path) {
+  fs.promises.access = function (path, mode) {
     return new Promise(function (resolve, reject) {
-      if (fs.existsSync(path)) resolve();
-      else reject(failure(new Error("ENOENT: no such file or directory, access '" + path + "'"), 'access', path));
+      Promise.resolve().then(function () {
+        fs.accessSync(path, mode);
+      }).then(resolve, reject);
     });
   };
 

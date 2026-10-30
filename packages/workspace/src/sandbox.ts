@@ -2,6 +2,7 @@ import path from "node:path";
 
 import type { FsStat } from "just-bash";
 
+import { sandboxExecutionLimits } from "./execution-limits.js";
 import { JAVASCRIPT_FS_BOOTSTRAP } from "./js-bootstrap.js";
 import { HOME_MOUNT, ISHIKI_MOUNT, WORKSPACE_MOUNT } from "./mounts.js";
 import { ResourceFs } from "./resource-fs.js";
@@ -45,16 +46,15 @@ export async function createSandbox(layout: WorkspaceLayout, options: ShellOptio
     network: layout.network ? { dangerouslyAllowFullInternetAccess: true, denyPrivateRanges: true } : undefined,
     javascript: layout.javascript ? { bootstrap: JAVASCRIPT_FS_BOOTSTRAP } : false,
     python: layout.python,
-    executionLimits: { maxOutputSize: layout.maxExecutionOutputBytes },
+    executionLimits: sandboxExecutionLimits(layout),
   });
 
   return {
     ...layout,
     fs,
     async exec(command, signal) {
-      const timeout = AbortSignal.timeout(layout.timeoutMs);
       try {
-        const result = await bash.exec(command, { signal: signal === undefined ? timeout : AbortSignal.any([signal, timeout]) });
+        const result = await bash.exec(command, { signal });
         return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
       } catch (error) {
         return { stdout: "", stderr: `bash: ${error instanceof Error ? error.message : String(error)}`, exitCode: 1 };

@@ -33,7 +33,9 @@ export const WorkspaceConfig: Schema<WorkspaceConfig> = Schema.object({
   python: Schema.boolean()
     .description("仅 sandbox 模式：启用 python3 / python 命令（CPython 编译成 WebAssembly）；默认关闭，开它会多一份代码执行面")
     .default(false),
-  skills: Schema.array(Schema.string()).description("额外技能目录，相对 profile 目录解析；与数据根的 skills 目录合并，同名以这里优先").default([]),
+  skills: Schema.array(Schema.string())
+    .description("额外技能目录，相对 profile 目录解析；与内置技能和数据的 skills 目录合并，同名时依次覆盖，以这里优先")
+    .default([]),
   mounts: Schema.array(Schema.string())
     .description("仅 sandbox 模式：宿主目录挂载，写法 `source:target[:ro]`；source 相对 profile 目录解析，省略 :ro 即可读写。native 模式无虚拟路径，不解析")
     .default([]),

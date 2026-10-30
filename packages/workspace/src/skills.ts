@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { Logger } from "koishi";
 import { parse as parseYaml } from "yaml";
@@ -13,6 +14,10 @@ export interface Skill {
 }
 
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// ESM 由模块 URL 定位，CJS 由 __dirname 定位；两者都从当前目录上跳到包根。
+const moduleDirectory = typeof __dirname === "string" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+export const BUILTIN_SKILLS_DIRECTORY = path.resolve(moduleDirectory, "..", "resources", "skills");
 
 export function discoverSkills(roots: readonly string[], logger: Logger): Skill[] {
   const found = new Map<string, Skill>();

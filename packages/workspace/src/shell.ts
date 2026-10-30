@@ -6,7 +6,7 @@ import type { ResourceCenter, ResourceFileSystem } from "koishi-plugin-ishiki";
 
 import type { WorkspaceConfig } from "./config.js";
 import { resolveMounts, resolveSkillMounts, type HostMount } from "./mounts.js";
-import { discoverSkills, type Skill } from "./skills.js";
+import { BUILTIN_SKILLS_DIRECTORY, discoverSkills, type Skill } from "./skills.js";
 
 export interface ExecResult {
   readonly stdout: string;
@@ -88,7 +88,10 @@ export function defaultShell(configured: string): string {
 
 export function resolveLayout(options: ShellOptions): WorkspaceLayout {
   const { config } = options;
-  const skills = discoverSkills([path.join(options.dataPath, "skills"), ...config.skills.map((dir) => path.resolve(options.root, dir))], options.logger);
+  const skills = discoverSkills(
+    [BUILTIN_SKILLS_DIRECTORY, path.join(options.dataPath, "skills"), ...config.skills.map((dir) => path.resolve(options.root, dir))],
+    options.logger,
+  );
   const workspace = path.join(options.home, "workspace");
   mkdirSync(workspace, { recursive: true });
   const backend = config.backend;

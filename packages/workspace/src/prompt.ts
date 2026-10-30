@@ -20,8 +20,9 @@ Use read_file to read a known file, write_file to replace a file, edit_file for 
 
 const SANDBOX_INSTRUCTIONS = new Template(
   `## Workspace
-You read and write files in a per-instance sandbox, not on the host: commands are interpreted by JavaScript, only the mounted paths below exist, and host paths and commands are invisible.
+You read and write files in a per-instance sandbox, not on the host: commands run in just-bash, only the mounted paths below exist, and host paths and commands are invisible.
 The command set is not the host's.
+Runtime details and API gaps are recorded in the bundled sandbox-environment skill; read it before writing JavaScript, TypeScript, Python, SQLite, or network-heavy commands.
 Current working directory: {{ cwd }}
 Mounts:
 - {{ homeMount }}: read-only, this instance's data directory (writes fail)
@@ -40,10 +41,10 @@ Command timeout: {{ timeoutMs }} ms; a timeout returns exit code 124.
 Executor output safety limit: {{ maxExecutionOutputBytes }} bytes. Inside codemode you receive the raw output; the runtime handles model-visible previews and archives. Return structured results instead of stringifying or slicing them yourself.
 Shell state does not persist between calls: cd, aliases, functions, and exported variables are not retained. Put a directory change on the same line (cd <dir> && <command>).
 {% if javascript %}
-js-exec is available: run JavaScript / TypeScript in QuickJS. Some node modules can be required or imported; only files inside the sandbox are accessible.
+js-exec is available: run JavaScript / TypeScript in QuickJS with a partial Node.js module surface. Only files inside the sandbox are accessible.
 {% endif %}
 {% if python %}
-python3 and python are available: CPython compiled to WebAssembly with the full standard library. The first call waits for it to load; reads and writes target this sandbox.
+python3 and python are available: CPython compiled to WebAssembly. Most of the standard library is available, but subprocess and the sqlite3 module are absent. The first call waits for it to load; reads and writes target this sandbox.
 {% endif %}
 You can also read a known file through read's workspace:///<sandbox-path> URL (e.g. workspace:///home/workspace/a.txt): virtual files, persistent directories, and mounts all resolve to the same sandbox file.
 Use read_file to read a known file, write_file to replace a file, edit_file for a small edit, and bash for listing, searching, and pipelines.`,
