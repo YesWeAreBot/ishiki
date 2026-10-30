@@ -196,9 +196,14 @@ export class AgentRuntime {
             const calls = new Set<string>();
             let sending = false;
             let continueRequested = false;
+            let plainText = false;
             for (const message of info.result.messages) {
               if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
               for (const part of message.content) {
+                if (part.type === "text" && part.text.trim().length > 0) {
+                  plainText = true;
+                  continue;
+                }
                 if (part.type !== "tool-call") continue;
                 calls.add(part.toolName);
                 if (part.toolName !== SEND_MESSAGE_TOOL) continue;
@@ -213,13 +218,17 @@ export class AgentRuntime {
             }
 
             // 本轮说过话之后就不再催进度：报过进度再被催一次是噪声。
-            this.pacing.observe(info.turnId, [...calls]);
+            const visible = sendSucceeded(info.result.messages);
+            this.pacing.observe(info.turnId, [...calls], visible);
 
             // 说话即收尾：send_message 成功且没有别的动作时关轮。wait 属于同一类收尾
             // 动作（不算「别的动作」），所以和 send_message 一起调用时照样关轮——
             // 模型不必为了声明下一个唤醒条件再多跑一步。
             if (calls.has(FINISH_TOOL) || calls.has(WAIT_TOOL)) return { continue: false };
-            if (!continueRequested && sending && sendSucceeded(info.result.messages)) return { continue: false };
+            if (!continueRequested && sending && visible) return { continue: false };
+            if (calls.size === 0 && plainText && this.pacing.requestTerminalGuard(info.turnId, this.config.pacing.terminalGuard === true)) {
+              return { continue: true };
+            }
             return undefined;
           },
           onTurnFinish: async (result) => {

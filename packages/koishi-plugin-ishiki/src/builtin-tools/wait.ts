@@ -20,8 +20,8 @@ function resolve(input: { msgs?: number; secs?: number }): WaitOutcome {
  *
  * 声明权唯一属于 Agent（wait 工具）；触发与合并交给 core 的 continue，这里只决定
  * 「何时调用它」。这是一次性声明，不是定时触发器：它只描述「下一轮什么时候叫我」，
- * 触发一次即作废，没有配置兜底、没有循环、不写事实流——runtime 重启后安静地等下一条
- * 输入或下一次外部唤醒。
+ * 触发一次即作废，没有配置兜底、没有循环。唤醒原因作为 continue 的提示正文进入这一轮；
+ * runtime 重启后安静地等下一条输入或下一次外部唤醒。
  */
 export class WaitConditionMachine {
   private agent?: Agent;
@@ -145,13 +145,8 @@ export class WaitConditionMachine {
   }
 
   private wake(reason: string): void {
-    try {
-      this.logger.debug(`wake: ${reason}`);
-      this.agent?.continue();
-    } catch (error) {
-      // agent 正在停止：这次唤醒随停止一起作废。
-      this.logger.debug(`wake dropped: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    this.logger.debug(`wake: ${reason}`);
+    this.agent?.continue(reason);
   }
 }
 

@@ -95,6 +95,7 @@ describe("WaitConditionMachine", () => {
     expect(wakes).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(wakes).toHaveBeenCalledTimes(1);
+    expect(wakes).toHaveBeenCalledWith("timer 30s expired");
     // 不是节拍器：不再来第二响。
     await vi.advanceTimersByTimeAsync(1_000_000);
     expect(wakes).toHaveBeenCalledTimes(1);

@@ -199,4 +199,30 @@ describe("step pacing", () => {
 
     expect(await storedText(runtime)).not.toContain("Step budget:");
   });
+
+  it("leaves plain-text termination alone by default", async () => {
+    const { runtime, bodies } = await makeRuntime({ pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0 }, steps: () => [] });
+
+    runtime.agent.continue("hello");
+    await until(async () => (await terminalTurns(runtime)) === 1);
+
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("continues once with an invisible reminder after a plain-text step with no visible send", async () => {
+    const { runtime, bodies } = await makeRuntime({
+      pacing: { maxSteps: 20, wrapUpSteps: 0, progressAt: 0, terminalGuard: true },
+      steps: () => [],
+    });
+
+    runtime.agent.continue("hello");
+    await until(async () => (await terminalTurns(runtime)) === 1);
+
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies[1])).toContain("previous step ended with plain assistant text");
+    expect(JSON.stringify(bodies[1])).toContain("send_message");
+    expect(JSON.stringify(bodies[1])).toContain("schedule another waking with wait");
+    expect(JSON.stringify(bodies[1])).toContain("finish this waking with finish");
+    expect(await storedText(runtime)).not.toContain("previous step ended with plain assistant text");
+  });
 });

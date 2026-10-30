@@ -76,12 +76,15 @@ export interface PacingConfig {
   wrapUpSteps: number;
   /** 走到第几步时提醒汇报一次进度；0 关闭。 */
   progressAt: number;
+  /** 普通文本结束且本轮没有可见消息时，是否用一次不可见提醒续步。 */
+  terminalGuard?: boolean;
 }
 
 export const PacingConfig: Schema<PacingConfig> = Schema.object({
   maxSteps: Schema.number().min(1).description("一轮允许的步数上限").default(20),
   wrapUpSteps: Schema.number().min(0).description("剩余步数不多于该值时，每一步都提醒收尾；0 表示关闭").default(2),
   progressAt: Schema.number().min(0).description("走到该步数时提醒汇报进度；0 表示关闭").default(8),
+  terminalGuard: Schema.boolean().description("普通文本结束且本轮没有可见消息时，用一次不可见提醒续步").default(false),
 });
 
 export interface FailoverConfig {

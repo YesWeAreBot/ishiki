@@ -368,12 +368,15 @@ describe("AgentRuntime wakeup subscription", () => {
 
     await runtime.deliver(created("m1", "only an at-mention"));
     await waitForTurns(runtime, 1);
-    // 没有任何新消息，纯靠 secs 截止开轮；机械 reason 只进 debug 日志，不进上下文。
+    // 没有任何新消息，纯靠 secs 截止开轮；触发原因要进入模型上下文，避免空唤醒。
     await waitForTurns(runtime, 2);
 
     expect(bodies).toHaveLength(2);
     expect(promptOf(bodies[1])).toContain("only an at-mention");
-    expect(promptOf(bodies[1])).not.toContain("timer 1s expired");
+    expect(promptOf(bodies[1])).toContain("timer 1s expired");
+    const stored = await storedMessages(runtime);
+    expect(stored).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user", content: "timer 1s expired" })]));
+    expect(stored).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "ishiki.wake" })]));
   }, 15_000);
 
   it("treats wait({msgs: 0}) as no declaration: later input opens no round", async () => {
