@@ -2,7 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createCustomMessage, jsonSchema, tool, type Agent, type AgentMessage, type AgentPlugin, type CustomMessages, type ToolSet } from "@yesimagent/core";
+import {
+  createCustomMessage,
+  jsonSchema,
+  tool,
+  type Agent,
+  type AgentMessage,
+  type AgentPlugin,
+  type CustomMessages,
+  type Experimental_DecisionModelV4 as DecisionModelV4,
+  type Experimental_DecisionModelV4CallOptions as DecisionModelCallOptions,
+  type Experimental_DecisionModelV4Result as DecisionModelResult,
+  type ToolSet,
+} from "@yesimagent/core";
 import { createGateway } from "@yesimagent/gateway";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -32,6 +44,45 @@ const logger = {
   warn: (message: string) => void message,
   error: (message: string) => void message,
 };
+
+const jevContext = {
+  runtimeId: "jev",
+  domain: { mode: "channel", platform: "test", selfId: "bot", channelId: "channel" },
+  logger,
+} as never;
+
+function jevModel(decide: (options: DecisionModelCallOptions) => DecisionModelResult | PromiseLike<DecisionModelResult>): DecisionModelV4 {
+  return {
+    specificationVersion: "v4",
+    provider: "fixture",
+    modelId: "jev",
+    supportedQuestionTypes: ["choice", "boolean"],
+    doDecide: async (options) => decide(options),
+  };
+}
+
+function jevEvidence(relation: "addressed" | "followup" | "open" | "other" | "ambient" = "addressed"): DecisionModelResult {
+  const relations = {
+    addressed: relation === "addressed" ? 0.9 : 0.025,
+    followup: relation === "followup" ? 0.9 : 0.025,
+    open: relation === "open" ? 0.9 : 0.025,
+    other: relation === "other" ? 0.9 : 0.025,
+    ambient: relation === "ambient" ? 0.9 : 0.025,
+  };
+  return {
+    answers: {
+      relation: { type: "choice", choice: relation, probabilities: relations },
+      ready: { type: "boolean", probability: 0.95 },
+      receptive: { type: "boolean", probability: 0.9 },
+      worthwhile: { type: "boolean", probability: 0.85 },
+      social: { type: "boolean", probability: 0.4 },
+      withdrawn: { type: "boolean", probability: 0.02 },
+      closed: { type: "boolean", probability: 0.02 },
+      interested: { type: "boolean", probability: 0.8 },
+    },
+    warnings: [],
+  };
+}
 
 const homes: string[] = [];
 const runtimes: AgentRuntime[] = [];
@@ -531,47 +582,271 @@ describe("AgentRuntime wakeup subscription", () => {
 });
 
 describe("JEV wakeup subscription", () => {
-  it("keeps the full prior window without repeating the pending message", async () => {
-    const pending = Promise.withResolvers<Response>();
-    const judgements: Array<{ state: { recent_messages: Array<{ text: string }>; pending_message: { text: string } } }> = [];
-    vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body));
-      judgements.push(request);
-      if (request.state.pending_message.text === "pending") return pending.promise;
-      return new Response(JSON.stringify({ answers: { addressed: { noul: 0 }, interested: { noul: 0 }, others: { noul: 1 } } }));
-    });
+  it("asks the gateway decision model with structured evidence questions", async () => {
+    const calls: DecisionModelCallOptions[] = [];
     const engine = new JevWakeupInstance(
-      { apiKey: "test-only", historyMessages: 2, threshold: 0.5, rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } },
-      { logger } as never,
+      {
+        debounceMs: 0,
+        maxWaitMs: 0,
+        timeoutMs: 500,
+        rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
+      },
+      jevContext,
+      jevModel((options) => {
+        calls.push(options);
+        return jevEvidence();
+      }),
     );
     const { runtime, bodies } = await makeRuntime({ steps: () => [], wakeup: engine });
-    for (const text of ["history-1", "history-2", "history-3"]) {
-      await runtime.deliver(created(text, text));
-      await until(async () => engine.history("channel").some((line) => line.text === text));
-    }
-    await runtime.deliver(created("pending", "pending"));
-    await until(async () => judgements.length === 4);
+    const timestamp = Date.now();
 
-    // The classifier may still be waiting while the current input is already committed.
-    expect(createdIds(await storedMessages(runtime))).toEqual(["history-1", "history-2", "history-3", "pending"]);
-    expect(bodies).toHaveLength(0);
-    expect(judgements[3].state.recent_messages.map((line) => line.text)).toEqual(["history-2", "history-3"]);
-    expect(judgements[3].state.pending_message.text).toBe("pending");
-
-    pending.resolve(new Response(JSON.stringify({ answers: { addressed: { noul: 1 }, interested: { noul: 1 }, others: { noul: 0 } } })));
+    await runtime.deliver(
+      createdIn("channel", "m1", "这个具体问题应该怎么排查？", {
+        isDirect: false,
+        timestamp,
+        user: { id: "u", name: "甲" },
+      }),
+    );
     await waitForTurns(runtime, 1);
-    expect(promptOf(bodies[0])).toContain("pending");
-    expect((await storedMessages(runtime)).filter((message) => message.role === "user")).toEqual([]);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].questions.relation).toMatchObject({ type: "choice" });
+    expect(calls[0].questions.ready).toMatchObject({ type: "boolean" });
+    expect(calls[0].abortSignal).toBeInstanceOf(AbortSignal);
+    const part = calls[0].state[0];
+    expect(part).toMatchObject({ type: "json" });
+    if (part?.type !== "json") throw new Error("missing JSON decision state");
+    const state = part.value as {
+      pending_message: { author_id: string; text: string };
+      pending_messages: Array<{ id: string }>;
+      recent_messages: Array<{ id: string }>;
+    };
+    expect(state.pending_message).toMatchObject({ author_id: "u", text: "这个具体问题应该怎么排查？" });
+    expect(state.pending_messages.map((message) => message.id)).toEqual(["m1"]);
+    expect(state.recent_messages).toEqual([]);
+    expect(bodies).toHaveLength(1);
+    expect(promptOf(bodies[0])).toContain("这个具体问题应该怎么排查？");
+  });
+
+  it("chooses one author from a merged batch before judging evidence", async () => {
+    const calls: DecisionModelCallOptions[] = [];
+    const engine = new JevWakeupInstance(
+      {
+        debounceMs: 100,
+        maxWaitMs: 200,
+        timeoutMs: 500,
+        rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
+      },
+      jevContext,
+      jevModel((options) => {
+        calls.push(options);
+        if ("focus" in options.questions) {
+          return {
+            answers: {
+              focus: {
+                type: "choice",
+                choice: "author_1",
+                probabilities: { author_0: 0.1, author_1: 0.85, none: 0.05 },
+              },
+            },
+            warnings: [],
+          };
+        }
+        return jevEvidence();
+      }),
+    );
+    const { runtime } = await makeRuntime({ steps: () => [], wakeup: engine });
+    const timestamp = Date.now();
+
+    await runtime.deliver(
+      createdIn("channel", "m1", "甲在说另一件事", {
+        isDirect: false,
+        timestamp,
+        user: { id: "u1", name: "甲" },
+      }),
+    );
+    await until(async () => engine.history("channel").length === 1);
+    await runtime.deliver(
+      createdIn("channel", "m2", "这个补全后的问题是在问我", {
+        isDirect: false,
+        timestamp: timestamp + 1,
+        user: { id: "u2", name: "乙" },
+      }),
+    );
+    await waitForTurns(runtime, 1);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].questions.focus).toMatchObject({ type: "choice" });
+    expect(calls[1].questions.relation).toMatchObject({ type: "choice" });
+    const part = calls[1].state[0];
+    if (part?.type !== "json") throw new Error("missing JSON decision state");
+    const state = part.value as {
+      pending_message: { author_id: string; text: string };
+      pending_messages: Array<{ author_id: string }>;
+    };
+    expect(state.pending_message).toMatchObject({ author_id: "u2", text: "这个补全后的问题是在问我" });
+    expect(state.pending_messages.map((message) => message.author_id)).toEqual(["u1", "u2"]);
+  });
+
+  it("drops a mixed batch when no author has a usable opening", async () => {
+    const calls: DecisionModelCallOptions[] = [];
+    const engine = new JevWakeupInstance(
+      {
+        debounceMs: 1000,
+        maxWaitMs: 1500,
+        timeoutMs: 500,
+        rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
+      },
+      jevContext,
+      jevModel((options) => {
+        calls.push(options);
+        if ("focus" in options.questions) {
+          return {
+            answers: {
+              focus: {
+                type: "choice",
+                choice: "none",
+                probabilities: { author_0: 0.05, author_1: 0.05, none: 0.9 },
+              },
+            },
+            warnings: [],
+          };
+        }
+        return jevEvidence();
+      }),
+    );
+    const { runtime } = await makeRuntime({ steps: () => [], wakeup: engine });
+    const timestamp = Date.now();
+
+    await runtime.deliver(
+      createdIn("channel", "m1", "甲在同别人说话", {
+        isDirect: false,
+        timestamp,
+        user: { id: "u1", name: "甲" },
+      }),
+    );
+    await runtime.deliver(
+      createdIn("channel", "m2", "乙也在同别人说话", {
+        isDirect: false,
+        timestamp: timestamp + 1,
+        user: { id: "u2", name: "乙" },
+      }),
+    );
+    await until(async () => engine.history("channel").length === 2);
+    await until(async () => calls.length === 1);
+    await sleep(20);
+
+    expect(await terminalTurns(runtime)).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].questions.focus).toMatchObject({ type: "choice" });
+
+    await runtime.deliver(
+      createdIn("channel", "m3", "现在这条是单独问我的", {
+        isDirect: false,
+        timestamp: timestamp + 2,
+        user: { id: "u3", name: "丙" },
+      }),
+    );
+    await waitForTurns(runtime, 1);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1].questions.relation).toMatchObject({ type: "choice" });
+  });
+
+  it("does not wake on a focus message deleted during classification", async () => {
+    const pending = Promise.withResolvers<DecisionModelResult>();
+    let requested = false;
+    const engine = new JevWakeupInstance(
+      {
+        debounceMs: 0,
+        maxWaitMs: 0,
+        timeoutMs: 500,
+        rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
+      },
+      jevContext,
+      jevModel(() => {
+        requested = true;
+        return pending.promise;
+      }),
+    );
+    const { runtime, bodies } = await makeRuntime({ steps: () => [], wakeup: engine });
+
+    await runtime.deliver(createdIn("channel", "m1", "正在判定的消息", { isDirect: false, timestamp: Date.now() }));
+    await until(async () => requested);
+    await runtime.deliver(
+      createCustomMessage("ishiki.message.deleted", {
+        platform: "test",
+        selfId: "bot",
+        channelId: "channel",
+        messageId: "m1",
+      }),
+    );
+    await until(async () => !engine.history("channel").some((line) => line.id === "m1"));
+    pending.resolve(jevEvidence());
+    await sleep(50);
+
+    expect(runtime.agent.isIdle()).toBe(true);
+    expect(await terminalTurns(runtime)).toBe(0);
+    expect(bodies).toHaveLength(0);
+  });
+
+  it("records successful send_message output as bot speech", async () => {
+    const engine = new JevWakeupInstance(
+      { rules: { direct: false, atSelf: false, quoteSelf: false, keywords: ["wake"] } },
+      jevContext,
+      jevModel(() => {
+        throw new Error("rule wake must not call the decision model");
+      }),
+    );
+    const { runtime } = await makeRuntime({
+      steps: (index) => (index === 0 ? [{ name: "send_message", input: { i: "reply", messages: ["reply"] } }] : []),
+      wakeup: engine,
+      tools: sendMessageTool(true),
+    });
+
+    await runtime.deliver(createdIn("channel", "m1", "wake", { isDirect: false, timestamp: Date.now() }));
+    await waitForTurns(runtime, 1);
+    await until(async () => engine.history("channel").some((line) => line.self && line.text === "reply"));
+
+    expect(engine.history("channel").find((line) => line.self)).toMatchObject({ text: "reply", self: true });
+  });
+
+  it("ignores failed send_message output", async () => {
+    const engine = new JevWakeupInstance(
+      { rules: { direct: false, atSelf: false, quoteSelf: false, keywords: ["wake"] } },
+      jevContext,
+      jevModel(() => {
+        throw new Error("rule wake must not call the decision model");
+      }),
+    );
+    const { runtime } = await makeRuntime({
+      steps: (index) => (index === 0 ? [{ name: "send_message", input: { i: "reply", messages: ["reply"] } }] : []),
+      wakeup: engine,
+      tools: sendMessageTool(false),
+    });
+
+    await runtime.deliver(createdIn("channel", "m1", "wake", { isDirect: false, timestamp: Date.now() }));
+    await waitForTurns(runtime, 1);
+    await sleep(30);
+
+    expect(engine.history("channel").filter((line) => line.self)).toEqual([]);
   });
 
   it("ignores a judgement that completes after the engine is detached", async () => {
-    const pending = Promise.withResolvers<Response>();
+    const pending = Promise.withResolvers<DecisionModelResult>();
     let requested = false;
-    vi.stubGlobal("fetch", async () => {
-      requested = true;
-      return pending.promise;
-    });
-    const engine = new JevWakeupInstance({ apiKey: "test-only", rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } }, { logger } as never);
+    const engine = new JevWakeupInstance(
+      {
+        debounceMs: 0,
+        maxWaitMs: 0,
+        rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
+      },
+      jevContext,
+      jevModel(() => {
+        requested = true;
+        return pending.promise;
+      }),
+    );
     const disposers: Array<() => void> = [];
     const { runtime, bodies } = await makeRuntime({
       steps: () => [],
@@ -583,10 +858,10 @@ describe("JEV wakeup subscription", () => {
         },
       },
     });
-    await runtime.deliver(created("m1", "classify this input"));
+    await runtime.deliver(createdIn("channel", "m1", "classify this input", { isDirect: false, timestamp: Date.now() }));
     await until(async () => requested);
     disposers[0]();
-    pending.resolve(new Response(JSON.stringify({ answers: { addressed: { noul: 1 }, interested: { noul: 1 }, others: { noul: 0 } } })));
+    pending.resolve(jevEvidence());
     await sleep(50);
 
     expect(runtime.agent.isIdle()).toBe(true);

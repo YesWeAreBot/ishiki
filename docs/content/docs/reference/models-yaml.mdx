@@ -88,7 +88,21 @@ description: 模型网关配置的完整字段
 
 思考档位全集：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。
 
-模型目录还支持 `language/embedding/image/speech/transcription/reranking/decision` 等类型标记；Ishiki 的对话调用使用语言模型。jev 唤醒引擎的判定请求按其 `endpoint` 独立配置，见[调整唤醒行为](/docs/guides/wakeup)。
+模型目录还支持 `language/embedding/image/speech/transcription/reranking/decision` 等类型标记。Ishiki 的对话调用使用语言模型；jev 唤醒引擎通过 profile 中的模型引用取得 `type: decision` 的决策模型。
+
+```yaml
+providers:
+  typesafe:
+    api: typesafe-ai
+    apiKey: ${TYPESAFE_API_KEY}
+    models:
+      - id: jev-latest
+        type: decision
+
+groups: {}
+```
+
+profile 写 `wakeup.jev.model: typesafe:jev-latest`。具体行为与其余参数见[调整唤醒行为](/docs/guides/wakeup)。
 
 ## groups
 
