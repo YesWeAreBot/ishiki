@@ -232,6 +232,50 @@ describe("Ishiki management interfaces", () => {
     expect((await management.usage.snapshot({ model: "mock:vision:high" })).totals).toMatchObject({ calls: 1, input: 3, output: 2 });
   });
 
+  it("includes chat maintenance calls in usage totals", async () => {
+    const instance = await start();
+    const management = instance.get("ishiki")!.management;
+    const home = path.join(dataPath!, "profiles", "demo", "runtimes", "maintenance");
+    await mkdir(home, { recursive: true });
+    await writeFile(path.join(home, "runtime.json"), JSON.stringify({ id: "demo/maintenance", profileId: "demo", domain: { mode: "cross" }, createdAt: 1 }));
+    const compact = {
+      id: "compact-call",
+      type: "ishiki.chat.compact",
+      timestamp: 50,
+      data: {
+        summary: "摘要",
+        lastEntryId: "anchor",
+        attempts: [
+          {
+            attempt: 1,
+            provider: "mock",
+            modelId: "vision",
+            usage: {
+              inputTokens: 7,
+              outputTokens: 3,
+              totalTokens: 10,
+              inputTokenDetails: { cacheReadTokens: 2, cacheWriteTokens: 1 },
+              outputTokenDetails: { reasoningTokens: 1 },
+            },
+          },
+          {
+            attempt: 2,
+            provider: "mock",
+            modelId: "vision",
+            usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 },
+          },
+        ],
+      },
+    };
+    await writeFile(path.join(home, "events.jsonl"), `${JSON.stringify(compact)}\n`);
+
+    await management.usage.sync();
+    const usage = await management.usage.snapshot();
+    expect(usage.totals).toMatchObject({ calls: 2, input: 12, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 1, total: 17 });
+    expect(usage.records.map((record) => record.input).sort((left, right) => left - right)).toEqual([5, 7]);
+    expect(usage.records.every((record) => record.source === "maintenance" && record.provider === "mock" && record.modelId === "vision")).toBe(true);
+  });
+
   it("saves profile files with revisions and preserves audit history after deletion", async () => {
     const instance = await start();
     const management = instance.get("ishiki")!.management;

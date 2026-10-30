@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 
-import { createEntry, createUserMessage, generateText, type Agent, type AgentEntry, type AgentMessage, type ToolResultOutput } from "@yesimagent/core";
+import {
+  createEntry,
+  createUserMessage,
+  generateText,
+  type Agent,
+  type AgentEntry,
+  type AgentMessage,
+  type LanguageModelUsage,
+  type ToolResultOutput,
+} from "@yesimagent/core";
 import { Service, type Context } from "koishi";
 import type Logger from "reggol";
 import Schema from "schemastery";
@@ -30,7 +39,6 @@ export interface ChatContextConfig {
   shakeBatchRatio: number;
   minRegionTokens: number;
   compactTargetRatio: number;
-  compactMinNewRatio: number;
   compactMinCoveredRatio: number;
   compactMaxOutputTokens: number;
   fallbackTokensPerChar: number;
@@ -49,7 +57,6 @@ export const ChatContextConfig = Schema.object({
   shakeBatchRatio: Schema.number().min(0).max(1).default(0.25).description("一次 shake 的批次 token 上限比例"),
   minRegionTokens: Schema.number().min(0).default(200).description("digest 中附带 artifact 行号的工具结果最小 token 数"),
   compactTargetRatio: Schema.number().min(0).max(1).default(0.06).description("摘要长度占预算的比例"),
-  compactMinNewRatio: Schema.number().min(0).max(1).default(0.125).description("两次 compact 之间至少新增的 token 比例"),
   compactMinCoveredRatio: Schema.number().min(0).max(1).default(0.25).description("一次 compact 至少覆盖的 token 比例"),
   compactMaxOutputTokens: Schema.number().min(1).default(2_500).description("摘要生成的输出 token 上限"),
   fallbackTokensPerChar: Schema.number().min(0.001).default(FALLBACK_TOKENS_PER_CHAR).description("未标定时每字符的 token 估算"),
@@ -93,7 +100,6 @@ export interface ChatBudget {
   shakeBatch: number;
   minRegion: number;
   compactTarget: number;
-  compactMinNew: number;
   compactMinCovered: number;
 }
 
@@ -123,7 +129,6 @@ export interface ChatCompactPlan {
   throughEntryId: string;
   coveredShakeIds: string[];
   coveredTokens: number;
-  newTokens: number;
 }
 
 export interface ChatPlan {
@@ -185,6 +190,13 @@ export interface IshikiChatShake {
 }
 
 /** chat 引擎的语义压缩条目；standard 引擎仍使用 ishiki.compact。 */
+export interface IshikiChatCompactAttempt {
+  attempt: number;
+  provider: string;
+  modelId: string;
+  usage: LanguageModelUsage;
+}
+
 export interface IshikiChatCompact {
   summary: string;
   lastEntryId: string;
@@ -192,6 +204,8 @@ export interface IshikiChatCompact {
   artifact?: string;
   coveredShakeIds?: string[];
   stats?: { coveredTokens: number; summaryTokens: number; freedTokens: number };
+  /** 生成摘要的实际模型调用；包含空结果后的重试。 */
+  attempts?: IshikiChatCompactAttempt[];
 }
 
 declare module "@yesimagent/core" {
@@ -217,16 +231,22 @@ export function lastShake(entries: readonly AgentEntry[]): AgentEntry<"ishiki.ch
   return undefined;
 }
 
+function compactAnchorIndex(entries: readonly AgentEntry[], compact: AgentEntry<"ishiki.chat.compact">): number {
+  const anchor = entries.findIndex((entry) => entry.id === compact.data.lastEntryId);
+  if (anchor < 0) throw new Error(`chat compact anchor is missing: ${compact.data.lastEntryId}`);
+  return anchor;
+}
+
 function activeShakes(entries: readonly AgentEntry[]): ActiveShake[] {
   const compact = lastChatCompact(entries);
-  const compactIndex = compact === undefined ? -1 : entries.indexOf(compact);
+  const compactAnchor = compact === undefined ? -1 : compactAnchorIndex(entries, compact);
   const shakes: ActiveShake[] = [];
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
-    if (entry.type !== "ishiki.chat.shake" || index <= compactIndex) continue;
+    if (entry.type !== "ishiki.chat.shake" || index <= compactAnchor) continue;
     const start = entries.findIndex((item) => item.id === entry.data.range.start);
     const end = entries.findIndex((item) => item.id === entry.data.range.end);
-    if (start < 0 || end < start || start <= compactIndex) continue;
+    if (start < 0 || end < start || start <= compactAnchor) continue;
     shakes.push({ entry, index, start, end });
   }
   return shakes.sort((left, right) => left.start - right.start);
@@ -240,7 +260,7 @@ function compactLead(compact: IshikiChatCompact): string {
 
 export function projectChat(entries: readonly AgentEntry[], budget: ChatBudget, rate: number, domain?: InstanceDomain, fixed = 0): ChatProjection {
   const compact = lastChatCompact(entries);
-  const anchor = compact === undefined ? -1 : entries.findIndex((entry) => entry.id === compact.data.lastEntryId);
+  const anchor = compact === undefined ? -1 : compactAnchorIndex(entries, compact);
   const shakes = activeShakes(entries);
   const starts = new Map(shakes.map((shake) => [shake.start, shake]));
   const projected: AgentEntry[] = [];
@@ -275,7 +295,7 @@ export function projectChat(entries: readonly AgentEntry[], budget: ChatBudget, 
 
 export function boundaryIndex(entries: readonly AgentEntry[]): number {
   const compact = lastChatCompact(entries);
-  let boundary = compact === undefined ? 0 : entries.indexOf(compact) + 1;
+  let boundary = compact === undefined ? 0 : compactAnchorIndex(entries, compact) + 1;
   for (const shake of activeShakes(entries)) boundary = Math.max(boundary, shake.end + 1);
   return boundary;
 }
@@ -424,8 +444,7 @@ export function planCompact(
   end = hotStart - 1,
 ): ChatCompactPlan | undefined {
   const compact = lastChatCompact(entries);
-  const compactIndex = compact === undefined ? -1 : entries.indexOf(compact);
-  const start = compactIndex + 1;
+  const start = compact === undefined ? 0 : compactAnchorIndex(entries, compact) + 1;
   const through = Math.min(end, hotStart - 1);
   if (through < start) return undefined;
 
@@ -445,7 +464,7 @@ export function planCompact(
   }
 
   const coveredTokens = chars * rate;
-  if (coveredTokens < budget.compactMinCovered || coveredTokens < budget.compactMinNew) return undefined;
+  if (coveredTokens < budget.compactMinCovered) return undefined;
 
   return {
     start,
@@ -453,7 +472,6 @@ export function planCompact(
     throughEntryId: entries[through].id,
     coveredShakeIds: shakes.map((shake) => shake.entry.id),
     coveredTokens,
-    newTokens: coveredTokens,
   };
 }
 
@@ -873,7 +891,6 @@ function normalizeConfig(config: Partial<ChatContextConfig>): ChatContextConfig 
     shakeBatchRatio: config.shakeBatchRatio ?? 0.25,
     minRegionTokens: Math.max(0, config.minRegionTokens ?? 200),
     compactTargetRatio,
-    compactMinNewRatio: config.compactMinNewRatio ?? 0.125,
     compactMinCoveredRatio: config.compactMinCoveredRatio ?? 0.25,
     compactMaxOutputTokens: Math.max(1, Math.round(config.compactMaxOutputTokens ?? 2_500)),
     fallbackTokensPerChar: config.fallbackTokensPerChar ?? FALLBACK_TOKENS_PER_CHAR,
@@ -1023,7 +1040,6 @@ export class ChatContextInstance implements ContextEngineInstance {
   private readonly shakeMinTool: number;
   private readonly shakeBatch: number;
   private readonly compactTarget: number;
-  private readonly compactMinNew: number;
   private readonly compactMinCovered: number;
 
   private rate?: number;
@@ -1048,7 +1064,6 @@ export class ChatContextInstance implements ContextEngineInstance {
     this.shakeMinTool = this.maxTokens * this.config.shakeMinToolRatio;
     this.shakeBatch = this.maxTokens * this.config.shakeBatchRatio;
     this.compactTarget = Math.max(256, Math.round(this.maxTokens * this.config.compactTargetRatio));
-    this.compactMinNew = this.maxTokens * this.config.compactMinNewRatio;
     this.compactMinCovered = this.maxTokens * this.config.compactMinCoveredRatio;
     if (this.maxTokens === 0) this.logger?.warn("chat context budget disabled: maxTokens is zero");
   }
@@ -1064,7 +1079,6 @@ export class ChatContextInstance implements ContextEngineInstance {
       shakeBatch: this.shakeBatch,
       minRegion: this.config.minRegionTokens,
       compactTarget: this.compactTarget,
-      compactMinNew: this.compactMinNew,
       compactMinCovered: this.compactMinCovered,
     };
   }
@@ -1129,11 +1143,7 @@ export class ChatContextInstance implements ContextEngineInstance {
     const signal = request?.signal ?? new AbortController().signal;
     let plan = this.plan(current);
     if (plan.over && (plan.shake !== undefined || plan.compact !== undefined) && !signal.aborted) {
-      try {
-        await this.maintain(current, signal);
-      } catch (error) {
-        this.logger?.warn(`chat context maintenance failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      await this.maintain(current, signal);
       current = await this.read();
       plan = this.plan(current);
     }
@@ -1261,7 +1271,6 @@ export class ChatContextInstance implements ContextEngineInstance {
     this.abort = abort;
     void this.read()
       .then((entries) => this.maintain(entries, abort.signal))
-      .catch((error) => this.logger?.warn(`chat context turn-end maintenance failed: ${error instanceof Error ? error.message : String(error)}`))
       .finally(() => {
         if (this.abort === abort) this.abort = undefined;
       });
@@ -1323,30 +1332,25 @@ export class ChatContextInstance implements ContextEngineInstance {
     });
     if (bundle.regions.length === 0) return undefined;
 
-    try {
-      await this.resources.store.putInHand("artifact", "shake", name, new TextEncoder().encode(bundle.artifactText), {
-        mediaType: "text/plain",
-        filename: name,
-      });
-      await agent.storage.append(
-        createEntry("ishiki.chat.shake", {
-          range: plan.range,
-          digest: bundle.digest,
-          artifact,
-          regions: bundle.regions,
-          stats: {
-            coveredMessages: bundle.coveredMessages,
-            coveredTokens: Math.round(plan.coveredTokens),
-            freedTokens: Math.max(0, Math.round((bundle.toolChars - bundle.digestChars) * (this.rate ?? this.fallbackRate()))),
-            digestTokens: Math.round(bundle.digestChars * (this.rate ?? this.fallbackRate())),
-          },
-        }),
-      );
-      return artifact;
-    } catch (error) {
-      this.logger?.warn(`shake discarded: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
-    }
+    await this.resources.store.putInHand("artifact", "shake", name, new TextEncoder().encode(bundle.artifactText), {
+      mediaType: "text/plain",
+      filename: name,
+    });
+    await agent.storage.append(
+      createEntry("ishiki.chat.shake", {
+        range: plan.range,
+        digest: bundle.digest,
+        artifact,
+        regions: bundle.regions,
+        stats: {
+          coveredMessages: bundle.coveredMessages,
+          coveredTokens: Math.round(plan.coveredTokens),
+          freedTokens: Math.max(0, Math.round((bundle.toolChars - bundle.digestChars) * (this.rate ?? this.fallbackRate()))),
+          digestTokens: Math.round(bundle.digestChars * (this.rate ?? this.fallbackRate())),
+        },
+      }),
+    );
+    return artifact;
   }
 
   private async applyCompact(
@@ -1385,22 +1389,26 @@ export class ChatContextInstance implements ContextEngineInstance {
     const previous = lastChatCompact(entries)?.data.summary;
     const prompt = buildCompactPrompt({ previous, shakes, records, targetTokens: this.compactTarget });
     const system = CHAT_COMPACT_INSTRUCTIONS.replace("{{target}}", String(Math.max(1, Math.round(this.compactTarget))));
+    const model = agent.getModel();
     let summary: string | undefined;
+    const attempts: IshikiChatCompactAttempt[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (signal.aborted) return undefined;
-      try {
-        const generated = await generateText({
-          model: agent.getModel(),
-          system,
-          prompt,
-          maxOutputTokens: this.config.compactMaxOutputTokens,
-          abortSignal: signal,
-        });
-        summary = generated.text.trim();
-        if (summary.length > 0) break;
-      } catch (error) {
-        this.logger?.warn(`compact attempt ${attempt + 1} failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      const generated = await generateText({
+        model,
+        system,
+        prompt,
+        maxOutputTokens: this.config.compactMaxOutputTokens,
+        abortSignal: signal,
+      });
+      attempts.push({
+        attempt: attempt + 1,
+        provider: model.provider,
+        modelId: model.modelId,
+        usage: generated.usage,
+      });
+      summary = generated.text.trim();
+      if (summary.length > 0) break;
     }
     if (summary === undefined || summary.length === 0 || signal.aborted) return undefined;
 
@@ -1423,29 +1431,25 @@ export class ChatContextInstance implements ContextEngineInstance {
       "@@@ishiki-end",
     ].join("\n");
 
-    try {
-      await this.resources.store.putInHand("artifact", "compact", name, new TextEncoder().encode(text), {
-        mediaType: "text/plain",
-        filename: name,
-      });
-      await agent.storage.append(
-        createEntry("ishiki.chat.compact", {
-          summary,
-          lastEntryId: plan.throughEntryId,
-          artifact,
-          coveredShakeIds: plan.coveredShakeIds,
-          stats: {
-            coveredTokens: Math.round(plan.coveredTokens),
-            summaryTokens: Math.round(summary.length * (this.rate ?? this.fallbackRate())),
-            freedTokens: Math.max(0, Math.round(plan.coveredTokens - summary.length * (this.rate ?? this.fallbackRate()))),
-          },
-        }),
-      );
-      return { summaryChars: summary.length, artifact };
-    } catch (error) {
-      this.logger?.warn(`compact discarded: ${error instanceof Error ? error.message : String(error)}`);
-      return undefined;
-    }
+    await this.resources.store.putInHand("artifact", "compact", name, new TextEncoder().encode(text), {
+      mediaType: "text/plain",
+      filename: name,
+    });
+    await agent.storage.append(
+      createEntry("ishiki.chat.compact", {
+        summary,
+        lastEntryId: plan.throughEntryId,
+        artifact,
+        coveredShakeIds: plan.coveredShakeIds,
+        stats: {
+          coveredTokens: Math.round(plan.coveredTokens),
+          summaryTokens: Math.round(summary.length * (this.rate ?? this.fallbackRate())),
+          freedTokens: Math.max(0, Math.round(plan.coveredTokens - summary.length * (this.rate ?? this.fallbackRate()))),
+        },
+        attempts,
+      }),
+    );
+    return { summaryChars: summary.length, artifact };
   }
 }
 

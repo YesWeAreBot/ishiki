@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- Removed the `compactMinNewRatio` pacing/context option together with the `compactMinNew` budget field
+
+### Added
+- Added an opt-in `pacing.terminalGuard` that nudges the agent to send, wait, or finish when a step ends with plain text
+- Added per-attempt compaction usage records reported under a new maintenance source
+
+### Changed
+- Compaction is now gated only by covered tokens; the minimum new-token throttle was removed
+- Maintenance and storage failures now surface instead of silently discarding shake and compact records
+
+### Fixed
+- Resolved chat compaction boundaries from the compact record's covered anchor instead of its list position
+- Passed wait wake reasons into the continuation context so wakeups no longer start empty
 ## [0.0.3] - 2026-10-29
 
 ### Added

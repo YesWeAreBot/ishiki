@@ -6,10 +6,12 @@ import { createAssistantMessage, createEntry, createToolMessage, createUserMessa
 import { describe, expect, it } from "vitest";
 
 import {
+  boundaryIndex,
   buildShakeBundle,
   ChatContextInstance,
   makeToolCallMap,
   planChat,
+  planCompact,
   planShake,
   projectChat,
   selectHotStart,
@@ -29,7 +31,6 @@ const budget: ChatBudget = {
   shakeBatch: 3000,
   minRegion: 0,
   compactTarget: 60,
-  compactMinNew: 100,
   compactMinCovered: 200,
 };
 
@@ -118,6 +119,21 @@ describe("chat planner", () => {
     expect(plan.shake).toBeDefined();
     expect(plan.projection.entries.length).toBeGreaterThan(0);
   });
+
+  it("starts planning from the previous compact anchor when later messages precede the compact entry", () => {
+    const compact: AgentEntry<"ishiki.chat.compact"> = createEntry(
+      "ishiki.chat.compact",
+      { summary: "旧摘要", lastEntryId: "root", artifact: "artifact://compact/c.log" } satisfies IshikiChatCompact,
+      { id: "compact", timestamp: 4 },
+    );
+    const entries = [user("root", "开始"), user("joined", "后".repeat(1000)), compact, user("later", "续".repeat(1000))];
+
+    expect(boundaryIndex(entries)).toBe(1);
+    const plan = planCompact(entries, budget, rate, 4, undefined, 3);
+    expect(plan?.start).toBe(1);
+    expect(plan?.end).toBe(3);
+    expect(plan?.throughEntryId).toBe("later");
+  });
 });
 
 describe("shake rendering", () => {
@@ -157,22 +173,29 @@ describe("chat engine maintenance", () => {
         result("t1", "c1", "x".repeat(4000)),
         createEntry("message", createAssistantMessage([{ type: "text", text: "done" }]), { id: "a2" }),
       ];
+      let compactAttempts = 0;
       const model = {
         specificationVersion: "v2",
         provider: "test",
         modelId: "test",
         supportedUrls: {},
-        doGenerate: async () => ({
-          content: [
-            {
-              type: "text",
-              text: "## 人物与关系\n测试\n## 偏好与边界\n无\n## 约定与承诺\n无\n## 未完成话题\n无\n## 已确认事实\n无\n## 工作状态\n无\n## 当前氛围\n平静",
-            },
-          ],
-          finishReason: "stop",
-          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-          warnings: [],
-        }),
+        doGenerate: async () => {
+          compactAttempts += 1;
+          return {
+            content:
+              compactAttempts === 1
+                ? []
+                : [
+                    {
+                      type: "text",
+                      text: "## 人物与关系\n测试\n## 偏好与边界\n无\n## 约定与承诺\n无\n## 未完成话题\n无\n## 已确认事实\n无\n## 工作状态\n无\n## 当前氛围\n平静",
+                    },
+                  ],
+            finishReason: "stop",
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            warnings: [],
+          };
+        },
       };
       const agent = {
         channel: { subscribe: () => () => {} },
@@ -194,7 +217,6 @@ describe("chat engine maintenance", () => {
           shakeMinToolRatio: 0.0001,
           shakeBatchRatio: 1,
           compactMinCoveredRatio: 0.01,
-          compactMinNewRatio: 0.01,
           minRegionTokens: 0,
         },
         {
@@ -226,6 +248,18 @@ describe("chat engine maintenance", () => {
       const compactEntry = entries.find((entry): entry is AgentEntry<"ishiki.chat.compact"> => entry.type === "ishiki.chat.compact");
       expect(compactEntry?.data.summary).toContain("人物与关系");
       expect(compactEntry?.data.coveredShakeIds).toContain(shakeEntry!.id);
+      expect(compactEntry?.data.stats?.coveredTokens).toBeGreaterThan(0);
+      expect(compactEntry?.data.stats?.summaryTokens).toBeGreaterThan(0);
+      expect(compactEntry?.data.stats?.freedTokens).toBeGreaterThanOrEqual(0);
+      expect(compactEntry?.data.attempts).toHaveLength(2);
+      for (const [index, attempt] of compactEntry!.data.attempts!.entries()) {
+        expect(attempt).toMatchObject({
+          attempt: index + 1,
+          provider: "test",
+          modelId: "test",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        });
+      }
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
@@ -278,7 +312,6 @@ describe("chat engine maintenance", () => {
           shakeMinToolRatio: 0.0001,
           shakeBatchRatio: 1,
           compactMinCoveredRatio: 0.01,
-          compactMinNewRatio: 0.01,
           minRegionTokens: 0,
         },
         {

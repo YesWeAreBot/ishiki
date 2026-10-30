@@ -467,6 +467,22 @@ export class SessionsManager {
         collected.push(
           this.usageRecord(record, entry, { provider: textField(data, "provider"), modelId: textField(data, "modelId"), usage: readUsage(data?.usage) }),
         );
+      } else if (entry.type === "ishiki.chat.compact") {
+        const attempts = Array.isArray(data?.attempts) ? data.attempts : [];
+        for (const [index, item] of attempts.entries()) {
+          const attempt = fields(item);
+          const usage = readUsage(attempt?.usage);
+          if (usage === undefined) continue;
+          collected.push(
+            this.usageRecord(
+              record,
+              entry,
+              { provider: textField(attempt, "provider"), modelId: textField(attempt, "modelId"), usage },
+              `${entry.id}-attempt-${index + 1}`,
+              "maintenance",
+            ),
+          );
+        }
       } else if (entry.type === "event") {
         if (textField(data, "type") !== "turn.done") return false;
         const usage = readUsage(data?.totalUsage);

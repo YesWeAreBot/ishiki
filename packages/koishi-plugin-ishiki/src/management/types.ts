@@ -238,7 +238,7 @@ export interface SessionFilters {
 
 export interface LogEntry {
   id: string;
-  type: "event" | "message" | "state";
+  type: "event" | "message" | "state" | "ishiki.chat.compact";
   data: unknown;
   timestamp: number;
   turnId?: string;
@@ -281,7 +281,7 @@ export interface UsageRecord {
   cacheWrite: number;
   reasoning: number;
   total: number;
-  source: "message" | "turn" | "missing";
+  source: "message" | "turn" | "missing" | "maintenance";
   cacheReported: boolean;
 }
 
