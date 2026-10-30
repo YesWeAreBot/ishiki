@@ -395,6 +395,22 @@ describe("AgentRuntime wakeup subscription", () => {
     expect(promptOf(bodies[0])).not.toContain("Continue.");
   });
 
+  it("runtime.wake supplies content when the prompt is empty", async () => {
+    const { runtime, bodies } = await makeRuntime({ steps: () => [], wakeup: judgeWakeup(() => false) });
+
+    expect(typeof runtime.wake()).toBe("string");
+    await waitForTurns(runtime, 1);
+    expect(typeof runtime.wake("   ")).toBe("string");
+    await waitForTurns(runtime, 2);
+
+    const users = (await storedMessages(runtime)).filter((message) => message.role === "user");
+    expect(users).toHaveLength(2);
+    expect(users[0]).toMatchObject({ content: "Continue." });
+    expect(users[1]).toMatchObject({ content: "Continue." });
+    expect(promptOf(bodies[0])).toContain("Continue.");
+    expect(promptOf(bodies[1])).toContain("Continue.");
+  });
+
   it("a declared secs window opens the next round on stored history", async () => {
     const { runtime, bodies } = await makeRuntime({
       wakeup: judgeWakeup((message) => message.messageId === "m1"),

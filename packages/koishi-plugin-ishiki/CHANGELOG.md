@@ -27,10 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compaction is now gated only by covered tokens; the minimum new-token throttle was removed
 - Maintenance and storage failures now surface instead of silently discarding shake and compact records
 - Session entry reads now accept an optional direction so entries can be paged forward or backward
+- `runtime.wake` now falls back to a `Continue.` opening message when the prompt is missing or only whitespace
 
 ### Fixed
 - Resolved chat compaction boundaries from the compact record's covered anchor instead of its list position
 - Passed wait wake reasons into the continuation context so wakeups no longer start empty
+- Fell back to the author name or user id when a session author has no nickname instead of rendering `undefined`
 ## [0.0.3] - 2026-10-29
 
 ### Added

@@ -17,7 +17,7 @@ export class StandardHandler implements SessionHandler {
 
   handle(session: Session): IshikiEvent | undefined {
     if (session.type === "message-created") {
-      const authorName = [session.author.nick, session.author.name, session.userId].find((name) => String(name) != "")!;
+      const authorName = session.author.nick || session.author.name || session.userId;
       const content = session.content!;
       return createCustomMessage("ishiki.message.created", {
         timestamp: session.timestamp,

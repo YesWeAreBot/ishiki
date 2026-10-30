@@ -27,7 +27,7 @@ Koishi 的 `internal/session` 事件由 `session-handler` 整形为 `ishiki.mess
 
 唤醒还有两条不经过引擎的来路：
 
-- `runtime.wake(prompt?)` 直接调用 `agent.continue(prompt)`，供扩展的定时器与主动消息使用；
+- `runtime.wake(prompt?)` 直接调用 `agent.continue(prompt)`，供扩展的定时器与主动消息使用；`prompt` 缺失或只含空白时使用 `Continue.`；
 - 模型调用 `wait` 声明下一次唤醒条件（新增消息条数或经过的秒数），条件满足后由 runtime 的等待机触发一轮。
 
 「在没有外部输入时持续运行」由唤醒接口支持：实例可以自行安排定时器，也可以在没有新消息时调用 `continue`。内置变体没有默认开启这种自驱动，需要自定义唤醒引擎实现。`wait` 是一次性声明，触发后即消耗。

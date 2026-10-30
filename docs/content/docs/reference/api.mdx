@@ -357,9 +357,9 @@ profile 片段写作 `context: { engine: briefing, briefing: { filename: briefin
 `AgentRuntime` 提供 `deliver(event)` 与 `wake(prompt?)`，分别负责提交输入与触发一轮。
 
 - `deliver(event)` 是纯摄取：捕获附件，然后 `agent.send(event, { trigger: false, ifBusy: "join" })`，成功投递后返回。返回不代表已经落盘。空闲时持久化在后台进行；有轮次正在运行时消息接入那一轮，在这一步的输出批次之后一起提交。提交完成的信号是 `message.appended` 通知。它不做决定，也不开启轮次。
-- `wake(prompt?)` 等价于 `agent.continue(prompt)`，是绕开唤醒引擎的显式唤醒，供扩展的定时器与主动消息使用。
+- `wake(prompt?)` 是绕开唤醒引擎的显式唤醒，供扩展的定时器与主动消息使用。`prompt` 缺失或只含空白时，它使用 `Continue.` 作为开场内容；其他文本原样传给 `agent.continue(prompt)`。
 
-`agent.continue(prompt?)` 来自 `@yesimagent/core`：空闲时它排入一轮并返回 turn id；带 `prompt` 时该轮以这段文本作为开场的 user 消息（原文写入，不做包装），不带时直接基于已有历史开始，不写占位消息。忙碌或已有待发唤醒时，请求并入唯一那个待发唤醒并返回 `undefined`，待队列排空即触发；此时多次 `continue` 的 `prompt` 以 `; ` 连接进同一条消息。
+`agent.continue(prompt?)` 来自 `@yesimagent/core`：空闲时它排入一轮并返回 turn id；带 `prompt` 时该轮以这段文本作为开场的 user 消息（原文写入，不做包装），不带时直接基于已有历史开始，不写占位消息。`AgentRuntime.wake` 总会传入非空内容。忙碌或已有待发唤醒时，请求并入唯一那个待发唤醒并返回 `undefined`，待队列排空即触发；此时多次 `continue` 的 `prompt` 以 `; ` 连接进同一条消息。
 
 `wait` 条件同样直接调用 `continue`，与引擎的订阅互不相干：引擎无法阻止 `wait` 或显式 `wake` 打开一轮。
 

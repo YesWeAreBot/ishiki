@@ -41,6 +41,7 @@ import type { WakeupEngineInstance } from "./wakeup/index.js";
 type ToolTransformStage = "base" | "complete";
 type ToolTransform = (tools: ToolSet, stage: ToolTransformStage) => Awaitable<ToolSet>;
 type DebugAgentPlugin = AgentPlugin & { transformTools?: ToolTransform };
+const DEFAULT_WAKE_PROMPT = "Continue.";
 
 export interface AgentRuntimeConfig {
   id: string;
@@ -366,7 +367,7 @@ export class AgentRuntime {
   }
 
   wake(prompt?: string): string | undefined {
-    return this.agent.continue(prompt);
+    return this.agent.continue(prompt?.trim() ? prompt : DEFAULT_WAKE_PROMPT);
   }
 
   async stop(): Promise<void> {
