@@ -88,7 +88,7 @@ description: 模型网关配置的完整字段
 
 思考档位全集：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。
 
-模型目录还支持 `language/embedding/image/speech/transcription/reranking/decision` 等类型标记。Ishiki 的对话调用使用语言模型；jev 唤醒引擎通过 profile 中的模型引用取得 `type: decision` 的 `DecisionModelV4`。决策模型必须支持 `choice` 与 `boolean` 问题。
+模型目录还支持 `language/embedding/image/speech/transcription/reranking/decision` 等类型标记。Ishiki 的对话调用使用语言模型；jev 唤醒引擎通过 profile 中的模型引用取得 `type: decision` 的决策模型。
 
 ```yaml
 providers:

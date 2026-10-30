@@ -193,7 +193,7 @@ attachment:
 #   engine: jev
 #   jev:
 #
-#     # models.yaml 需要先声明一个 type: decision、支持 choice 与 boolean 的模型：
+#     # models.yaml 先声明一个决策模型：
 #     # providers:
 #     #   typesafe:
 #     #     api: typesafe-ai
@@ -205,9 +205,7 @@ attachment:
 #
 #     # 人格与发言约束。消息内容、引用文本和作者名字都只作为待判定数据。
 #     instruction: |
-#       neko，猫娘，话不多但会接梗。
-#       只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
-#       几个人互相寒暄时保持安静。
+#       你是群聊中的参与者。先理解上下文，再在确实有合适内容时自然接话。
 #     # 本 bot 关心的话题，供 interested 证据使用。
 #     interests:
 #       - LLM 工程与调试

@@ -15,7 +15,7 @@ import type { IshikiMessageCreated } from "../types.js";
 import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 import type { StandardWakeupConfig } from "./standard.engine.js";
 
-const DEFAULT_INSTRUCTION = "你叫石矶。结合群聊语境，只在该说话时说话。";
+const DEFAULT_INSTRUCTION = "你是群聊中的参与者。先理解上下文，再在确实有合适内容时自然接话。";
 const SELF_AUTHOR = "self";
 const MAX_CHANNELS = 512;
 const MAX_CALLS = 1024;
@@ -176,10 +176,12 @@ export const JEV_QUESTIONS = {
   },
   withdrawn: {
     type: "boolean",
-    instructions: "只看 focus_author_messages 中同一位发言者按先后顺序表达的最终意图：他现在是否明确要求不回复、先别回复，或说原问题已经解决不再需要回答？",
+    instructions:
+      "Read focus_author_messages from the same author in chronological order. Does the author's latest intent explicitly withdraw the request, ask the bot to wait, or say the question is already resolved?",
     criteria: {
-      true: "明确取消问题、说已经解决不需要回答、叫机器人停止或等他说完再回答。",
-      false: "只是谢谢、正常提问，或先取消/暂停但随后又重新提问或允许回答。引用别人的话不算本人要求。",
+      true: "The author cancels the question, says it is already resolved, asks the bot to stop, or asks the bot to wait.",
+      false:
+        "A simple thanks or ordinary question, or an earlier pause followed by a new question or permission to answer. Quoted speech from someone else is not a withdrawal.",
     },
   },
   closed: {
@@ -1196,9 +1198,6 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
     const modelId = normalized.model.trim();
     if (modelId.length === 0) throw new Error("JEV decision model reference is required");
     const model = this.ctx.ishiki.gateway.decisionModel(modelId);
-    if (!model.supportedQuestionTypes.includes("choice") || !model.supportedQuestionTypes.includes("boolean")) {
-      throw new Error(`JEV decision model "${modelId}" must support choice and boolean questions`);
-    }
     return new JevWakeupInstance(config.jev ?? {}, context, model);
   }
 }

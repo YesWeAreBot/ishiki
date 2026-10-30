@@ -582,7 +582,7 @@ describe("AgentRuntime wakeup subscription", () => {
 });
 
 describe("JEV wakeup subscription", () => {
-  it("asks a gateway DecisionModelV4 with structured evidence questions", async () => {
+  it("asks the gateway decision model with structured evidence questions", async () => {
     const calls: DecisionModelCallOptions[] = [];
     const engine = new JevWakeupInstance(
       {

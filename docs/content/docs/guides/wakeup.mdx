@@ -148,11 +148,13 @@ channel 模式下每个 runtime 只对应一个频道；cross 模式下各频道
 </Tab>
 <Tab value="jev｜模型判定">
 
-### 让模型自己判断此刻该不该开口
+### 让模型判断此刻是否值得开口
 
-jev 引擎把一批新消息合并后交给 `DecisionModelV4`。模型先给出消息关系分布，再回答七项证据概率；引擎在本地应用门槛、对话预算和参与比例，决定回复、主动加入或保持安静。多条新消息来自不同作者时，模型会先选择一个当前焦点作者，后续判定只围绕该作者的请求展开。
+jev 会先合并短时间内收到的消息。多位作者同时说话时，它挑出当下最值得回应的那一位，再让决策模型读懂这段对话：话在对谁说，是否在接 bot 刚说过的话，句子是否完整，气氛是否开放，有没有信息或社交价值，话题是否已经结束或撤回。
 
-模型目录中的决策模型需要支持 `choice` 与 `boolean` 两类问题。TypeSafe 供应商可直接声明一个 `type: decision` 的模型：
+模型给出判断，发言节奏仍由本地参数控制。`threshold` 与 `addressedThreshold` 决定需要多少证据，冷却时间、连续回复上限和参与比例防止它反复接话，合并等待与上下文预算则决定一次判断能看到多少内容。完整字段见[插件配置参考](/docs/reference/plugin-config#wakeup)。
+
+在 `models.yaml` 中声明决策模型：
 
 ```yaml
 providers:
@@ -164,7 +166,7 @@ providers:
         type: decision
 ```
 
-profile 通过模型引用选择这个条目，密钥与地址留在 `models.yaml`：
+profile 引用这个条目。密钥和地址留在 `models.yaml`，`instruction` 用来描述它在群里的表达方式：
 
 ```yaml
 wakeup:
@@ -188,10 +190,10 @@ wakeup:
     historyMessages: 16            # 判定上下文中的最近消息数量
     contextChars: 3000             # 判定上下文的最大字符数
     instruction: |                 # 人格与发言约束
-      neko，猫娘，话不多但会接梗。
+      你是 Neko，话不多但会接梗。
       只在有人点名、话题与自己在做的工作有关、或有人明显在征求意见时插话；
       几个人互相寒暄时保持安静。
-    interests:                     # 判断兴趣匹配时使用的议题
+    interests:
       - LLM 工程与调试
       - TypeScript
     rules:                         # 命中后直接唤醒，不调用模型
@@ -201,21 +203,7 @@ wakeup:
       keywords: []
 ```
 
-要点：
-
-- 关系分为 `addressed`、`followup`、`open`、`other`、`ambient`：直接对 bot 说话、延续 bot 刚参与的对话、向全群邀请、明确对另一个参与者说话、没有具体对象的群聊环境音。
-- `ready` 判断消息是否完整，`receptive` 判断当前氛围是否接受插话，`worthwhile` 与 `social` 分别衡量信息价值和社交理由，`closed` 判断话题是否已经结束，`withdrawn` 识别撤回或明确拒绝，`interested` 衡量与 `interests` 的匹配程度。
-- `addressed` 与未过期的 `followup` 共同构成定向信号。定向消息通过 `ready` 等门槛后可以直接回复；主动加入还要通过 `threshold`、开放度、冷却时间与参与比例。
-- 消息出现明显撤回时不回复。已结束的话题会阻止主动加入，未完成的消息会让引擎等待，避免在别人收尾或补句时强行接话。
-- `rules` 的结构与 standard 的四项相同，只写在 `jev` 段内部。默认 `direct` 与 `atSelf` 开启，`quoteSelf` 关闭。
-
-<Callout type="warn" title="前置条件">
-`wakeup.jev.model` 必须指向 `models.yaml` 中声明为 `type: decision` 的模型。供应商实现需要支持 `choice` 与 `boolean` 问题；缺少模型、引用类型不符或能力不足时，创建 runtime 会直接报错。
-</Callout>
-
-<Callout type="warn">
-未命中兜底规则时，一批消息在 `debounceMs` 与 `maxWaitMs` 的范围内合并，再由 Agent 空闲状态决定何时请求模型。忙碌期间的新消息进入等待队列；成功发言后，同一轮已经覆盖的消息会被清除。
-</Callout>
+`interests` 帮模型判断话题是否贴近它关心的事情。`rules` 里的消息会跳过模型直接唤醒，默认只打开私聊与提及。没有命中规则时，消息会短暂合并，再等 Agent 空闲后进入判断。模型引用无法解析时，创建 runtime 会直接报错。
 
 </Tab>
 </Tabs>
@@ -233,7 +221,6 @@ runtime 按需创建，计时器从引擎的 `attach` 开始。当前平台接�
 常见问题：
 
 - **创建 runtime 时提示模型不存在或类型错误**：检查 `models.yaml` 是否存在 `wakeup.jev.model` 指向的条目，并把模型声明为 `type: decision`。
-- **创建 runtime 时提示必须支持 `choice` 与 `boolean`**：当前决策模型的能力不足，需要更换为支持这两类问题类型的供应商模型。
 - **jev 判定永远不醒**：检查 `timeoutMs` 是否过短、模型接口是否可达、`threshold` 与 `addressedThreshold` 是否过高；冷却期、连续回复预算与参与比例也会让引擎保持安静。
 - **rules 写成 `jev` 的同级段不生效**：兜底规则必须写在 `jev:` 段内部。
 - **消息进来却迟迟没有回应**：可能还在 `wait` 声明的窗口里，也可能被引擎的冷却期或概率跳过。消息已在事实流中，下一次醒来会一并处理。
