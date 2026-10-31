@@ -14,14 +14,17 @@ import type { IshikiMessageCreated, IshikiMessageDeleted } from "koishi-plugin-i
 import Schema from "schemastery";
 
 import { selectJevContext, projectJevLine, clipJevText, type JevContextLine } from "./context.js";
+import { getJevFrequencyLedger } from "./frequency.js";
 import {
   decideJev,
   jevParticipationThreshold,
   JEV_QUESTIONS,
   parseJevChoice,
   parseJevEvidence,
+  prefilterJev,
   type JevPolicyConfig,
   type JevParticipationStyle,
+  type JevPrefilterMode,
   type Participation,
 } from "./policy.js";
 
@@ -34,6 +37,8 @@ const DEFAULT: JevWakeupConfig = {
   threshold: 0.7,
   addressedThreshold: 0.7,
   cooldownMs: 30000,
+  globalCooldownMs: 60000,
+  channelCooldowns: {},
   minIntervalMs: 2000,
   debounceMs: 800,
   maxWaitMs: 2500,
@@ -50,10 +55,12 @@ const DEFAULT: JevWakeupConfig = {
   interests: [],
   botNames: [],
   style: "natural",
+  prefilter: "safe",
   rules: { direct: true, atSelf: true, quoteSelf: false, keywords: [] },
 };
 export interface JevWakeupConfig extends JevPolicyConfig {
   model: string;
+  channelCooldowns: Record<string, number>;
   debounceMs: number;
   maxWaitMs: number;
   contextMaxAgeMs: number;
@@ -64,14 +71,18 @@ export interface JevWakeupConfig extends JevPolicyConfig {
   interests: string[];
   botNames: string[];
   style: JevParticipationStyle;
+  prefilter: JevPrefilterMode;
   rules: Partial<StandardWakeupConfig>;
 }
 export const JevWakeupConfig = Schema.object({
   model: Schema.string().description("models.yaml 中已声明的 decision 模型名称"),
   threshold: Schema.number().min(0).max(1).default(0.7),
   addressedThreshold: Schema.number().min(0).max(1).default(0.7),
-  cooldownMs: Schema.number().min(0).default(30000),
-  minIntervalMs: Schema.number().min(0).default(2000),
+  cooldownMs: Schema.number().min(0).default(30000).description("同一群主动加入的发言冷却（毫秒）"),
+  globalCooldownMs: Schema.number().min(0).default(60000).description("当前 Profile 跨群的主动发言冷却（毫秒）"),
+  channelCooldowns: Schema.dict(Schema.number().min(0))
+    .default({})
+    .description("单群主动发言冷却覆盖，键格式 platform:selfId/channelId，例如 onebot:123456/987654"),
   debounceMs: Schema.number().min(0).default(800),
   maxWaitMs: Schema.number().min(0).default(2500),
   conversationMs: Schema.number().min(0).default(120000),
@@ -83,12 +94,15 @@ export const JevWakeupConfig = Schema.object({
   maxConsecutiveReplies: Schema.number().min(0).default(4),
   historyMessages: Schema.number().min(1).max(MAX_HISTORY).default(16),
   contextChars: Schema.number().min(2000).max(30000).default(6000),
-  instruction: Schema.string().role("textarea").default(""),
+  instruction: Schema.string().role("textarea").default("").description("JEV 专用的简短人格或判断指引，可留空；不会自动加载 Profile 人格文件"),
   interests: Schema.array(Schema.string()).default([]),
   botNames: Schema.array(Schema.string()).default([]).description("JEV 用于识别对机器人的称呼，如人格名或昵称"),
   style: Schema.union(["quiet", "natural", "talkative"])
     .default("natural")
     .description("主动加入倾向：quiet 更谨慎，talkative 更宽松；仍需正向贡献证据并遵守冷却与参与比例限制"),
+  prefilter: Schema.union(["off", "safe", "strict"])
+    .default("safe")
+    .description("调用模型前的本地内容预筛：safe 只在可确定不会发言时跳过，strict 还会跳过多媒体与空文本，off 关闭内容预筛"),
   rules: StandardWakeupConfig,
 });
 interface Line extends JevContextLine {
@@ -114,6 +128,7 @@ interface Channel {
   consecutiveReplies: number;
   nextSpeechProactive?: boolean;
   nextSpeechSemanticTurn?: string;
+  pendingReservationId?: string;
   lastConversationAt?: number;
   pending?: { messages: IshikiMessageCreated[]; since: number };
   deferred: IshikiMessageCreated[];
@@ -132,6 +147,28 @@ function isDeleted(m: AgentMessage): m is DeletedMessage {
 function object(v: unknown): Record<string, unknown> | undefined {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 }
+/** 去掉平台标记与空白后剩下的可见文本，用于判断是否只有表情或图片。 */
+function visibleJevText(content: string): string {
+  return content
+    .replace(/<[^>]*>/g, "")
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\s+/g, "");
+}
+
+/** 同一个人短时间内重复发送同一句话时，不必再调用模型。 */
+function isDuplicateJevLine(s: { lines: Line[] }, message: IshikiMessageCreated): boolean {
+  const text = visibleJevText(message.content);
+  if (text.length === 0) return false;
+  return s.lines.some(
+    (line) =>
+      !line.self &&
+      line.id !== message.messageId &&
+      line.authorId === message.user.id &&
+      visibleJevText(line.text) === text &&
+      Math.abs(message.timestamp - line.at) <= 120_000,
+  );
+}
+
 function cancelChannel(s: Channel): void {
   if (s.timer) clearTimeout(s.timer);
   s.timer = undefined;
@@ -156,11 +193,13 @@ export class JevWakeupInstance implements WakeupEngineInstance {
   private readonly context: ExtensionContext;
   private readonly rules: StandardWakeupInstance;
   private readonly channels = new Map<string, Channel>();
+  private readonly frequency: ReturnType<typeof getJevFrequencyLedger>;
   constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionContext) {
     this.config = {
       ...DEFAULT,
       ...config,
       model: config.model?.trim() ?? "",
+      channelCooldowns: Object.fromEntries(Object.entries(config.channelCooldowns ?? {}).filter(([, value]) => Number.isFinite(value) && value >= 0)),
       historyMessages: Math.min(MAX_HISTORY, Math.max(1, Math.floor(config.historyMessages ?? DEFAULT.historyMessages))),
       contextChars: Math.min(30000, Math.max(2000, config.contextChars ?? DEFAULT.contextChars)),
       interests: (config.interests ?? []).map((x) => x.trim()).filter(Boolean),
@@ -168,7 +207,69 @@ export class JevWakeupInstance implements WakeupEngineInstance {
       rules: { ...DEFAULT.rules, ...config.rules },
     };
     this.context = context;
+    this.frequency = getJevFrequencyLedger(context.fiber);
     this.rules = new StandardWakeupInstance(this.config.rules);
+  }
+  /** 观测用的模型上下文快照；限制条数与长度，避免占用过多内存。 */
+  private contextView(input: {
+    scene: string;
+    secondsSinceBotLastSpoke?: number | null;
+    focus?: IshikiMessageCreated;
+    pending: readonly IshikiMessageCreated[];
+    recent?: ReadonlyArray<{ author: string; text: string; is_bot: boolean; mentions_bot?: boolean; seconds_ago: number }>;
+    focusAuthor?: readonly string[];
+    now: number;
+  }) {
+    const fromMessage = (message: IshikiMessageCreated) => {
+      const line = projectJevLine(toLine(message), input.now);
+      return {
+        author: line.author,
+        text: clipJevText(line.text, 160),
+        isBot: line.is_bot,
+        mentionsBot: line.mentions_bot === true,
+        secondsAgo: Math.round(line.seconds_ago),
+      };
+    };
+    return {
+      scene: input.scene,
+      secondsSinceBotLastSpoke: input.secondsSinceBotLastSpoke ?? undefined,
+      focus: input.focus === undefined ? undefined : fromMessage(input.focus),
+      pending: input.pending.slice(-6).map(fromMessage),
+      recent: (input.recent ?? []).slice(-10).map((line) => ({
+        author: line.author,
+        text: clipJevText(line.text, 160),
+        isBot: line.is_bot,
+        mentionsBot: line.mentions_bot === true,
+        secondsAgo: Math.round(line.seconds_ago),
+      })),
+      focusAuthor: (input.focusAuthor ?? []).slice(-4).map((text) => clipJevText(text, 120)),
+    };
+  }
+  /** 观测用的待判消息快照；限制条数与长度，避免占用过多内存。 */
+  private messageViews(messages: readonly IshikiMessageCreated[]) {
+    return messages.slice(-6).map((message) => ({
+      author: message.user.name ?? message.user.id,
+      text: clipJevText(message.content, 200),
+      at: message.timestamp,
+      self: message.user.id === message.selfId,
+      mentionsBot: atSelf(message.content, message.selfId),
+    }));
+  }
+
+  /** 判定当时的关键配置，用于向操作者解释门槛来源。 */
+  private configView(channel?: string) {
+    return {
+      style: this.config.style,
+      threshold: this.config.threshold,
+      addressedThreshold: this.config.addressedThreshold,
+      cooldownMs: this.config.channelCooldowns[channel ?? ""] ?? this.config.cooldownMs,
+      globalCooldownMs: this.config.globalCooldownMs ?? 0,
+      channelCooldownMs: this.config.channelCooldowns[channel ?? ""] ?? this.config.cooldownMs,
+      minIntervalMs: this.config.minIntervalMs,
+      maxParticipation: this.config.maxParticipation,
+      maxConsecutiveReplies: this.config.maxConsecutiveReplies,
+      prefilter: this.config.prefilter,
+    };
   }
   /** 写入观测缓冲；记录失败不影响唤醒链路。 */
   private trace(
@@ -193,6 +294,29 @@ export class JevWakeupInstance implements WakeupEngineInstance {
         interested: number;
       };
       error?: string;
+      messages?: Array<{ author: string; text: string; at: number; self: boolean; mentionsBot: boolean }>;
+      steps?: Array<{ key: string; ok: boolean; value?: number; line?: number }>;
+      config?: {
+        style: string;
+        threshold: number;
+        addressedThreshold: number;
+        cooldownMs: number;
+        globalCooldownMs: number;
+        channelCooldownMs: number;
+        minIntervalMs: number;
+        maxParticipation: number;
+        maxConsecutiveReplies: number;
+        prefilter: string;
+      };
+      prefiltered?: boolean;
+      context?: {
+        scene: string;
+        secondsSinceBotLastSpoke?: number;
+        focus?: { author: string; text: string; isBot: boolean; mentionsBot: boolean; secondsAgo: number };
+        pending: Array<{ author: string; text: string; isBot: boolean; mentionsBot: boolean; secondsAgo: number }>;
+        recent: Array<{ author: string; text: string; isBot: boolean; mentionsBot: boolean; secondsAgo: number }>;
+        focusAuthor: string[];
+      };
     },
   ): void {
     const store = this.context.fiber.ishiki?.jevTrace;
@@ -264,13 +388,15 @@ export class JevWakeupInstance implements WakeupEngineInstance {
       s.lines = s.lines.filter((x) => Date.now() - x.at <= this.config.contextMaxAgeMs).slice(-MAX_HISTORY);
       s.activity = s.activity.filter((x) => Date.now() - x.at < this.config.participationWindowMs).slice(-512);
     };
-    const wake = (s: Channel, mode: string, reason: string, semanticTurn?: string) => {
-      if (disposed || !agent.isIdle()) return;
+    const wake = (s: Channel, mode: string, reason: string, semanticTurn?: string): boolean => {
+      if (disposed || !agent.isIdle()) return false;
       s.lastWakeAt = Date.now();
       s.nextSpeechProactive = mode === "join";
       s.nextSpeechSemanticTurn = semanticTurn ?? s.pending?.messages.at(-1)?.messageId;
+      if (mode === "join" && s.nextSpeechSemanticTurn !== undefined) s.pendingReservationId = `${this.context.runtimeId}\0${s.nextSpeechSemanticTurn}`;
       this.context.logger.debug("wakeup jev [" + s.id + "] " + mode + " " + reason);
       agent.continue();
+      return true;
     };
     let schedule: (s: Channel) => void;
     const evaluate = async (s: Channel) => {
@@ -287,6 +413,57 @@ export class JevWakeupInstance implements WakeupEngineInstance {
         if (!this.config.model) throw new Error("missing decision model");
         const messages = batch.messages.filter((message) => !s.deleted.has(message.messageId));
         if (messages.length === 0) return;
+        const now = Date.now();
+        const alive = s.lastSpokeAt !== undefined && now - s.lastSpokeAt <= this.config.conversationMs;
+        const possibleAddress = messages.some(
+          (message) =>
+            atSelf(message.content, message.selfId) ||
+            message.quote?.user?.id === message.selfId ||
+            this.config.botNames.some((name) => message.content.includes(name)),
+        );
+        const channelAddress = `${messages.at(-1)!.platform}:${messages.at(-1)!.selfId}/${messages.at(-1)!.channelId}`;
+        const policyConfig: JevWakeupConfig = {
+          ...this.config,
+          cooldownMs: this.config.channelCooldowns[channelAddress] ?? this.config.cooldownMs,
+        };
+        const skipped = prefilterJev({
+          now,
+          state: {
+            lastSpokeAt: s.lastSpokeAt,
+            lastWakeAt: s.lastWakeAt,
+            ...this.frequency.state(channelAddress),
+            activity: s.activity,
+            interestTurns: s.interestTurns,
+            consecutiveReplies: s.consecutiveReplies,
+            lastConversationAt: s.lastConversationAt,
+          },
+          config: policyConfig,
+          mode: this.config.prefilter,
+          alive,
+          possibleAddress,
+          duplicate: messages.length === 1 && isDuplicateJevLine(s, messages[0]!),
+          mediaOnly: messages.every((message) => visibleJevText(message.content).length === 0),
+        });
+        if (skipped) {
+          const threshold = jevParticipationThreshold(this.config.threshold, this.config.style);
+          this.context.logger.debug(`wakeup jev [${s.id}] wait prefilter:${skipped.reason}`);
+          this.trace(s, {
+            mode: "wait",
+            reason: `prefilter:${skipped.reason}`,
+            relation: "unknown",
+            probability: 0,
+            threshold,
+            focused: clipJevText(batch.messages.at(-1)?.content ?? "", 200),
+            pendingCount: batch.messages.length,
+            durationMs: Date.now() - started,
+            prefiltered: true,
+            messages: this.messageViews(messages),
+            steps: [],
+            config: this.configView(channelAddress),
+            context: this.contextView({ scene: "群聊", focus: messages.at(-1), pending: messages, now }),
+          });
+          return;
+        }
         const modelSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]);
         const gateway = this.context.fiber.ishiki.gateway;
         const modelId = this.config.model as Parameters<typeof gateway.decisionModel>[0];
@@ -342,7 +519,13 @@ export class JevWakeupInstance implements WakeupEngineInstance {
         });
         const style = this.config.style;
         const state = {
-          bot: { id: focus.selfId, names: this.config.botNames, interests: this.config.interests, instruction: this.config.instruction, style },
+          bot: {
+            id: focus.selfId,
+            names: this.config.botNames,
+            interests: this.config.interests,
+            instruction: this.config.instruction,
+            style,
+          },
           scene: {
             type: focus.isDirect ? "direct" : "group",
             seconds_since_bot_last_spoke: s.lastSpokeAt === undefined ? null : Math.max(0, (started - s.lastSpokeAt) / 1000),
@@ -379,20 +562,28 @@ export class JevWakeupInstance implements WakeupEngineInstance {
           return;
         }
         s.interestTurns = evidence.interested > 0.5 ? Math.min(20, s.interestTurns + 2) : Math.max(0, s.interestTurns - 1);
-        const decision = decideJev(
+        let decision = decideJev(
           evidence,
           {
             lastSpokeAt: s.lastSpokeAt,
             lastWakeAt: s.lastWakeAt,
+            ...this.frequency.state(`${focus.platform}:${focus.selfId}/${focus.channelId}`),
             activity: s.activity,
             interestTurns: s.interestTurns,
             consecutiveReplies: s.consecutiveReplies,
             lastConversationAt: s.lastConversationAt,
           },
-          this.config,
+          policyConfig,
           Date.now(),
           threshold,
         );
+        const decisionChannel = `${focus.platform}:${focus.selfId}/${focus.channelId}`;
+        const reservationId = `${this.context.runtimeId}\0${focus.messageId}`;
+        if (decision.mode === "join") {
+          const blocked = this.frequency.reserve(reservationId, decisionChannel, Date.now(), this.config.globalCooldownMs ?? 0, policyConfig.cooldownMs);
+          if (blocked !== undefined)
+            decision = { ...decision, mode: "wait", reason: blocked, steps: [...decision.steps, { key: blocked, ok: false, stop: true }] };
+        }
         this.context.logger.debug(
           "wakeup jev [" + s.id + "] " + decision.mode + " " + decision.reason + " relation=" + decision.relation + " p=" + decision.probability.toFixed(2),
         );
@@ -405,6 +596,18 @@ export class JevWakeupInstance implements WakeupEngineInstance {
           focused: clipJevText(focus.content, 200),
           pendingCount: batch.messages.length,
           durationMs: Date.now() - started,
+          messages: this.messageViews(messages),
+          steps: decision.steps,
+          config: this.configView(decisionChannel),
+          context: this.contextView({
+            scene: focus.isDirect ? "私聊" : "群聊",
+            secondsSinceBotLastSpoke: s.lastSpokeAt === undefined ? null : Math.max(0, (started - s.lastSpokeAt) / 1000),
+            focus,
+            pending: messages,
+            recent,
+            focusAuthor: state.focus_author_messages,
+            now: started,
+          }),
           evidence: {
             relation: { ...evidence.relation },
             ready: evidence.ready,
@@ -416,7 +619,7 @@ export class JevWakeupInstance implements WakeupEngineInstance {
             interested: evidence.interested,
           },
         });
-        if (decision.mode !== "wait") wake(s, decision.mode, decision.reason, focus.messageId);
+        if (decision.mode !== "wait" && !wake(s, decision.mode, decision.reason, focus.messageId)) this.frequency.release(reservationId);
       } catch (error) {
         if (!controller.signal.aborted) {
           const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -431,6 +634,18 @@ export class JevWakeupInstance implements WakeupEngineInstance {
             focused: clipJevText(batch.messages.at(-1)?.content ?? "", 200),
             pendingCount: batch.messages.length,
             durationMs: Date.now() - started,
+            messages: this.messageViews(batch.messages.filter((message) => !s.deleted.has(message.messageId))),
+            config: this.configView(
+              batch.messages.at(-1) === undefined
+                ? undefined
+                : `${batch.messages.at(-1)!.platform}:${batch.messages.at(-1)!.selfId}/${batch.messages.at(-1)!.channelId}`,
+            ),
+            context: this.contextView({
+              scene: "群聊",
+              focus: batch.messages.at(-1),
+              pending: batch.messages.filter((message) => !s.deleted.has(message.messageId)),
+              now: started,
+            }),
             error: `${detail}${cause}`,
           });
         }
@@ -579,6 +794,11 @@ export class JevWakeupInstance implements WakeupEngineInstance {
             s.receipts.add(part.toolCallId);
             if (s.receipts.size > 512) s.receipts.delete(s.receipts.values().next().value!);
             const proactive = call.proactive;
+            if (proactive) {
+              const reservationId = `${this.context.runtimeId}\0${call.semanticTurn}`;
+              this.frequency.commit(reservationId, m.timestamp);
+              if (s.pendingReservationId === reservationId) s.pendingReservationId = undefined;
+            }
             append(s, {
               id: "sent:" + part.toolCallId,
               author: "bot",
@@ -613,6 +833,10 @@ export class JevWakeupInstance implements WakeupEngineInstance {
       for (const s of this.channels.values()) {
         s.nextSpeechProactive = undefined;
         s.nextSpeechSemanticTurn = undefined;
+        if (s.pendingReservationId !== undefined) {
+          this.frequency.release(s.pendingReservationId);
+          s.pendingReservationId = undefined;
+        }
       }
       void seed
         .then(() => agent.wait())
@@ -646,6 +870,7 @@ export class JevWakeupInstance implements WakeupEngineInstance {
     });
     return () => {
       disposed = true;
+      this.frequency.releaseRuntime(this.context.runtimeId);
       unsubscribe();
       unsubscribeTurn();
       for (const s of this.channels.values()) {

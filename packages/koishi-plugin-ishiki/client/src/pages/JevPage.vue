@@ -8,7 +8,7 @@ import PageHeader from "../components/PageHeader.vue";
 import PageShell from "../components/PageShell.vue";
 import { formatDateTime, formatNumber, relativeTime } from "../lib/format";
 import { store, toast } from "../store";
-import type { JevDecisionView, JevSnapshot } from "../types";
+import type { JevDecisionView, JevSnapshot, JevStepView } from "../types";
 
 type BooleanKey = "ready" | "receptive" | "worthwhile" | "social" | "withdrawn" | "closed" | "interested";
 
@@ -31,6 +31,7 @@ const BOOLEAN_ROWS: Array<{ key: BooleanKey; label: string; hint: string }> = [
 ];
 
 const snapshot = ref<JevSnapshot | undefined>(store.jev);
+const installed = computed(() => snapshot.value?.installed !== false);
 const loading = ref(false);
 const attempted = ref(false);
 const errorText = ref("");
@@ -49,14 +50,83 @@ const counts = computed(() => {
   let reply = 0;
   let join = 0;
   let wait = 0;
+  let skipped = 0;
   for (const item of decisions.value) {
     if (item.error !== undefined) continue;
+    if (item.prefiltered) skipped += 1;
     if (item.mode === "reply") reply += 1;
     else if (item.mode === "join") join += 1;
     else wait += 1;
   }
-  return { reply, join, wait };
+  return { reply, join, wait, skipped };
 });
+
+const STEP_TEXT: Record<string, string> = {
+  withdrawn: "撤回检查",
+  directed: "是否在跟机器人说话",
+  ready: "是否说完",
+  closed: "话题是否结束",
+  "conversation-budget": "连续回复额度",
+  "turn-spacing": "判定间隔",
+  "no-contribution": "贡献底线",
+  "no-opening": "插话空间",
+  "weak-contribution": "贡献门槛",
+  "participation-enabled": "主动参与开关",
+  "join-cooldown": "发言冷却",
+  "participation-limit": "参与比例",
+  "relevant-contribution": "主动加入（相关贡献）",
+  "group-invitation": "主动加入（公开讨论）",
+  addressed: "回复（对机器人说）",
+  followup: "回复（延续对话）",
+};
+
+const STYLE_TEXT: Record<string, string> = { quiet: "安静", natural: "自然", talkative: "爱说" };
+const PREFILTER_MODE_TEXT: Record<string, string> = { off: "关闭", safe: "安全", strict: "严格" };
+
+function stepLabel(key: string): string {
+  return STEP_TEXT[key] ?? key;
+}
+
+function formatStep(step: JevStepView): string {
+  if (step.value === undefined) return "";
+  if (step.key === "join-cooldown") return `${Math.round(step.value / 1000)} 秒 / 冷却 ${Math.round((step.line ?? 0) / 1000)} 秒`;
+  const value = step.value.toFixed(2);
+  return step.line === undefined ? value : `${value} / 线 ${step.line.toFixed(2)}`;
+}
+
+function prefilterText(reason: string): string {
+  const key = reason.replace(/^prefilter:/, "");
+  const labels: Record<string, string> = {
+    duplicate: "同一人刚说过一样的话",
+    "media-only": "只有表情或图片",
+    cooldown: "还在冷却时间内",
+    spacing: "距上次主动唤醒过近",
+    "participation-limit": "主动发言比例已满",
+    "participation-disabled": "主动参与已关闭",
+  };
+  return labels[key] ?? key;
+}
+
+function reasonText(item: JevDecisionView): string {
+  if (item.prefiltered) return `本地预筛跳过：${prefilterText(item.reason)}`;
+  return item.reason;
+}
+
+function configRows(item: JevDecisionView): Array<{ label: string; value: string }> {
+  const config = item.config;
+  if (config === undefined) return [];
+  return [
+    { label: "档位", value: STYLE_TEXT[config.style] ?? config.style },
+    { label: "门槛", value: config.threshold.toFixed(2) },
+    { label: "定向线", value: config.addressedThreshold.toFixed(2) },
+    { label: "主动发言冷却（群）", value: `${Math.round(config.channelCooldownMs / 1000)} 秒` },
+    { label: "主动发言冷却（全局）", value: `${Math.round(config.globalCooldownMs / 1000)} 秒` },
+    { label: "唤醒间隔", value: `${Math.round(config.minIntervalMs / 1000)} 秒` },
+    { label: "参与比例", value: `${Math.round(config.maxParticipation * 100)}%` },
+    { label: "连续上限", value: String(config.maxConsecutiveReplies) },
+    { label: "预筛", value: PREFILTER_MODE_TEXT[config.prefilter] ?? config.prefilter },
+  ];
+}
 
 function describe(error: unknown): string {
   if (error instanceof ApiError) return error.message;
@@ -117,7 +187,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <PageShell>
+  <PageShell v-if="installed">
     <PageHeader
       title="唤醒判定"
       eyebrow="JEV"
@@ -152,6 +222,7 @@ onMounted(() => {
             <span class="badge badge-success">回复 {{ counts.reply }}</span>
             <span class="badge badge-warning">加入 {{ counts.join }}</span>
             <span class="badge badge-neutral">沉默 {{ counts.wait }}</span>
+            <span class="badge badge-outline">预筛跳过 {{ counts.skipped }}</span>
           </div>
         </div>
       </div>
@@ -199,6 +270,28 @@ onMounted(() => {
             <div class="flex-1 mono">{{ item.error }}</div>
           </div>
 
+          <div v-if="item.steps !== undefined && item.steps.length > 0" class="jev-flow">
+            <template v-for="(step, index) in item.steps" :key="index">
+              <span class="jev-flow-node" :class="step.stop ? 'is-stop' : step.ok ? 'is-pass' : 'is-neutral'" :title="formatStep(step)">{{
+                stepLabel(step.key)
+              }}</span>
+              <span v-if="index < item.steps.length - 1" class="jev-flow-arrow">›</span>
+            </template>
+          </div>
+          <div v-else-if="item.prefiltered" class="jev-flow">
+            <span class="jev-flow-node is-stop">{{ reasonText(item) }}</span>
+          </div>
+
+          <template v-if="item.messages !== undefined && item.messages.length > 0">
+            <div class="jev-section-title">待判消息</div>
+            <div class="jev-messages">
+              <div v-for="(message, index) in item.messages" :key="index" class="jev-message">
+                <span class="jev-message-author">{{ message.author }}</span>
+                <span class="jev-message-text">{{ message.text }}</span>
+              </div>
+            </div>
+          </template>
+
           <div v-if="item.focused.length > 0" class="jev-focus">
             <span class="jev-focus-label">焦点消息</span>
             <span>{{ item.focused }}</span>
@@ -221,6 +314,59 @@ onMounted(() => {
               </span>
             </div>
           </template>
+
+          <details class="jev-details">
+            <summary>展开：模型上下文、判定链与本次配置</summary>
+
+            <template v-if="item.context !== undefined">
+              <div class="jev-section-title">
+                模型上下文 · {{ item.context.scene }}
+                <span v-if="item.context.secondsSinceBotLastSpoke !== undefined">
+                  · 距机器人上次发言 {{ Math.round(item.context.secondsSinceBotLastSpoke) }} 秒</span
+                >
+              </div>
+              <div class="jev-context">
+                <div v-for="(line, index) in item.context.recent" :key="index" class="jev-context-line">
+                  <span class="jev-context-time mono">{{ line.secondsAgo }}s</span>
+                  <span class="jev-context-author">{{ line.author }}</span>
+                  <span v-if="line.isBot" class="jev-context-tag">机器人</span>
+                  <span v-if="line.mentionsBot" class="jev-context-tag">@</span>
+                  <span class="jev-context-text">{{ line.text }}</span>
+                </div>
+                <div v-if="item.context.recent.length === 0" class="jev-context-line">
+                  <span class="jev-context-text">这次没有可用的历史上下文。</span>
+                </div>
+              </div>
+              <template v-if="item.context.focusAuthor.length > 0">
+                <div class="jev-section-title">焦点作者此前发言</div>
+                <div class="jev-context">
+                  <div v-for="(line, index) in item.context.focusAuthor" :key="index" class="jev-context-line">
+                    <span class="jev-context-text">{{ line }}</span>
+                  </div>
+                </div>
+              </template>
+            </template>
+
+            <template v-if="item.steps !== undefined && item.steps.length > 0">
+              <div class="jev-section-title">判定链</div>
+              <div class="jev-steps">
+                <div v-for="(step, index) in item.steps" :key="index" class="jev-step" :class="{ 'is-stop': !step.ok }">
+                  <span class="jev-step-mark">{{ step.ok ? "✓" : "×" }}</span>
+                  <span class="jev-step-label">{{ stepLabel(step.key) }}</span>
+                  <span v-if="step.value !== undefined" class="jev-step-value mono">{{ formatStep(step) }}</span>
+                </div>
+              </div>
+            </template>
+
+            <template v-if="item.config !== undefined">
+              <div class="jev-section-title">本次配置</div>
+              <div class="jev-chips">
+                <span v-for="row in configRows(item)" :key="row.label" class="jev-chip"
+                  >{{ row.label }} <span class="mono">{{ row.value }}</span></span
+                >
+              </div>
+            </template>
+          </details>
         </div>
       </div>
     </div>
@@ -228,6 +374,162 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.jev-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  background: var(--k-color-bg-2, rgba(127, 127, 127, 0.08));
+}
+
+.jev-flow-node {
+  padding: 2px 8px;
+  border: 1px solid var(--k-color-border, rgba(127, 127, 127, 0.28));
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.jev-flow-node.is-pass {
+  border-color: var(--k-color-success, #3ba55c);
+  color: var(--k-color-success, #3ba55c);
+}
+
+.jev-flow-node.is-stop {
+  border-color: var(--k-color-warning, #d97706);
+  color: var(--k-color-warning, #d97706);
+}
+
+.jev-flow-node.is-neutral {
+  opacity: 0.62;
+}
+
+.jev-flow-arrow {
+  color: var(--k-color-fg-3, #8a8a8a);
+  font-size: 12px;
+}
+
+.jev-details {
+  margin-bottom: 12px;
+}
+
+.jev-details > summary {
+  cursor: pointer;
+  color: var(--k-color-fg-3, #8a8a8a);
+  font-size: 12px;
+  line-height: 2;
+}
+
+.jev-context {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.jev-context-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.jev-context-time {
+  flex: none;
+  width: 44px;
+  color: var(--k-color-fg-3, #8a8a8a);
+  text-align: right;
+}
+
+.jev-context-author {
+  flex: none;
+  max-width: 110px;
+  overflow: hidden;
+  color: var(--k-color-fg-3, #8a8a8a);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jev-context-tag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--k-color-bg-3, rgba(127, 127, 127, 0.16));
+  color: var(--k-color-fg-3, #8a8a8a);
+  font-size: 11px;
+}
+
+.jev-context-text {
+  flex: 1;
+  color: var(--k-color-fg-1, #222);
+}
+
+.jev-messages {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.jev-message {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.jev-message-author {
+  flex: none;
+  max-width: 120px;
+  overflow: hidden;
+  color: var(--k-color-fg-3, #8a8a8a);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jev-message-text {
+  flex: 1;
+  color: var(--k-color-fg-1, #222);
+}
+
+.jev-steps {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 14px;
+  font-size: 12px;
+}
+
+.jev-step {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--k-color-fg-2, #555);
+}
+
+.jev-step-mark {
+  color: var(--k-color-success, #3ba55c);
+  text-align: center;
+}
+
+.jev-step-value {
+  color: var(--k-color-fg-3, #8a8a8a);
+}
+
+.jev-step.is-stop {
+  color: var(--k-color-warning, #d97706);
+}
+
+.jev-step.is-stop .jev-step-mark {
+  color: var(--k-color-warning, #d97706);
+}
+
 .jev-focus {
   display: flex;
   gap: 8px;

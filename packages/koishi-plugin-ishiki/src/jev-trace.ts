@@ -10,6 +10,9 @@ export class JevTraceStore {
   private readonly records: JevDecisionView[] = [];
   private readonly listeners = new Set<(record: JevDecisionView) => void>();
 
+  /** 由宿主注入：独立 JEV 插件是否已注册为唤醒引擎。 */
+  public isInstalled?: () => boolean;
+
   public record(record: JevDecisionView): void {
     this.records.push(record);
     if (this.records.length > CAPACITY) this.records.splice(0, this.records.length - CAPACITY);
@@ -24,7 +27,7 @@ export class JevTraceStore {
 
   /** 最新在前，控制台按时间倒序展示。 */
   public snapshot(): JevSnapshot {
-    return { decisions: [...this.records].reverse(), collectedAt: Date.now() };
+    return { decisions: [...this.records].reverse(), collectedAt: Date.now(), installed: this.isInstalled?.() ?? false };
   }
 
   public subscribe(listener: (record: JevDecisionView) => void): () => void {

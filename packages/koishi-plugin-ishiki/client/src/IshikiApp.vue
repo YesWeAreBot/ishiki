@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, type Component } from "vue";
+import { computed, defineAsyncComponent, onMounted, ref, watch, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import { call } from "./api";
 import brandIconDark from "./assets/ishiki-icon-dark.svg";
 import brandIconLight from "./assets/ishiki-icon.svg";
 import brandLogoDark from "./assets/ishiki-logo-dark.svg";
 import brandLogoLight from "./assets/ishiki-logo.svg";
 import ToastHost from "./components/ToastHost.vue";
 import { useIshikiTheme } from "./lib/theme";
+import { store } from "./store";
+import type { JevSnapshot } from "./types";
 
 defineOptions({ name: "IshikiApp" });
 
@@ -33,17 +36,22 @@ const groups = [
   { label: "观测", ids: ["jev", "usage", "cache"] },
 ] as const;
 
-const navGroups = groups.map((group) => ({
-  label: group.label,
-  pages: group.ids.flatMap((id) => {
-    const page = pages.find((entry) => entry.id === id);
-    return page === undefined ? [] : [page];
-  }),
-}));
+const navGroups = computed(() =>
+  groups.map((group) => ({
+    label: group.label,
+    pages: group.ids.flatMap((id) => {
+      if (id === "jev" && !jevInstalled.value) return [];
+      const page = pages.find((entry) => entry.id === id);
+      return page === undefined ? [] : [page];
+    }),
+  })),
+);
 
 const route = useRoute();
 const router = useRouter();
 const { isDark } = useIshikiTheme();
+// 未安装独立 JEV 插件时，唤醒判定页面既不出现在导航里，也不能直接访问。
+const jevInstalled = ref(store.jev?.installed ?? true);
 const brandIcon = computed(() => (isDark.value ? brandIconDark : brandIconLight));
 const brandLogo = computed(() => (isDark.value ? brandLogoDark : brandLogoLight));
 
@@ -55,7 +63,24 @@ const segments = computed<string[]>(() => {
 
 const activeId = computed(() => {
   const first = segments.value[0];
+  if (first === "jev" && !jevInstalled.value) return "models";
   return pages.some((page) => page.id === first) ? first : "models";
+});
+
+onMounted(async () => {
+  if (store.jev !== undefined) {
+    jevInstalled.value = store.jev.installed;
+    return;
+  }
+  try {
+    jevInstalled.value = (await call<JevSnapshot>("ishiki/jev/trace")).installed;
+  } catch {
+    jevInstalled.value = true;
+  }
+});
+
+watch([jevInstalled, segments], () => {
+  if (!jevInstalled.value && segments.value[0] === "jev") void router.push("/ishiki/models");
 });
 
 const current = computed(() => pages.find((page) => page.id === activeId.value) ?? pages[0]);

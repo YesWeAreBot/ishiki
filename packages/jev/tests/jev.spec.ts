@@ -83,6 +83,7 @@ describe("JEV wakeup lifecycle", () => {
         maxWaitMs: 50,
         minIntervalMs: 0,
         botNames: ["小助手"],
+        instruction: "额外指引：只在能自然接话时加入",
         rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
       },
       context as never,
@@ -109,7 +110,7 @@ describe("JEV wakeup lifecycle", () => {
     expect(calls[1]).toMatchObject({
       state: {
         pending_message: { id: "selected", author_id: "author-b", mentions_bot: true, quote: { author_id: "bot" } },
-        bot: { names: ["小助手"] },
+        bot: { names: ["小助手"], instruction: "额外指引：只在能自然接话时加入" },
       },
     });
     expect(calls[1]).toMatchObject({
@@ -120,6 +121,81 @@ describe("JEV wakeup lifecycle", () => {
         ],
       },
     });
+    dispose();
+  });
+
+  it("skips the model call for a repeated message but still evaluates a mention", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const calls: unknown[] = [];
+    const agent = {
+      isIdle: () => true,
+      wait: async () => {},
+      continue: vi.fn<() => void>(),
+      storage: { read: () => [] },
+      channel: {
+        subscribe: (_name: "agent", listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as Agent;
+    const context = {
+      logger: { debug: vi.fn<(message: string) => void>(), warn: vi.fn<(message: string) => void>() },
+      fiber: {
+        ishiki: {
+          gateway: {
+            decisionModel: () => ({
+              supportedQuestionTypes: ["boolean", "choice"],
+              doDecide: async ({ state }: { state: Array<{ value: unknown }> }) => {
+                calls.push(state[0]?.value);
+                return {
+                  answers: {
+                    relation: { type: "choice", probabilities: { addressed: 0, followup: 0, open: 0, other: 0, ambient: 1 } },
+                    ready: { type: "boolean", probability: 0.9 },
+                    receptive: { type: "boolean", probability: 0.3 },
+                    worthwhile: { type: "boolean", probability: 0.2 },
+                    social: { type: "boolean", probability: 0.2 },
+                    withdrawn: { type: "boolean", probability: 0 },
+                    closed: { type: "boolean", probability: 0 },
+                    interested: { type: "boolean", probability: 0 },
+                  },
+                };
+              },
+            }),
+          },
+        },
+      },
+    };
+    const engine = new JevWakeupInstance(
+      { model: "decision", debounceMs: 0, maxWaitMs: 0, minIntervalMs: 0, rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } },
+      context as never,
+    );
+    const dispose = engine.attach(agent);
+    const emit = (id: string, content: string) => {
+      const message: IshikiMessageCreated = {
+        timestamp: Date.now(),
+        platform: "test",
+        selfId: "bot",
+        channelId: "room",
+        messageId: id,
+        content,
+        isDirect: false,
+        user: { id: "member", name: "Member" },
+      };
+      for (const listener of listeners) listener({ type: "message.appended", message: createCustomMessage("ishiki.message.created", message) });
+    };
+
+    emit("first", "same text");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]).toMatchObject({ bot: { instruction: "" } });
+    emit("repeat", "same text");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(calls).toHaveLength(1);
+
+    emit("mention", '<at id="bot"/>');
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    emit("mention-again", '<at id="bot"/>');
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
     dispose();
   });
 

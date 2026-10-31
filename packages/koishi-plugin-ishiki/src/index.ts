@@ -94,6 +94,8 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
   constructor(ctx: Context, config: Ishiki.Config) {
     super(ctx, "ishiki");
     this.config = config;
+    // 未安装独立 JEV 插件时，控制台不应展示唤醒判定页面。
+    this.jevTrace.isInstalled = () => this.ctx.get(WakeupEngine.GetName("jev")) !== undefined;
     this.logger = ctx.logger("ishiki");
     this.logger.level = config.logLevel;
 

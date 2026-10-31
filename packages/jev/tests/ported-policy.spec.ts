@@ -2,6 +2,7 @@ import type { Experimental_DecisionModelV4Result as DecisionModelResult } from "
 import { describe, expect, it } from "vitest";
 
 import { clipJevText, projectJevLine, selectJevContext, type JevContextLine } from "../src/context.js";
+import { JevFrequencyLedger } from "../src/frequency.js";
 import {
   decideJev,
   isDirectedJev,
@@ -9,6 +10,7 @@ import {
   JEV_QUESTIONS,
   parseJevChoice,
   parseJevEvidence,
+  prefilterJev,
   type JevEvidence,
   type JevPolicyConfig,
 } from "../src/policy.js";
@@ -17,6 +19,7 @@ const policy: JevPolicyConfig = {
   threshold: 0.7,
   addressedThreshold: 0.7,
   cooldownMs: 30_000,
+  globalCooldownMs: 60_000,
   minIntervalMs: 2_000,
   conversationMs: 120_000,
   participationWindowMs: 300_000,
@@ -104,6 +107,10 @@ describe("JEV decision evidence", () => {
     expect(JEV_QUESTIONS.ready.type).toBe("boolean");
     expect(JEV_QUESTIONS.ready.criteria.true).toContain("emoji");
     expect(JEV_QUESTIONS.ready.instructions).toContain("brevity alone does not mean unfinished");
+    expect(JEV_QUESTIONS.ready.criteria.true).toContain("natural stopping point");
+    expect(JEV_QUESTIONS.receptive.instructions).toContain("this bot");
+    expect(JEV_QUESTIONS.relation.criteria.open).toContain("concrete opening");
+    expect(JEV_QUESTIONS.social.instructions).toContain("specific, concise social response");
     expect(JEV_QUESTIONS.relation.instructions).toContain("mentions_bot=true");
     expect(JEV_QUESTIONS.relation.instructions).toContain("quote.author_id matching bot.id");
     expect(JEV_QUESTIONS.relation.criteria.addressed).toContain("discussing the bot in third person");
@@ -112,7 +119,8 @@ describe("JEV decision evidence", () => {
     expect(JEV_QUESTIONS.relation.criteria.followup).toContain("Continuation between other group members is not followup to the bot");
     expect(JEV_QUESTIONS.social.criteria.true).toContain("genuine solidarity");
     expect(JEV_QUESTIONS.social.criteria.false).toContain("reflexive +1");
-    expect(JEV_QUESTIONS.social.criteria.false).toContain("no recoverable context");
+    expect(JEV_QUESTIONS.social.criteria.false).toContain("echoing a reply already given");
+    expect(JEV_QUESTIONS.social.criteria.false).toContain("without context");
     expect(Object.values(JEV_QUESTIONS).map((question) => question.type)).toEqual([
       "choice",
       "boolean",
@@ -167,6 +175,78 @@ describe("JEV local policy", () => {
       mode: "wait",
       reason: "unfinished",
     });
+  });
+
+  it("applies global and channel proactive intervals independently", () => {
+    const ledger = new JevFrequencyLedger();
+    expect(ledger.reserve("runtime-a\\0turn-1", "channel-a", 100_000, 60_000, 30_000)).toBeUndefined();
+    expect(ledger.reserve("runtime-b\\0turn-2", "channel-b", 100_001, 60_000, 10_000)).toBe("global-frequency");
+    ledger.release("runtime-a\\0turn-1");
+    expect(ledger.reserve("runtime-b\\0turn-2", "channel-b", 100_001, 60_000, 10_000)).toBeUndefined();
+    ledger.commit("runtime-b\\0turn-2", 100_010);
+    expect(ledger.state("channel-b")).toMatchObject({ lastGlobalProactiveAt: 100_010, lastChannelProactiveAt: 100_010 });
+    expect(ledger.reserve("runtime-c\\0turn-3", "channel-a", 120_000, 60_000, 30_000)).toBe("global-frequency");
+    expect(ledger.reserve("runtime-c\\0turn-4", "channel-b", 120_000, 0, 30_000)).toBe("join-cooldown");
+  });
+
+  it("enforces the shared global speech interval but not on directed replies", () => {
+    const state = { activity: [], lastGlobalProactiveAt: 9_000 };
+    const open = evidence({ relation: { addressed: 0.02, followup: 0.02, open: 0.9, other: 0.04, ambient: 0.02 } });
+
+    expect(
+      prefilterJev({ now: 10_000, state, config: policy, mode: "safe", alive: false, possibleAddress: false, duplicate: false, mediaOnly: false }),
+    ).toEqual({ reason: "global-frequency" });
+    expect(decideJev(open, state, policy, 10_000)).toMatchObject({ mode: "wait", reason: "global-frequency" });
+    expect(decideJev(evidence(), state, policy, 10_000).mode).toBe("reply");
+  });
+
+  it("blocks proactive paths globally but leaves direct replies available", () => {
+    const state = { activity: [], lastGlobalProactiveAt: 9_000 };
+    const open = evidence({ relation: { addressed: 0.02, followup: 0.02, open: 0.9, other: 0.04, ambient: 0.02 } });
+
+    expect(
+      prefilterJev({ now: 10_000, state, config: policy, mode: "safe", alive: false, possibleAddress: false, duplicate: false, mediaOnly: false }),
+    ).toEqual({ reason: "global-frequency" });
+    expect(decideJev(open, state, policy, 10_000)).toMatchObject({ mode: "wait", reason: "global-frequency" });
+    expect(decideJev(evidence(), state, policy, 10_000).mode).toBe("reply");
+  });
+
+  it("records the rule chain so a rejection can be explained", () => {
+    const blocked = decideJev(
+      evidence({
+        relation: { addressed: 0.02, followup: 0.02, open: 0.02, other: 0.04, ambient: 0.9 },
+        worthwhile: 0.2,
+        social: 0.2,
+        receptive: 0.3,
+      }),
+      { activity: [] },
+      policy,
+      10_000,
+    );
+    expect(blocked).toMatchObject({ mode: "wait", reason: "no-contribution" });
+    const failed = blocked.steps.filter((step) => step.stop);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ key: "no-contribution", value: 0.2, line: 0.5 });
+    expect(blocked.steps.at(-1)).toBe(failed[0]);
+
+    const joined = decideJev(evidence(), { activity: [] }, policy, 10_000);
+    expect(joined.mode).toBe("reply");
+    expect(joined.steps.every((step) => step.ok)).toBe(true);
+    expect(joined.steps.map((step) => step.key)).toContain("directed");
+    expect(joined.steps.some((step) => step.stop === true)).toBe(false);
+  });
+
+  it("prefilters only when the outcome is already decided locally", () => {
+    const base = { now: 10_000, config: policy, mode: "safe" as const, alive: false, possibleAddress: false, duplicate: false, mediaOnly: false };
+    const state = { activity: [], lastSpokeAt: 9_000 };
+
+    expect(prefilterJev({ ...base, state })).toEqual({ reason: "cooldown" });
+    expect(prefilterJev({ ...base, state, alive: true })).toBeUndefined();
+    expect(prefilterJev({ ...base, state, possibleAddress: true })).toBeUndefined();
+    expect(prefilterJev({ ...base, state: { activity: [] }, duplicate: true })).toEqual({ reason: "duplicate" });
+    expect(prefilterJev({ ...base, state: { activity: [] }, mediaOnly: true })).toBeUndefined();
+    expect(prefilterJev({ ...base, state: { activity: [] }, mediaOnly: true, mode: "strict" })).toEqual({ reason: "media-only" });
+    expect(prefilterJev({ ...base, state: { activity: [] }, mode: "off" })).toBeUndefined();
   });
 
   it("joins a meaningful +1 in an open group discussion but rejects a reflexive echo", () => {
@@ -259,6 +339,9 @@ describe("JEV local policy", () => {
     const quietThreshold = jevParticipationThreshold(policy.threshold, "quiet");
 
     expect(decideJev(moderateInvitation, { activity: [] }, policy, 10_000, naturalThreshold)).toMatchObject({ mode: "wait", reason: "no-opening" });
+    expect(
+      decideJev({ ...moderateInvitation, receptive: 0.6 }, { activity: [] }, policy, 10_000, jevParticipationThreshold(policy.threshold, "talkative")),
+    ).toMatchObject({ mode: "join", reason: "group-invitation" });
     expect(decideJev(moderateInvitation, { activity: [] }, policy, 10_000, talkativeThreshold)).toMatchObject({ mode: "join", reason: "group-invitation" });
     expect(decideJev(moderateInvitation, { activity: [] }, policy, 10_000, quietThreshold)).toMatchObject({ mode: "wait", reason: "no-opening" });
     expect(decideJev({ ...moderateInvitation, receptive: 0.5 }, { activity: [] }, policy, 10_000, talkativeThreshold)).toMatchObject({

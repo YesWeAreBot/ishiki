@@ -203,9 +203,9 @@ attachment:
 #     #         type: decision
 #     model: typesafe:jev-latest
 #
-#     # 人格与发言约束。消息内容、引用文本和作者名字都只作为待判定数据。
-#     instruction: |
-#       你是群聊中的参与者。先理解上下文，再在确实有合适内容时自然接话。
+#     # JEV 专属的简短人格与判定指引，可留空；不会自动传入 Profile 的 PERSONA.md。
+#     # 消息内容、引用文本和作者名字都只作为待判定数据。
+#     instruction: "" # 可设为例如「只在能自然接话、不打断别人时加入」
 #     # 机器人的显示名和昵称，用于判断中文群聊中的直接称呼。
 #     botNames: [] # 例如：["小助手"]
 #     style: natural # quiet 更谨慎；talkative 更愿意参与，但不会绕过贡献、冷却和参与比例判断。
@@ -217,8 +217,10 @@ attachment:
 #
 #     threshold: 0.7 # 主动加入时的贡献门槛
 #     addressedThreshold: 0.7 # 定向消息的地址证据门槛
-#     cooldownMs: 30000 # 主动加入的冷却时间（毫秒）
-#     minIntervalMs: 2000 # 连续主动判定之间的最小间隔
+#     cooldownMs: 30000 # 默认单群主动加入最小间隔（毫秒）
+#     globalCooldownMs: 60000 # Profile 内跨群的主动发言间隔（毫秒）
+#     channelCooldowns: {} # 群级主动发言间隔覆盖；键 platform:selfId/channelId
+#     minIntervalMs: 2000 # 同一频道连续主动唤醒之间的最小间隔
 #     debounceMs: 800 # 同批消息的合并等待时间
 #     maxWaitMs: 2500 # 首批消息等待合并的最长时间
 #     conversationMs: 120000 # bot 发言后的对话延续窗口
