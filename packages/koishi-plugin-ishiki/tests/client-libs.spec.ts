@@ -4,7 +4,7 @@ import { classifyReference } from "../client/src/lib/entities";
 import { buildModelDecl, draftsFromDecl, fieldsForType, validateModelDraft } from "../client/src/lib/modelFields";
 import { blankProfileDraft, buildProfileConfig, validateProfileDraft } from "../client/src/lib/profileDraft";
 import { inspectModelEntry, inspectProfileConfig, parseRaw, serializeRaw } from "../client/src/lib/rawConfig";
-import { bucketUsageByDay } from "../client/src/lib/usageSeries";
+import { bucketUsage } from "../client/src/lib/usageSeries";
 import type { GroupView, ProviderView, UsageRecord } from "../src/management/types";
 
 const providers: ProviderView[] = [
@@ -45,19 +45,39 @@ describe("usage entity classification", () => {
 
   it("groups usage series only by concrete records, summing each metric per day", () => {
     const records: UsageRecord[] = [
-      { id: "a", timestamp: jan1 + 1000, reference: "openai:gpt-4o", input: 10, output: 5, total: 15 } as UsageRecord,
-      { id: "b", timestamp: jan1 + 2000, reference: "chat", input: 20, output: 0, total: 20 } as UsageRecord,
-      { id: "c", timestamp: jan3 + 1000, reference: "openai:gpt-4o", input: 7, output: 3, total: 10 } as UsageRecord,
+      { id: "a", timestamp: jan1 + 1000, reference: "openai:gpt-4o", input: 10, output: 5, total: 15, cacheRead: 6, cacheWrite: 1 } as UsageRecord,
+      { id: "b", timestamp: jan1 + 2000, reference: "chat", input: 20, output: 0, total: 20, cacheRead: 9, cacheWrite: 2 } as UsageRecord,
+      { id: "c", timestamp: jan3 + 1000, reference: "openai:gpt-4o", input: 7, output: 3, total: 10, cacheRead: 7, cacheWrite: 0 } as UsageRecord,
     ];
-    const series = bucketUsageByDay(records, ["calls", "input", "output"]);
-    const input = series.find((entry) => entry.key === "input");
+    const chart = bucketUsage(records, ["calls", "input", "cacheRate"]);
+    expect(chart.bucket).toBe("day");
+    const input = chart.series.find((entry) => entry.key === "input");
     expect(input?.points).toEqual([
       { t: jan1, v: 30 },
       { t: jan3, v: 7 },
     ]);
-    const calls = series.find((entry) => entry.key === "calls");
+    const calls = chart.series.find((entry) => entry.key === "calls");
     expect(calls?.points).toHaveLength(2);
     expect(calls?.points[0]).toEqual({ t: jan1, v: 2 });
+    const rate = chart.series.find((entry) => entry.key === "cacheRate");
+    expect(rate?.points).toEqual([
+      { t: jan1, v: 50 },
+      { t: jan3, v: 100 },
+    ]);
+  });
+
+  it("uses hourly buckets inside a short span", () => {
+    const start = new Date(2026, 0, 1, 10).getTime();
+    const records: UsageRecord[] = [
+      { id: "a", timestamp: start + 60_000, reference: "openai:gpt-4o", input: 10, output: 5, total: 15, cacheRead: 0, cacheWrite: 0 } as UsageRecord,
+      { id: "b", timestamp: start + 90 * 60_000, reference: "openai:gpt-4o", input: 20, output: 5, total: 25, cacheRead: 0, cacheWrite: 0 } as UsageRecord,
+    ];
+    const chart = bucketUsage(records, ["calls"]);
+    expect(chart.bucket).toBe("hour");
+    expect(chart.series[0]?.points).toEqual([
+      { t: start, v: 1 },
+      { t: start + 3_600_000, v: 1 },
+    ]);
   });
 });
 

@@ -277,7 +277,6 @@ const usageItems = computed(() => {
   const source = usage.value;
   if (source === undefined) return [] as Array<{ label: string; value: string }>;
   const inputDetails = fields(source.inputTokenDetails);
-  const outputDetails = fields(source.outputTokenDetails);
   const result: Array<{ label: string; value: string }> = [];
   const push = (label: string, value: number | undefined): void => {
     if (value !== undefined) result.push({ label, value: formatNumber(value) });
@@ -286,7 +285,6 @@ const usageItems = computed(() => {
   push("输出", number(source, "outputTokens"));
   push("缓存读取", number(inputDetails, "cacheReadTokens"));
   push("缓存写入", number(inputDetails, "cacheWriteTokens"));
-  push("推理", number(outputDetails, "reasoningTokens"));
   return result;
 });
 const finishReason = computed(() => (isMessage.value ? text(data.value, "finishReason") : undefined));

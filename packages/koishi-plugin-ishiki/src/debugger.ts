@@ -156,8 +156,6 @@ function formatUsage(usage: Partial<LanguageModelUsage> | undefined): string {
     parts.push(`cached=${cached}`);
     parts.push(`rate=${((cached / (usage.inputTokens ?? 1)) * 100).toFixed(2)}%`);
   }
-  const reasoning = usage.outputTokenDetails?.reasoningTokens;
-  if (reasoning !== undefined) parts.push(`reasoning=${reasoning}`);
   return `usage(${parts.join(" ")})`;
 }
 

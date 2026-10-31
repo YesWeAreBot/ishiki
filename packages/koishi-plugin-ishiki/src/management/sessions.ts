@@ -202,16 +202,13 @@ interface ReadUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  reasoning: number;
   total: number;
-  cacheReported: boolean;
 }
 
 function readUsage(source: unknown): ReadUsage | undefined {
   const usage = fields(source);
   if (usage === undefined) return undefined;
   const inputDetails = fields(usage.inputTokenDetails);
-  const outputDetails = fields(usage.outputTokenDetails);
   const input = numberField(usage, "inputTokens");
   const output = numberField(usage, "outputTokens");
   const total = numberField(usage, "totalTokens");
@@ -220,9 +217,7 @@ function readUsage(source: unknown): ReadUsage | undefined {
     output: output ?? 0,
     cacheRead: numberField(inputDetails, "cacheReadTokens") ?? 0,
     cacheWrite: numberField(inputDetails, "cacheWriteTokens") ?? 0,
-    reasoning: numberField(outputDetails, "reasoningTokens") ?? 0,
     total: total ?? (input ?? 0) + (output ?? 0),
-    cacheReported: inputDetails?.cacheReadTokens !== undefined || inputDetails?.cacheWriteTokens !== undefined,
   };
 }
 
@@ -573,7 +568,6 @@ export class SessionsManager {
               entry,
               { provider: textField(attempt, "provider"), modelId: textField(attempt, "modelId"), usage },
               `${entry.id}-attempt-${index + 1}`,
-              "maintenance",
             ),
           );
         }
@@ -583,7 +577,7 @@ export class SessionsManager {
         if (usage === undefined) return false;
         const turnId = textField(data, "turnId") ?? entry.turnId ?? "turn";
         if (turnsWithUsage.has(turnId)) return false;
-        collected.push(this.usageRecord(record, entry, { usage }, `turn:${turnId}`, "turn"));
+        collected.push(this.usageRecord(record, entry, { usage }, `turn:${turnId}`));
       }
       return false;
     });
@@ -596,7 +590,6 @@ export class SessionsManager {
     entry: LogEntry,
     details: { provider?: string; modelId?: string; usage?: ReadUsage },
     suffix?: string,
-    source: UsageRecord["source"] = "message",
   ): UsageRecord {
     const usage = details.usage;
     const reference = baseReference(details.modelId ?? record.meta.model ?? "unknown");
@@ -614,10 +607,7 @@ export class SessionsManager {
       output: usage?.output ?? 0,
       cacheRead: usage?.cacheRead ?? 0,
       cacheWrite: usage?.cacheWrite ?? 0,
-      reasoning: usage?.reasoning ?? 0,
       total: usage?.total ?? 0,
-      source,
-      cacheReported: usage?.cacheReported ?? false,
     };
   }
 }

@@ -1,19 +1,20 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-import { formatCompact, formatNumber } from "../lib/format";
-import type { UsageMetricKey, UsageSeries } from "../lib/usageSeries";
+import { formatCompact, formatNumber, formatPercent } from "../lib/format";
+import type { UsageBucket, UsageMetricKey, UsageSeries } from "../lib/usageSeries";
 
 /**
- * 用量折线图：多序列、时间横轴、悬停与键盘浏览。
+ * 用量折线图：多序列、时间横轴、左侧 Token 轴、右侧调用次数与缓存率轴。
  * 只负责绘制传入的序列；指标切换与统计联动由父页面完成。
  */
 const props = withDefaults(
   defineProps<{
     series: UsageSeries[];
+    bucket?: UsageBucket;
     height?: number;
   }>(),
-  { height: 260 },
+  { bucket: "day", height: 260 },
 );
 
 const chartColors: Record<UsageMetricKey, string> = {
@@ -23,7 +24,7 @@ const chartColors: Record<UsageMetricKey, string> = {
   total: "var(--chart-total)",
   cacheRead: "var(--chart-cache-read)",
   cacheWrite: "var(--chart-cache-write)",
-  reasoning: "var(--chart-reasoning)",
+  cacheRate: "var(--chart-rate)",
 };
 
 const chartDashes: Record<UsageMetricKey, string | undefined> = {
@@ -33,13 +34,32 @@ const chartDashes: Record<UsageMetricKey, string | undefined> = {
   total: "10 3 2 3",
   cacheRead: "4 3",
   cacheWrite: "1 3",
-  reasoning: "9 3",
+  cacheRate: "1 4",
 };
 
-const width = 900;
-const padding = { top: 14, right: 18, bottom: 30, left: 62 };
+const frame = ref<HTMLElement>();
+const width = ref(900);
+let observer: ResizeObserver | undefined;
 
-const days = computed<number[]>(() => {
+onMounted(() => {
+  if (frame.value === undefined) return;
+  const update = (): void => {
+    width.value = Math.max(280, Math.round(frame.value!.getBoundingClientRect().width));
+  };
+  update();
+  observer = new ResizeObserver(update);
+  observer.observe(frame.value);
+});
+
+onBeforeUnmount(() => observer?.disconnect());
+
+const padding = { top: 14, right: 96, bottom: 30, left: 62 };
+const axisSteps = 4;
+const countUnit = "次";
+const rateUnit = "%";
+const rateMax = 100;
+
+const times = computed<number[]>(() => {
   const set = new Set<number>();
   for (const entry of props.series) for (const point of entry.points) set.add(point.t);
   return [...set].sort((left, right) => left - right);
@@ -47,21 +67,24 @@ const days = computed<number[]>(() => {
 
 const valuesOf = (entry: UsageSeries): Map<number, number> => new Map(entry.points.map((point) => [point.t, point.v]));
 
-const plotWidth = width - padding.left - padding.right;
+const plotWidth = computed(() => width.value - padding.left - padding.right);
 const plotHeight = computed(() => props.height - padding.top - padding.bottom);
 
 const xOf = (index: number): number => {
-  if (days.value.length <= 1) return padding.left + plotWidth / 2;
-  return padding.left + (index / (days.value.length - 1)) * plotWidth;
+  if (times.value.length <= 1) return padding.left + plotWidth.value / 2;
+  return padding.left + (index / (times.value.length - 1)) * plotWidth.value;
 };
 
 const yOf = (value: number, max: number): number => padding.top + plotHeight.value - (value / max) * plotHeight.value;
+
+type Axis = "left" | "right" | "rate";
 
 interface SeriesMeta {
   entry: UsageSeries;
   values: Map<number, number>;
   color: string;
   dash: string | undefined;
+  axis: Axis;
 }
 
 const seriesMeta = computed<SeriesMeta[]>(() =>
@@ -70,19 +93,39 @@ const seriesMeta = computed<SeriesMeta[]>(() =>
     values: valuesOf(entry),
     color: chartColors[entry.key],
     dash: chartDashes[entry.key],
+    axis: entry.unit === countUnit ? "right" : entry.unit === rateUnit ? "rate" : "left",
   })),
 );
 
-function buildPath(meta: SeriesMeta, max: number): string {
+const leftSeries = computed(() => seriesMeta.value.filter((meta) => meta.axis === "left"));
+const rightSeries = computed(() => seriesMeta.value.filter((meta) => meta.axis === "right"));
+const rateSeries = computed(() => seriesMeta.value.filter((meta) => meta.axis === "rate"));
+
+function axisMax(series: SeriesMeta[]): number {
+  let raw = 0;
+  for (const meta of series) for (const point of meta.entry.points) raw = Math.max(raw, point.v);
+  if (raw <= 0) return 1;
+  return Math.ceil(raw / axisSteps) * axisSteps;
+}
+
+const leftMax = computed(() => axisMax(leftSeries.value));
+const rightMax = computed(() => axisMax(rightSeries.value));
+
+function maxOf(meta: SeriesMeta): number {
+  if (meta.axis === "rate") return rateMax;
+  return meta.axis === "right" ? rightMax.value : leftMax.value;
+}
+
+function buildPath(meta: SeriesMeta): string {
   let path = "";
   let drawing = false;
-  days.value.forEach((day, index) => {
-    const value = meta.values.get(day);
+  times.value.forEach((time, index) => {
+    const value = meta.values.get(time);
     if (value === undefined) {
       drawing = false;
       return;
     }
-    path += `${drawing ? "L" : "M"}${xOf(index).toFixed(1)},${yOf(value, max).toFixed(1)}`;
+    path += `${drawing ? "L" : "M"}${xOf(index).toFixed(1)},${yOf(value, maxOf(meta)).toFixed(1)}`;
     drawing = true;
   });
   return path;
@@ -95,78 +138,80 @@ interface ChartPath {
   path: string;
 }
 
-interface ChartGroup {
-  unit: string;
-  title: string;
-  yMax: number;
-  series: SeriesMeta[];
-  paths: ChartPath[];
-  yTicks: Array<{ value: number; y: number; label: string }>;
+const paths = computed<ChartPath[]>(() =>
+  seriesMeta.value.map((meta) => ({
+    key: meta.entry.key,
+    color: meta.color,
+    dash: meta.dash,
+    path: buildPath(meta),
+  })),
+);
+
+interface AxisTick {
+  value: number;
+  y: number;
+  label: string;
 }
 
-function chartTitle(unit: string): string {
-  if (unit === "次") return "调用次数";
-  if (unit === "Token") return "Token 用量";
-  return unit.length > 0 ? `用量（${unit}）` : "用量";
-}
-
-/** 每个计量单位单独成图，避免数量级不同的数据共用一条纵轴。 */
-const chartGroups = computed<ChartGroup[]>(() => {
-  const units = [...new Set(props.series.map((entry) => entry.unit))];
-  return units.map((unit) => {
-    const series = seriesMeta.value.filter((meta) => meta.entry.unit === unit);
-    let max = 0;
-    for (const meta of series) for (const point of meta.entry.points) max = Math.max(max, point.v);
-    const yMax = max <= 0 ? 1 : max;
-    const paths = series.map((meta) => ({
-      key: meta.entry.key,
-      color: meta.color,
-      dash: meta.dash,
-      path: buildPath(meta, yMax),
-    }));
-    const steps = 4;
-    const yTicks = Array.from({ length: steps + 1 }, (_, index) => {
-      const value = (yMax / steps) * index;
-      return { value, y: yOf(value, yMax), label: formatCompact(value) };
-    });
-    return { unit, title: chartTitle(unit), yMax, series, paths, yTicks };
+function ticksOf(max: number, suffix = ""): AxisTick[] {
+  return Array.from({ length: axisSteps + 1 }, (_, index) => {
+    const value = (max / axisSteps) * index;
+    return { value, y: yOf(value, max), label: `${formatCompact(value)}${suffix}` };
   });
+}
+
+const leftTicks = computed(() => ticksOf(leftMax.value));
+const rightTicks = computed(() => ticksOf(rightMax.value));
+const rateTicks = computed(() => ticksOf(rateMax, "%"));
+const gridTicks = computed(() => {
+  if (leftSeries.value.length > 0) return leftTicks.value;
+  if (rightSeries.value.length > 0) return rightTicks.value;
+  return rateTicks.value;
 });
 
-const maxLabelCount = 7;
-const labelStep = computed(() => Math.max(1, Math.ceil(days.value.length / maxLabelCount)));
+const labelWidth = computed(() => (props.bucket === "hour" ? 74 : props.bucket === "month" ? 58 : 36));
+const maxLabelCount = computed(() => Math.max(2, Math.min(8, Math.floor(plotWidth.value / (labelWidth.value + 10)))));
+const labelStep = computed(() => Math.max(1, Math.ceil((times.value.length - 1) / Math.max(1, maxLabelCount.value - 1))));
+
+function bucketLabel(time: number, long: boolean): string {
+  const date = new Date(time);
+  if (props.bucket === "hour") {
+    return long
+      ? `${date.toLocaleDateString("zh-CN")} ${String(date.getHours()).padStart(2, "0")}:00`
+      : `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:00`;
+  }
+  if (props.bucket === "week")
+    return long ? `${date.toLocaleDateString("zh-CN")} 起` : `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  if (props.bucket === "month")
+    return long ? `${date.getFullYear()} 年 ${date.getMonth() + 1} 月` : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  return long ? date.toLocaleDateString("zh-CN") : `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 
 const xLabels = computed(() =>
-  days.value
-    .map((day, index) => ({ day, index }))
-    .filter(({ index }) => index % labelStep.value === 0 || index === days.value.length - 1)
-    .map(({ day, index }) => ({
+  times.value
+    .map((time, index) => ({ time, index }))
+    .filter(({ index }) => index % labelStep.value === 0 || index === times.value.length - 1)
+    .map(({ time, index }) => ({
       index,
       x: xOf(index),
-      label: new Date(day).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }),
+      anchor: times.value.length <= 1 ? "middle" : index === 0 ? "start" : index === times.value.length - 1 ? "end" : "middle",
+      label: bucketLabel(time, false),
     })),
 );
 
-const activeByUnit = ref<Record<string, number>>({});
+const activeIndex = ref<number | null>(null);
 const activeKey = ref<UsageMetricKey | null>(null);
 
-function setActive(unit: string, index: number | null): void {
-  const next = { ...activeByUnit.value };
-  if (index === null) delete next[unit];
-  else next[unit] = index;
-  activeByUnit.value = next;
+function setActive(index: number | null): void {
+  activeIndex.value = index;
 }
+
+watch(times, () => setActive(null));
 
 interface TooltipRow {
   label: string;
   color: string;
   value: string;
-}
-
-interface ChartTooltip {
-  day: number;
-  x: number;
-  rows: TooltipRow[];
 }
 
 interface ActiveDot {
@@ -176,71 +221,79 @@ interface ActiveDot {
   y: number;
 }
 
-interface ChartView extends ChartGroup {
-  activeIndex: number | null;
-  tooltip: ChartTooltip | undefined;
+interface ChartActive {
+  time: number;
+  x: number;
+  rows: TooltipRow[];
   dots: ActiveDot[];
+  align: "is-left" | "is-center" | "is-right";
 }
 
-const chartViews = computed<ChartView[]>(() =>
-  chartGroups.value.map((group) => {
-    const stored = activeByUnit.value[group.unit];
-    const activeIndex = stored !== undefined && stored >= 0 && stored < days.value.length ? stored : null;
-    if (activeIndex === null) return { ...group, activeIndex, tooltip: undefined, dots: [] };
-    const day = days.value[activeIndex];
-    const rows: TooltipRow[] = [];
-    const dots: ActiveDot[] = [];
-    for (const meta of group.series) {
-      const value = meta.values.get(day);
-      if (value === undefined) continue;
-      rows.push({ label: meta.entry.label, color: meta.color, value: `${formatNumber(value)} ${meta.entry.unit}` });
-      dots.push({ key: meta.entry.key, color: meta.color, x: xOf(activeIndex), y: yOf(value, group.yMax) });
-    }
-    return {
-      ...group,
-      activeIndex,
-      tooltip: { day, x: xOf(activeIndex), rows },
-      dots,
-    };
-  }),
-);
+const active = computed<ChartActive | undefined>(() => {
+  const index = activeIndex.value;
+  if (index === null || index < 0 || index >= times.value.length) return undefined;
+  const time = times.value[index];
+  const x = xOf(index);
+  const ratio = x / width.value;
+  const rows: TooltipRow[] = [];
+  const dots: ActiveDot[] = [];
+  for (const meta of seriesMeta.value) {
+    const value = meta.values.get(time);
+    if (value === undefined) continue;
+    const text = meta.axis === "rate" ? formatPercent(value / 100) : `${formatNumber(value)} ${meta.entry.unit}`;
+    rows.push({ label: meta.entry.label, color: meta.color, value: text });
+    dots.push({
+      key: meta.entry.key,
+      color: meta.color,
+      x,
+      y: yOf(value, maxOf(meta)),
+    });
+  }
+  return {
+    time,
+    x,
+    rows,
+    dots,
+    align: ratio < 0.33 ? "is-left" : ratio > 0.67 ? "is-right" : "is-center",
+  };
+});
 
 function nearestIndex(event: MouseEvent): number | null {
   const svg = event.currentTarget;
-  if (!(svg instanceof SVGSVGElement) || days.value.length === 0) return null;
+  if (!(svg instanceof SVGSVGElement) || times.value.length === 0) return null;
   const rect = svg.getBoundingClientRect();
-  const scale = width / rect.width;
+  const scale = width.value / rect.width;
   const x = (event.clientX - rect.left) * scale;
-  const ratio = (x - padding.left) / plotWidth;
+  const ratio = (x - padding.left) / plotWidth.value;
   if (ratio < -0.05 || ratio > 1.05) return null;
   const clamped = Math.min(1, Math.max(0, ratio));
-  return Math.round(clamped * (days.value.length - 1));
+  return Math.round(clamped * (times.value.length - 1));
 }
 
-function onMouseMove(event: MouseEvent, unit: string): void {
-  setActive(unit, nearestIndex(event));
+function onMouseMove(event: MouseEvent): void {
+  setActive(nearestIndex(event));
 }
 
-function onMouseLeave(unit: string): void {
-  setActive(unit, null);
+function onMouseLeave(): void {
+  setActive(null);
 }
 
-function onKeydown(event: KeyboardEvent, unit: string): void {
-  if (days.value.length === 0) return;
-  const current = activeByUnit.value[unit] ?? null;
+function onKeydown(event: KeyboardEvent): void {
+  if (times.value.length === 0) return;
+  const current = activeIndex.value;
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
     event.preventDefault();
     const delta = event.key === "ArrowLeft" ? -1 : 1;
-    const base = current === null ? (delta > 0 ? -1 : days.value.length) : current;
-    setActive(unit, Math.min(days.value.length - 1, Math.max(0, base + delta)));
+    const base = current === null ? (delta > 0 ? -1 : times.value.length) : current;
+    setActive(Math.min(times.value.length - 1, Math.max(0, base + delta)));
   } else if (event.key === "Home") {
     event.preventDefault();
-    setActive(unit, 0);
+    setActive(0);
   } else if (event.key === "End") {
     event.preventDefault();
-    setActive(unit, days.value.length - 1);
+    setActive(times.value.length - 1);
   } else if (event.key === "Escape") {
-    setActive(unit, null);
+    setActive(null);
   }
 }
 
@@ -261,75 +314,72 @@ function clearLegendHighlight(): void {
   <div class="line-chart">
     <div v-if="!hasData" class="line-chart-empty muted small">当前指标在所选范围内没有数据点。</div>
     <template v-else>
-      <div class="line-chart-groups">
-        <section v-for="group in chartViews" :key="group.unit" class="line-chart-group">
-          <div class="line-chart-group-head">
-            <span class="line-chart-group-title">{{ group.title }}</span>
-            <span v-if="chartViews.length > 1" class="line-chart-scale">独立数轴</span>
+      <div
+        ref="frame"
+        class="line-chart-frame"
+        tabindex="0"
+        role="img"
+        aria-label="用量随时间变化的折线图，Token 使用左侧数轴，调用次数与缓存率使用右侧数轴，可用左右方向键浏览数据点"
+        @keydown="onKeydown"
+        @mouseleave="onMouseLeave"
+      >
+        <svg :viewBox="`0 0 ${width} ${height}`" :style="{ height: `${height}px` }" preserveAspectRatio="none" class="line-chart-svg" @mousemove="onMouseMove">
+          <g v-for="tick in gridTicks" :key="tick.value" class="grid">
+            <line :x1="padding.left" :x2="width - padding.right" :y1="tick.y" :y2="tick.y" />
+            <text v-if="leftSeries.length > 0" :x="padding.left - 8" :y="tick.y + 3" text-anchor="end" class="axis-text">{{ tick.label }}</text>
+          </g>
+
+          <g v-if="rightSeries.length > 0">
+            <text v-for="tick in rightTicks" :key="`right-${tick.value}`" :x="width - padding.right + 8" :y="tick.y + 3" text-anchor="start" class="axis-text">
+              {{ tick.label }}
+            </text>
+          </g>
+
+          <g v-if="rateSeries.length > 0">
+            <text v-for="tick in rateTicks" :key="`rate-${tick.value}`" :x="width - padding.right + 44" :y="tick.y + 3" text-anchor="start" class="axis-text">
+              {{ tick.label }}
+            </text>
+          </g>
+
+          <g v-for="label in xLabels" :key="label.index">
+            <line :x1="label.x" :x2="label.x" :y1="padding.top" :y2="padding.top + plotHeight" class="grid-faint" />
+            <text :x="label.x" :y="height - 10" :text-anchor="label.anchor" class="axis-text">{{ label.label }}</text>
+          </g>
+
+          <path
+            v-for="path in paths"
+            :key="path.key"
+            :d="path.path"
+            fill="none"
+            :stroke="path.color"
+            :stroke-dasharray="path.dash"
+            stroke-width="2"
+            stroke-linecap="round"
+            class="line-path"
+            :class="{ 'is-dimmed': activeKey !== null && activeKey !== path.key }"
+          />
+
+          <line v-if="active !== undefined" :x1="active.x" :x2="active.x" :y1="padding.top" :y2="padding.top + plotHeight" class="cursor-line" />
+          <circle
+            v-for="dot in active?.dots ?? []"
+            :key="dot.key"
+            :cx="dot.x"
+            :cy="dot.y"
+            r="3.5"
+            :fill="dot.color"
+            class="active-dot"
+            :class="{ 'is-dimmed': activeKey !== null && activeKey !== dot.key }"
+          />
+        </svg>
+
+        <div v-if="active !== undefined" class="line-chart-tooltip" :class="active.align" :style="{ left: `${(active.x / width) * 100}%` }">
+          <div class="tooltip-day mono">{{ bucketLabel(active.time, true) }}</div>
+          <div v-for="row in active.rows" :key="row.label" class="tooltip-row">
+            <i :style="{ background: row.color }"></i>
+            <span>{{ row.label }}</span>
+            <strong>{{ row.value }}</strong>
           </div>
-
-          <div
-            class="line-chart-frame"
-            tabindex="0"
-            role="img"
-            :aria-label="`${group.title}随时间变化的折线图，可用左右方向键浏览数据点`"
-            @keydown="onKeydown($event, group.unit)"
-            @mouseleave="onMouseLeave(group.unit)"
-          >
-            <svg :viewBox="`0 0 ${width} ${height}`" preserveAspectRatio="none" class="line-chart-svg" @mousemove="onMouseMove($event, group.unit)">
-              <g v-for="tick in group.yTicks" :key="tick.value" class="grid">
-                <line :x1="padding.left" :x2="width - padding.right" :y1="tick.y" :y2="tick.y" />
-                <text :x="padding.left - 8" :y="tick.y + 3" text-anchor="end" class="axis-text">{{ tick.label }}</text>
-              </g>
-
-              <g v-for="label in xLabels" :key="label.index">
-                <line :x1="label.x" :x2="label.x" :y1="padding.top" :y2="padding.top + plotHeight" class="grid-faint" />
-                <text :x="label.x" :y="height - 10" text-anchor="middle" class="axis-text">{{ label.label }}</text>
-              </g>
-
-              <path
-                v-for="path in group.paths"
-                :key="path.key"
-                :d="path.path"
-                fill="none"
-                :stroke="path.color"
-                :stroke-dasharray="path.dash"
-                stroke-width="2"
-                stroke-linecap="round"
-                class="line-path"
-                :class="{ 'is-dimmed': activeKey !== null && activeKey !== path.key }"
-              />
-
-              <line
-                v-if="group.tooltip !== undefined"
-                :x1="group.tooltip.x"
-                :x2="group.tooltip.x"
-                :y1="padding.top"
-                :y2="padding.top + plotHeight"
-                class="cursor-line"
-              />
-              <circle
-                v-for="dot in group.dots"
-                :key="dot.key"
-                :cx="dot.x"
-                :cy="dot.y"
-                r="3.5"
-                :fill="dot.color"
-                class="active-dot"
-                :class="{ 'is-dimmed': activeKey !== null && activeKey !== dot.key }"
-              />
-            </svg>
-
-            <div v-if="group.tooltip !== undefined" class="line-chart-tooltip" :style="{ left: `${(group.tooltip.x / width) * 100}%` }">
-              <div class="tooltip-day mono">{{ new Date(group.tooltip.day).toLocaleDateString("zh-CN") }}</div>
-              <div v-for="row in group.tooltip.rows" :key="row.label" class="tooltip-row">
-                <i :style="{ background: row.color }"></i>
-                <span>{{ row.label }}</span>
-                <strong>{{ row.value }}</strong>
-              </div>
-            </div>
-          </div>
-        </section>
+        </div>
       </div>
 
       <div class="line-chart-legend" role="list" aria-label="图表指标">
@@ -348,46 +398,13 @@ function clearLegendHighlight(): void {
           <i :style="{ background: item.color }"></i>
           {{ item.label }}（{{ item.unit }}）
         </span>
-        <span class="legend-hint faint small">悬停指标高亮折线；悬停图表或用 ←→ 键查看数据点</span>
+        <span class="legend-hint faint small">悬停指标高亮折线；悬停图表或用 ←→ 键查看数据点，调用次数与缓存率使用右侧数轴</span>
       </div>
     </template>
   </div>
 </template>
 
 <style scoped>
-.line-chart-groups {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.line-chart-group + .line-chart-group {
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-
-.line-chart-group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.line-chart-group-title {
-  color: var(--ink-soft);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.line-chart-scale {
-  padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-size: 11px;
-}
-
 .line-chart-frame {
   position: relative;
   outline: none;
@@ -442,15 +459,24 @@ function clearLegendHighlight(): void {
 .line-chart-tooltip {
   position: absolute;
   top: 8px;
-  transform: translateX(-50%);
   min-width: 148px;
+  max-width: min(220px, calc(100% - 16px));
   padding: 7px 9px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow-overlay);
   pointer-events: none;
+  transform: translateX(-50%);
   z-index: 2;
+}
+
+.line-chart-tooltip.is-left {
+  transform: translateX(0);
+}
+
+.line-chart-tooltip.is-right {
+  transform: translateX(-100%);
 }
 
 .tooltip-day {

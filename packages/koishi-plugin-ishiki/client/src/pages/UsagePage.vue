@@ -9,8 +9,8 @@ import LineChart from "../components/LineChart.vue";
 import PageHeader from "../components/PageHeader.vue";
 import PageShell from "../components/PageShell.vue";
 import { classifyReference, entityBadge, entityLabel } from "../lib/entities";
-import { formatDateTime, formatNumber } from "../lib/format";
-import { bucketUsageByDay, USAGE_METRICS, type UsageMetricKey } from "../lib/usageSeries";
+import { formatDateTime, formatNumber, formatPercent } from "../lib/format";
+import { bucketUsage, USAGE_METRICS, type UsageMetricKey } from "../lib/usageSeries";
 import { store, toast } from "../store";
 import type { UsageFilters, UsageSnapshot } from "../types";
 
@@ -24,7 +24,7 @@ const rangeOptions: Array<{ value: RangeKey; label: string }> = [
   { value: "custom", label: "自定义区间" },
 ];
 
-const DEFAULT_METRICS: UsageMetricKey[] = ["calls", "input", "output"];
+const DEFAULT_METRICS: UsageMetricKey[] = ["calls", "input", "output", "cacheRate"];
 
 const snapshot = ref<UsageSnapshot | undefined>(store.usage);
 const scoped = ref(false);
@@ -49,7 +49,6 @@ watch(
 
 const totals = computed(() => snapshot.value?.totals);
 const byModel = computed(() => snapshot.value?.byModel ?? []);
-const quality = computed(() => snapshot.value?.quality ?? []);
 const records = computed(() => snapshot.value?.records ?? []);
 const recordCount = computed(() => snapshot.value?.records.length ?? 0);
 const syncedAt = computed(() => snapshot.value?.syncedAt);
@@ -89,7 +88,7 @@ function badgeOf(reference: string): { label: string; tone: string } {
   return entityBadge(classifyReference(reference, store.providers, store.groups));
 }
 
-const chartSeries = computed(() => bucketUsageByDay(records.value, selectedMetrics.value));
+const chart = computed(() => bucketUsage(records.value, selectedMetrics.value));
 
 function toggleMetric(key: UsageMetricKey): void {
   const current = selectedMetrics.value;
@@ -197,7 +196,7 @@ onMounted(() => {
   <PageShell>
     <PageHeader
       title="用量统计"
-      desc="用量账本记录每次模型调用的输入、输出、缓存与推理 Token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。"
+      desc="用量账本记录每次模型调用的输入、输出与缓存 Token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。"
       eyebrow="观测 / 用量"
     >
       <template #actions>
@@ -309,9 +308,9 @@ onMounted(() => {
 
             <div class="metric-grid three usage-metric-second" style="margin-top: 10px">
               <div class="metric">
-                <div class="metric-label"><Icon name="pulse" :size="13" /> 推理 Token</div>
-                <div class="metric-value">{{ formatNumber(totals.reasoning) }}</div>
-                <div class="metric-note">推理过程用量</div>
+                <div class="metric-label"><Icon name="memory" :size="13" /> 缓存率</div>
+                <div class="metric-value">{{ formatPercent(totals.input > 0 ? totals.cacheRead / totals.input : undefined) }}</div>
+                <div class="metric-note">缓存读取 ÷ 输入 Token</div>
               </div>
               <div class="metric">
                 <div class="metric-label"><Icon name="usage" :size="13" /> 合计 Token</div>
@@ -330,7 +329,9 @@ onMounted(() => {
             <div class="panel-head">
               <div>
                 <div class="panel-title">时间序列</div>
-                <div class="panel-sub">按天汇总原始用量记录；调用次数与 Token 分别使用独立数轴。点击指标增减曲线，悬停指标或图表可查看对应数据。</div>
+                <div class="panel-sub">
+                  按时间跨度自动选择小时、天、周或月间隔；Token 使用左侧数轴，调用次数与缓存率使用右侧数轴。点击指标增减曲线，悬停指标或图表可查看对应数据。
+                </div>
               </div>
               <div class="panel-actions">
                 <span class="badge badge-outline">{{ records.length }} 条记录</span>
@@ -355,7 +356,7 @@ onMounted(() => {
                     {{ metric.label }}（{{ metric.unit }}）
                   </button>
                 </div>
-                <LineChart :series="chartSeries" />
+                <LineChart :series="chart.series" :bucket="chart.bucket" />
               </template>
             </div>
           </div>
@@ -381,6 +382,7 @@ onMounted(() => {
                     <th class="num">输出 Token</th>
                     <th class="num">缓存读取 Token</th>
                     <th class="num">缓存写入 Token</th>
+                    <th class="num">缓存率</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -396,9 +398,10 @@ onMounted(() => {
                     <td class="num">{{ formatNumber(row.output) }}</td>
                     <td class="num">{{ formatNumber(row.cacheRead) }}</td>
                     <td class="num">{{ formatNumber(row.cacheWrite) }}</td>
+                    <td class="num">{{ formatPercent(row.input > 0 ? row.cacheRead / row.input : undefined) }}</td>
                   </tr>
                   <tr v-if="byModel.length === 0">
-                    <td colspan="7" class="muted">所选范围内没有按对象汇总的数据。</td>
+                    <td colspan="8" class="muted">所选范围内没有按对象汇总的数据。</td>
                   </tr>
                 </tbody>
               </table>
@@ -439,35 +442,6 @@ onMounted(() => {
                   </tr>
                 </tbody>
               </table>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="panel-head">
-              <div>
-                <div class="panel-title">数据质量</div>
-                <div class="panel-sub">服务端标记的缺失字段与推导原因原样展示，不补充缓存数据，也不估算金额。</div>
-              </div>
-              <div class="panel-actions">
-                <span class="badge" :class="quality.length > 0 ? 'badge-warning' : 'badge-outline'"> {{ quality.length }} 类标记 </span>
-              </div>
-            </div>
-            <div class="panel-body">
-              <div v-if="recordCount === 0" class="empty" style="padding: 24px 12px">
-                <div class="empty-title">所选范围内没有用量记录</div>
-                <p class="empty-desc">可以放宽时间范围，或清除人格配置与统计对象筛选后再试。</p>
-                <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="reset">重置筛选</button>
-              </div>
-              <div v-else-if="quality.length === 0" class="muted small">所选范围内没有触发数据质量标记。</div>
-              <div v-else class="quality-list">
-                <div v-for="row in quality" :key="row.reason" class="quality-row">
-                  <Icon name="warningCircle" :size="14" />
-                  <div>
-                    <div class="quality-title">{{ row.reason }}</div>
-                    <div class="quality-note">{{ formatNumber(row.count) }} 条记录带有该标记</div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </template>

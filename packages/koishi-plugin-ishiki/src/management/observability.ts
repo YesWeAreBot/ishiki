@@ -2,17 +2,16 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
-import type Ishiki from "../index.js";
-import { ResourceStore } from "../resource/store.js";
 import { writeAtomic } from "./atomic.js";
 import { baseReference } from "./reference.js";
 import type { SessionsManager } from "./sessions.js";
-import type { CacheSnapshot, PromptCacheRow, ResourceCacheRow, UsageFilters, UsageRecord, UsageSnapshot, UsageTotals } from "./types.js";
+import type { UsageFilters, UsageRecord, UsageSnapshot, UsageTotals } from "./types.js";
 
-/** 会话标识可能来自目录名或运行时标识，用条目本身的主键去重。 */
+/** 运行时前缀可能写法不同，用条目尾部标识去重；轮次汇总保留 turn 前缀避免与普通条目冲突。 */
 function usageKey(record: UsageRecord): string {
-  const tail = record.id.slice(record.id.lastIndexOf(":") + 1);
-  return `${record.source}:${tail}`;
+  const turn = record.id.lastIndexOf(":turn:");
+  if (turn >= 0) return record.id.slice(turn + 1);
+  return record.id.slice(record.id.lastIndexOf(":") + 1);
 }
 
 export class UsageLedger {
@@ -70,18 +69,15 @@ export class UsageLedger {
       return true;
     });
 
-    const totals: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 0, calls: records.length };
+    const totals: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: records.length };
     const models = new Map<string, { reference: string; input: number; output: number; cacheRead: number; cacheWrite: number; calls: number }>();
     const days = new Map<string, { day: string; input: number; output: number; total: number; calls: number }>();
-    const quality = new Map<string, number>();
-    const bump = (reason: string): void => void quality.set(reason, (quality.get(reason) ?? 0) + 1);
 
     for (const record of records) {
       totals.input += record.input;
       totals.output += record.output;
       totals.cacheRead += record.cacheRead;
       totals.cacheWrite += record.cacheWrite;
-      totals.reasoning += record.reasoning;
       totals.total += record.total;
 
       const model = models.get(record.reference) ?? { reference: record.reference, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 };
@@ -99,11 +95,6 @@ export class UsageLedger {
       daily.total += record.total;
       daily.calls++;
       days.set(day, daily);
-
-      if (record.source === "missing") bump("响应缺少用量字段");
-      if (record.source === "turn") bump("由轮次汇总推导");
-      if (!record.cacheReported) bump("缺少缓存字段");
-      if (record.total === 0) bump("用量为零");
     }
 
     return {
@@ -111,7 +102,6 @@ export class UsageLedger {
       totals,
       byModel: [...models.values()].sort((left, right) => right.input + right.output - (left.input + left.output)),
       byDay: [...days.values()].sort((left, right) => left.day.localeCompare(right.day)),
-      quality: [...quality.entries()].map(([reason, count]) => ({ reason, count })),
       syncedAt: this.syncedAt,
     };
   }
@@ -138,71 +128,5 @@ export class UsageLedger {
     }
     this.cache = { size: info.size, mtimeMs: info.mtimeMs, records };
     return records;
-  }
-}
-
-export class CacheReporter {
-  constructor(
-    private readonly host: Ishiki,
-    private readonly sessions: SessionsManager,
-    private readonly usage: UsageLedger,
-  ) {}
-
-  public async read(): Promise<CacheSnapshot> {
-    const sessions = await this.sessions.list({ limit: 1000 });
-    const resources: ResourceCacheRow[] = [];
-    for (const session of sessions) {
-      const runtime = this.host.runtimes.get(session.id);
-      const store = runtime?.resources.store ?? new ResourceStore(path.dirname(session.file));
-      try {
-        const assets = await store.list("asset");
-        const artifacts = await store.list("artifact");
-        const bytes = [...assets, ...artifacts].reduce((sum, meta) => sum + (meta.byteLength ?? 0), 0);
-        resources.push({
-          runtimeId: session.id,
-          profileId: session.profileId,
-          status: assets.length + artifacts.length === 0 ? "empty" : "ok",
-          assets: assets.length,
-          artifacts: artifacts.length,
-          bytes,
-        });
-      } catch (error) {
-        resources.push({
-          runtimeId: session.id,
-          profileId: session.profileId,
-          status: "error",
-          assets: 0,
-          artifacts: 0,
-          bytes: 0,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const usage = await this.usage.snapshot();
-    const prompt: PromptCacheRow[] = usage.byModel.map((row) => {
-      const records = usage.records.filter((record) => record.reference === row.reference);
-      return {
-        reference: row.reference,
-        modelId: records[0]?.modelId ?? "unknown",
-        calls: row.calls,
-        cacheRead: row.cacheRead,
-        cacheWrite: row.cacheWrite,
-        cacheReported: records.some((record) => record.cacheReported),
-      };
-    });
-
-    if (sessions.length === 0) {
-      return { status: "empty", collectedAt: Date.now(), prompt, resources, reason: "还没有会话，尚未采集缓存数据" };
-    }
-    if (resources.every((row) => row.status === "error")) {
-      return { status: "unavailable", collectedAt: Date.now(), prompt, resources, reason: "资源缓存读取失败" };
-    }
-    return {
-      status: resources.some((row) => row.status === "ok") || prompt.length > 0 ? "ok" : "empty",
-      collectedAt: Date.now(),
-      prompt,
-      resources,
-    };
   }
 }

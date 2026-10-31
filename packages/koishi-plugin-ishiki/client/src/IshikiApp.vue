@@ -64,19 +64,12 @@ const pages: PageEntry[] = [
     icon: "usage",
     component: defineAsyncComponent(() => import("./pages/UsagePage.vue")),
   },
-  {
-    id: "cache",
-    path: "/ishiki/cache",
-    label: "缓存状态",
-    icon: "cache",
-    component: defineAsyncComponent(() => import("./pages/CachePage.vue")),
-  },
 ];
 
 const groups = [
   { label: "配置", ids: ["models", "profiles"] },
   { label: "运行", ids: ["runtimes", "sessions"] },
-  { label: "观测", ids: ["jev", "usage", "cache"] },
+  { label: "观测", ids: ["jev", "usage"] },
 ] as const;
 
 const profileSnapshotReady = computed(() => store.engines !== undefined);
@@ -164,7 +157,6 @@ function go(page: PageEntry): void {
             <div class="sidebar-foot">
               <span class="sidebar-dot" aria-hidden="true" />
               <div class="sidebar-foot-copy">
-                <div class="sidebar-status">控制台在线</div>
                 <div class="sidebar-name">Ishiki 控制台</div>
               </div>
             </div>

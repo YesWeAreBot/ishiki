@@ -6,7 +6,7 @@ import { enginesDirectory, extensionsDirectory } from "./catalog.js";
 import { ChannelsManager } from "./channels.js";
 import { ManagementEventBus } from "./events.js";
 import { ModelsManager } from "./models.js";
-import { CacheReporter, UsageLedger } from "./observability.js";
+import { UsageLedger } from "./observability.js";
 import { ProfilesManager } from "./profiles.js";
 import { RuntimesManager } from "./runtimes.js";
 import { SessionsManager } from "./sessions.js";
@@ -24,7 +24,6 @@ export class Management {
   public readonly models: ModelsManager;
   public readonly channels: ChannelsManager;
   public readonly usage: UsageLedger;
-  public readonly cache: CacheReporter;
 
   constructor(
     private readonly host: Ishiki,
@@ -37,7 +36,6 @@ export class Management {
     this.models = new ModelsManager(host, this.events, logger, this.runtimes);
     this.profiles = new ProfilesManager(host, ctx, this.events, this.sessions, this.usage, this.runtimes, this.models, logger);
     this.channels = new ChannelsManager(host, this.profiles, this.runtimes);
-    this.cache = new CacheReporter(host, this.sessions, this.usage);
   }
 
   engines() {

@@ -36,10 +36,7 @@ function usageRecord(id: string) {
     output: 1,
     cacheRead: 0,
     cacheWrite: 0,
-    reasoning: 0,
     total: 2,
-    source: "message" as const,
-    cacheReported: false,
   };
 }
 
@@ -58,7 +55,6 @@ function assistantEntry(id: string, timestamp: number, modelId: string, input: n
         outputTokens: output,
         totalTokens: input + output,
         inputTokenDetails: { noCacheTokens: input, cacheReadTokens: 0, cacheWriteTokens: 0 },
-        outputTokenDetails: { textTokens: output, reasoningTokens: 0 },
       },
     },
   };
@@ -141,7 +137,6 @@ describe("Ishiki management interfaces", () => {
             outputTokens: 5,
             totalTokens: 15,
             inputTokenDetails: { noCacheTokens: 8, cacheReadTokens: 2, cacheWriteTokens: 0 },
-            outputTokenDetails: { textTokens: 3, reasoningTokens: 2 },
           },
         },
       },
@@ -294,7 +289,6 @@ describe("Ishiki management interfaces", () => {
               outputTokens: 3,
               totalTokens: 10,
               inputTokenDetails: { cacheReadTokens: 2, cacheWriteTokens: 1 },
-              outputTokenDetails: { reasoningTokens: 1 },
             },
           },
           {
@@ -310,9 +304,9 @@ describe("Ishiki management interfaces", () => {
 
     await management.usage.sync();
     const usage = await management.usage.snapshot();
-    expect(usage.totals).toMatchObject({ calls: 2, input: 12, output: 5, cacheRead: 2, cacheWrite: 1, reasoning: 1, total: 17 });
+    expect(usage.totals).toMatchObject({ calls: 2, input: 12, output: 5, cacheRead: 2, cacheWrite: 1, total: 17 });
     expect(usage.records.map((record) => record.input).sort((left, right) => left - right)).toEqual([5, 7]);
-    expect(usage.records.every((record) => record.source === "maintenance" && record.provider === "mock" && record.modelId === "vision")).toBe(true);
+    expect(usage.records.every((record) => record.provider === "mock" && record.modelId === "vision")).toBe(true);
   });
 
   it("saves profile files with revisions, rejects stale writes, and supports deletion", async () => {
@@ -337,14 +331,5 @@ describe("Ishiki management interfaces", () => {
 
     await management.profiles.remove("demo");
     await expect(management.profiles.read("demo")).rejects.toMatchObject({ code: "not-found" });
-  });
-
-  it("reports cache statistics from real resource stores", async () => {
-    const instance = await start();
-    const management = instance.get("ishiki")!.management;
-    const snapshot = await management.cache.read();
-    expect(snapshot.status).toBe("empty");
-    expect(snapshot.reason).toContain("尚未采集");
-    expect(snapshot.resources).toEqual([]);
   });
 });

@@ -53,6 +53,7 @@ const summary = computed(() => {
 <style scoped>
 .expandable {
   display: inline-flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -63,9 +64,18 @@ const summary = computed(() => {
   display: inline-flex;
 }
 
-.expandable-summary,
-.expandable-full {
+.expandable-summary {
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.expandable-full {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -87,6 +97,10 @@ const summary = computed(() => {
   color: var(--accent-ink);
   font-size: 11.5px;
   font-weight: 600;
+}
+
+.expandable :deep(.btn) {
+  flex: none;
 }
 
 .expandable-toggle:hover {

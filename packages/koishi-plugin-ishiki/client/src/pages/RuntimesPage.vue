@@ -63,10 +63,6 @@ const wakeTarget = computed(() => store.runtimes.find((runtime) => runtime.id ==
 const confirmTarget = computed(() => (confirmation.value === null ? undefined : store.runtimes.find((runtime) => runtime.id === confirmation.value?.id)));
 const bootstrapped = computed(() => store.models !== undefined || store.lastSyncAt > 0 || store.runtimes.length > 0);
 
-function stateLabel(state: RuntimeState): string {
-  return stateOptions.find((option) => option.value === state)?.label ?? state;
-}
-
 function badgeState(state: RuntimeState): string {
   return state === "failed" ? "error" : state;
 }
@@ -242,7 +238,7 @@ async function confirmAction(): Promise<void> {
                 </div>
                 <div class="list-item-meta">
                   <span>{{ runtime.profileId }}</span>
-                  <span>{{ modeLabel(runtime) }}</span>
+                  <span v-if="modeLabel(runtime) !== runtime.domainLabel">{{ modeLabel(runtime) }}</span>
                 </div>
               </div>
               <div class="list-item-side">
@@ -296,10 +292,7 @@ async function confirmAction(): Promise<void> {
             <div class="panel-body">
               <dl class="kv">
                 <dt>状态</dt>
-                <dd>
-                  <StatusBadge :state="badgeState(selected.state)" />
-                  <span class="muted small" style="margin-left: 8px">{{ stateLabel(selected.state) }}</span>
-                </dd>
+                <dd><StatusBadge :state="badgeState(selected.state)" /></dd>
 
                 <dt>人格配置</dt>
                 <dd>
@@ -308,11 +301,12 @@ async function confirmAction(): Promise<void> {
                   </RouterLink>
                 </dd>
 
-                <dt>域</dt>
-                <dd>
-                  <span class="mono">{{ selected.domainLabel }}</span>
-                  <span class="muted small" style="margin-left: 8px">{{ modeLabel(selected) }}</span>
-                </dd>
+                <template v-if="modeLabel(selected) !== selected.domainLabel">
+                  <dt>模式</dt>
+                  <dd>
+                    <span class="mono">{{ modeLabel(selected) }}</span>
+                  </dd>
+                </template>
 
                 <dt>当前轮次</dt>
                 <dd class="mono">{{ selected.activeTurnId ?? "—" }}</dd>
@@ -320,7 +314,7 @@ async function confirmAction(): Promise<void> {
                 <dt>最近活动</dt>
                 <dd>
                   <span>{{ formatDateTime(selected.lastActivity) }}</span>
-                  <span class="muted small" style="margin-left: 8px">{{ relativeTime(selected.lastActivity) }}</span>
+                  <span v-if="selected.lastActivity !== undefined" class="muted small" style="margin-left: 8px">{{ relativeTime(selected.lastActivity) }}</span>
                 </dd>
 
                 <dt>模型</dt>

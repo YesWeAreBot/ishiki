@@ -10,14 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added keyboard navigation, focus outlines and a skip link across the console for better accessibility
 - Added hover and focus highlighting to usage chart legends
+- Added hour, day, week and month usage buckets with automatic interval selection
+- Added a cache hit rate series to usage charts
 
 ### Changed
 - Reworked the console client visual design with a muted slate palette, flat surfaces, tighter radius scale and unified design tokens
 - Split usage charts by unit so call counts and token usage render on independent axes
 - Updated console copy for sessions, profiles and groups to use consistent terminology
+- Reworked usage charts with a responsive layout, dual token and call axes, and a cache hit rate series
+- Added hour, day, week and month buckets for usage aggregation
+- Dropped reasoning token tracking and record source fields from usage data
+- Reworked usage charts with unit-split axes so call counts and token usage scale independently
+- Replaced reasoning token tracking with a cache hit rate summary card
+
+### Removed
+- Removed the cache page, its snapshot API and related console store state
 
 ### Fixed
 - Fixed mobile console layouts where the activity date filter, chat header and session entry filters overlapped or clipped
+- Fixed mobile console layouts where filters, chat headers and session entries overlapped
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes

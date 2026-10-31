@@ -538,34 +538,36 @@ function asRecord(value: unknown): Record<string, unknown> {
           <div v-else class="stack">
             <section v-for="entry in providerGroups" :key="entry.provider.id" class="provider-block">
               <header class="provider-head">
-                <div class="provider-mark">{{ entry.provider.id.slice(0, 2).toUpperCase() }}</div>
-                <div class="flex-1">
-                  <div class="provider-title">
-                    {{ entry.provider.id }}
-                    <span class="badge badge-outline mono">{{ apiLabel(entry.provider.api) }}</span>
+                <div class="provider-head-inner">
+                  <div class="provider-mark">{{ entry.provider.id.slice(0, 2).toUpperCase() }}</div>
+                  <div class="flex-1">
+                    <div class="provider-title">
+                      {{ entry.provider.id }}
+                      <span class="badge badge-outline mono">{{ apiLabel(entry.provider.api) }}</span>
+                    </div>
+                    <div class="provider-meta">
+                      <span>{{ entry.provider.baseUrl ?? "默认端点" }}</span>
+                      <span>{{ providerKeyLabel(entry.provider) }}</span>
+                      <span>{{ entry.provider.models.length }} 个模型</span>
+                      <span v-if="Object.keys(entry.provider.headers).length > 0">{{ Object.keys(entry.provider.headers).length }} 个请求头</span>
+                    </div>
                   </div>
-                  <div class="provider-meta">
-                    <span>{{ entry.provider.baseUrl ?? "默认端点" }}</span>
-                    <span>{{ providerKeyLabel(entry.provider) }}</span>
-                    <span>{{ entry.provider.models.length }} 个模型</span>
-                    <span v-if="Object.keys(entry.provider.headers).length > 0">{{ Object.keys(entry.provider.headers).length }} 个请求头</span>
+                  <div class="provider-actions">
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-icon btn-sm"
+                      :aria-label="`编辑供应商 ${entry.provider.id}`"
+                      @click="openEditProvider(entry.provider)"
+                    >
+                      <Icon name="edit" :size="14" />
+                    </button>
+                    <button type="button" class="btn btn-sm" @click="openNewModel(entry.provider.id)"><Icon name="plus" :size="13" /> 添加模型</button>
                   </div>
-                </div>
-                <div class="provider-actions">
-                  <button
-                    type="button"
-                    class="btn btn-ghost btn-icon btn-sm"
-                    :aria-label="`编辑供应商 ${entry.provider.id}`"
-                    @click="openEditProvider(entry.provider)"
-                  >
-                    <Icon name="edit" :size="14" />
-                  </button>
-                  <button type="button" class="btn btn-sm" @click="openNewModel(entry.provider.id)"><Icon name="plus" :size="13" /> 添加模型</button>
                 </div>
               </header>
 
               <div v-if="entry.rows.length === 0" class="field-hint">该供应商尚未声明模型。</div>
-              <div v-else class="card-grid">
+              <div v-else class="model-grid">
                 <article v-for="row in entry.rows" :key="row.reference" class="model-card">
                   <div class="model-card-top">
                     <div class="flex-1">

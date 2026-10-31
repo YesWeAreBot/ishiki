@@ -284,10 +284,7 @@ export interface UsageRecord {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  reasoning: number;
   total: number;
-  source: "message" | "turn" | "missing" | "maintenance";
-  cacheReported: boolean;
 }
 
 export interface UsageFilters {
@@ -302,14 +299,8 @@ export interface UsageTotals {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  reasoning: number;
   total: number;
   calls: number;
-}
-
-export interface UsageQualityRow {
-  reason: string;
-  count: number;
 }
 
 export interface UsageSnapshot {
@@ -317,35 +308,7 @@ export interface UsageSnapshot {
   totals: UsageTotals;
   byModel: Array<{ reference: string; input: number; output: number; cacheRead: number; cacheWrite: number; calls: number }>;
   byDay: Array<{ day: string; input: number; output: number; total: number; calls: number }>;
-  quality: UsageQualityRow[];
   syncedAt: number;
-}
-
-export interface PromptCacheRow {
-  reference: string;
-  modelId: string;
-  calls: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cacheReported: boolean;
-}
-
-export interface ResourceCacheRow {
-  runtimeId: string;
-  profileId: string;
-  status: "ok" | "empty" | "error";
-  assets: number;
-  artifacts: number;
-  bytes: number;
-  error?: string;
-}
-
-export interface CacheSnapshot {
-  status: "ok" | "empty" | "unavailable";
-  collectedAt: number;
-  prompt: PromptCacheRow[];
-  resources: ResourceCacheRow[];
-  reason?: string;
 }
 
 /* 引擎与扩展目录 */

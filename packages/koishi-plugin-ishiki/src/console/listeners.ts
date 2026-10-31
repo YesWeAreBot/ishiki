@@ -5,7 +5,7 @@ import type { Context } from "koishi";
 import type Ishiki from "../index.js";
 import { ManagementError, describeError } from "../management/errors.js";
 import { JEV_TRACE_SERVICE, requireJevTrace } from "../wakeup/jev.engine.js";
-import { CacheProvider, JevProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
+import { JevProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
 import type { ConsoleResult } from "./types.js";
 
 const READ = 1;
@@ -30,7 +30,6 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   ctx.plugin(RuntimesProvider, host);
   ctx.plugin(SessionsProvider, host);
   ctx.plugin(UsageProvider, host);
-  ctx.plugin(CacheProvider, host);
   // JEV 面板依赖 jev 引擎注册的轨迹服务；引擎缺席时只少这一块面板，其余控制台照常工作。
   ctx.inject(["console", JEV_TRACE_SERVICE], (injected) => installJevConsole(injected, host));
 
@@ -151,7 +150,6 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   );
 
   ctx.console.addListener("ishiki/observability/usage", (filters) => run(() => host.management.usage.snapshot(filters)), { authority: READ });
-  ctx.console.addListener("ishiki/observability/cache", () => run(() => host.management.cache.read()), { authority: READ });
 
   ctx.console.addEntry(path.join(ctx.baseDir, "node_modules", "koishi-plugin-ishiki", "dist"));
 }

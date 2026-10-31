@@ -1,17 +1,7 @@
 import { store as remote } from "@koishijs/client";
 import { reactive, ref } from "vue";
 
-import type {
-  CacheSnapshot,
-  EnginesDirectory,
-  ExtensionsDirectory,
-  JevSnapshot,
-  ModelsDocument,
-  ProfileSummary,
-  RuntimeView,
-  SessionSummary,
-  UsageSnapshot,
-} from "./types";
+import type { EnginesDirectory, ExtensionsDirectory, JevSnapshot, ModelsDocument, ProfileSummary, RuntimeView, SessionSummary, UsageSnapshot } from "./types";
 
 /** 控制台数据服务推送的只读快照。键名由服务端 Console.Services 声明。 */
 interface RemoteStore {
@@ -20,7 +10,6 @@ interface RemoteStore {
   ishikiRuntimes?: { runtimes: RuntimeView[] };
   ishikiSessions?: { sessions: SessionSummary[] };
   ishikiUsage?: UsageSnapshot;
-  ishikiCache?: CacheSnapshot;
   ishikiJev?: JevSnapshot;
 }
 
@@ -93,11 +82,8 @@ export const store = reactive({
   get jev(): JevSnapshot | undefined {
     return data.ishikiJev;
   },
-  get cache(): CacheSnapshot | undefined {
-    return data.ishikiCache;
-  },
   get lastSyncAt(): number {
-    return Math.max(data.ishikiModels?.readAt ?? 0, data.ishikiUsage?.syncedAt ?? 0, data.ishikiCache?.collectedAt ?? 0);
+    return Math.max(data.ishikiModels?.readAt ?? 0, data.ishikiUsage?.syncedAt ?? 0);
   },
 });
 
