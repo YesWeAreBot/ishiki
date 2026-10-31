@@ -123,6 +123,102 @@ describe("JEV wakeup lifecycle", () => {
     dispose();
   });
 
+  it("keeps a follow-up directed after a delivered bot reply receipt", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const continueAgent = vi.fn<() => void>();
+    const debug = vi.fn<(message: string) => void>();
+    const agent = {
+      isIdle: () => true,
+      wait: async () => {},
+      continue: continueAgent,
+      storage: { read: () => [] },
+      channel: {
+        subscribe: (_name: "agent", listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as Agent;
+    const context = {
+      logger: { debug, warn: vi.fn<(message: string) => void>() },
+      fiber: {
+        ishiki: {
+          gateway: {
+            decisionModel: () => ({
+              supportedQuestionTypes: ["boolean", "choice"],
+              doDecide: async () => ({
+                answers: {
+                  relation: { type: "choice", probabilities: { addressed: 0.3, followup: 0.7, open: 0, other: 0, ambient: 0 } },
+                  ready: { type: "boolean", probability: 0.97 },
+                  receptive: { type: "boolean", probability: 0.8 },
+                  worthwhile: { type: "boolean", probability: 0.65 },
+                  social: { type: "boolean", probability: 0.63 },
+                  withdrawn: { type: "boolean", probability: 0.02 },
+                  closed: { type: "boolean", probability: 0.03 },
+                  interested: { type: "boolean", probability: 0.04 },
+                },
+              }),
+            }),
+          },
+        },
+      },
+    };
+    const engine = new JevWakeupInstance(
+      {
+        model: "decision",
+        debounceMs: 0,
+        maxWaitMs: 0,
+        minIntervalMs: 0,
+        conversationMs: 120_000,
+        rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
+      },
+      context as never,
+    );
+    const dispose = engine.attach(agent);
+    const emit = (message: unknown) => {
+      for (const listener of listeners) listener({ type: "message.appended", message: message as never });
+    };
+    const emitMessage = (id: string) => {
+      const message: IshikiMessageCreated = {
+        timestamp: Date.now(),
+        platform: "test",
+        selfId: "bot",
+        channelId: "room",
+        messageId: id,
+        content: id,
+        isDirect: false,
+        user: { id: "member", name: "Member" },
+      };
+      emit(createCustomMessage("ishiki.message.created", message));
+    };
+    const logged = (text: string) => debug.mock.calls.some(([line]) => line.includes(text));
+
+    emitMessage("ask");
+    await vi.waitFor(() => expect(logged("wait expired-conversation")).toBe(true));
+
+    emit({
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "call-1",
+          toolName: "send_message",
+          input: { messages: ["在的"], target: { sid: "test:bot", channelId: "room" } },
+        },
+      ],
+    });
+    emit({
+      role: "tool",
+      timestamp: Date.now(),
+      content: [{ type: "tool-result", toolCallId: "call-1", toolName: "send_message", output: { ok: true, ids: ["1"] } }],
+    });
+
+    emitMessage("follow-up");
+    await vi.waitFor(() => expect(logged("reply followup")).toBe(true));
+    expect(continueAgent).toHaveBeenCalledTimes(1);
+    dispose();
+  });
+
   it("re-evaluates a message received during a busy turn after the agent becomes idle", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     let idle = false;
