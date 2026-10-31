@@ -17,6 +17,7 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix .",
     "prepare": "husky",
+    "publish": "bun scripts/release.ts publish",
     "test": "vitest run"
   },
   "devDependencies": {

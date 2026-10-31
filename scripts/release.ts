@@ -10,8 +10,8 @@ const { dirname, join, relative, resolve } = path;
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CHANGESET_TEMP = join(ROOT, ".changeset", "__release__.md");
-const PLAN_FILE = join(ROOT, "packs", "release-plan.json");
-const NOTES_FILE = join(ROOT, "packs", "release-notes.md");
+const PLAN_FILE = join(ROOT, "cache", "release-plan.json");
+const NOTES_FILE = join(ROOT, "cache", "release-notes.md");
 
 type BumpType = "patch" | "minor" | "major";
 
@@ -330,7 +330,7 @@ function renderChangeset(bumps: Map<string, BumpType>): string {
 }
 
 function runChangesetStatus(): ChangesetStatus {
-  mkdirSync(join(ROOT, "packs"), { recursive: true });
+  mkdirSync(join(ROOT, "cache"), { recursive: true });
   rmSync(PLAN_FILE, { force: true });
   run(process.execPath, ["x", "changeset", "status", "--output", "packs/release-plan.json"]);
   if (!existsSync(PLAN_FILE)) throw new Error("changeset status 没有生成计划文件");
@@ -599,7 +599,7 @@ async function publish(args: string[]): Promise<void> {
     console.log("[dry-run] 不发布，不创建 Release。");
     return;
   }
-  mkdirSync(join(ROOT, "packs"), { recursive: true });
+  mkdirSync(join(ROOT, "cache"), { recursive: true });
   try {
     for (const release of ordered) {
       const tag = `${release.name}@${release.version}`;
