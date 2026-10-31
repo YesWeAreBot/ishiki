@@ -8,21 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Breaking Changes
+
 - The extension invoke hook now receives `ExtensionHost` before the config
+
 ## [0.0.3] - 2026-10-29
 
 ### Changed
+
 - Raised the `koishi-plugin-ishiki` peer dependency range to `>=0.0.2 <0.1.0`
 
 ## [0.0.2] - 2026-10-26
 
 ### Changed
+
 - Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares `ishiki` as a required service for the Koishi market
 - The `koishi-plugin-ishiki` peer dependency now accepts any `0.0.x` release instead of only `0.0.1`
 
 ## [0.0.1] - 2026-10-25
 
 ### Added
+
 - `toolIndex` per server: connected servers list their exposed tool names in the system prompt, even when the server provides no instructions.
 - `prefix` per server: exposed tool names use the server name by default, drop it with `false`, or use a custom string prefix.
 - `deny` per server: excludes tools by the raw names exposed by the MCP server.
@@ -34,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deny` per server: excludes tools by the raw names exposed by the MCP server
 
 ### Changed
+
 - Resource handlers receive the complete URL and forward nested resource URIs, queries, and fragments unchanged; remote media is marked live for model-exit snapshotting.
 - Tool output schemas describe the native MCP content blocks returned inside codemode; model conversion and resource processing remain outside internal tool calls.
 - Track the host extension mechanism: the `ExtensionInstance` surface, then the `AgentPlugin` subset with `provide` moved under `agent.use`, and finally extension packs as Koishi services assembled inside the profile fiber.
@@ -46,4 +52,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.3...HEAD
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.2...koishi-plugin-ishiki-mcp-client@0.0.3
-[0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-mcp-client@0.0.2
+[0.0.2]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.1...koishi-plugin-ishiki-mcp-client@0.0.2
+[0.0.1]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-mcp-client@0.0.1

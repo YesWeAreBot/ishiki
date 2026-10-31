@@ -8,14 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Breaking Changes
+
 - Renamed `ExtensionContext` to `ExtensionHost`; `Extension`, context, toolcall, and wakeup invoke hooks now receive the host before the config
 
 ### Added
+
 - Added per-channel JEV participation styles, profile-wide join cooldown, bot name hints, and local prefilter options
 - Added an `image` tool that inspects, resizes, crops, rotates, and converts stored PNG/JPEG resources
 - Added a configurable summary model for standard context compaction
 
 ### Changed
+
 - JEV decision calls now use a fixed 8-second timeout and a default context budget of 6000 characters
 - Moved the JEV decision trace store under management and surfaced scene and skip reasons in the console page
 - PNG/JPEG attachments are downscaled to a 1568 px long edge before they are sent to the model
@@ -23,18 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JEV decision traces are now owned by the JEV wakeup engine instead of the plugin instance
 
 ### Removed
+
 - Removed the undici proxy transport; model requests now use the runtime fetch implementation
 
 ### Fixed
+
 - Attachments produced before a tool call fails can be kept when the tool opts in
 - `send_message` failures now include a stable error code
+
 ## [0.0.4] - 2026-10-30
 
 ### Breaking Changes
+
 - Removed the `compactMinNewRatio` pacing/context option together with the `compactMinNew` budget field
 - Replaced the `v3` wakeup engine and its config section with `willingness`; profiles must update the engine name and options
 
 ### Added
+
 - Added an opt-in `pacing.terminalGuard` that nudges the agent to send, wait, or finish when a step ends with plain text
 - Added per-attempt compaction usage records reported under a new maintenance source
 - Added a `-y/--yes` option to every command that requires interactive confirmation so the 60-second prompt can be skipped
@@ -47,12 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Charged the configured reply cost only after a send is confirmed and applied a short participation bonus for the same participant
 
 ### Changed
+
 - Compaction is now gated only by covered tokens; the minimum new-token throttle was removed
 - Maintenance and storage failures now surface instead of silently discarding shake and compact records
 - Session entry reads now accept an optional direction so entries can be paged forward or backward
 - `runtime.wake` now falls back to a `Continue.` opening message when the prompt is missing or only whitespace
 
 ### Fixed
+
 - Resolved chat compaction boundaries from the compact record's covered anchor instead of its list position
 - Passed wait wake reasons into the continuation context so wakeups no longer start empty
 - Fell back to the author name or user id when a session author has no nickname instead of rendering `undefined`
@@ -60,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.3] - 2026-10-29
 
 ### Added
+
 - Added a `chat` context engine that folds old tool output into intent digests stored as artifact files and summarizes the folded prefix
 - Added a required one-line `i` intent to every model-side tool call, preserved through context folding
 - Added `ishiki.chat.usage`, `ishiki.chat.summary`, `ishiki.chat.shake` and `ishiki.chat.compact` commands
@@ -68,34 +79,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added light and dark Ishiki logo and icon assets used by the console sidebar
 
 ### Changed
+
 - Changed the default profile context engine from `standard` to `chat`
 - Moved shared transcript rendering helpers into `render.ts` for use by both context engines
 - Repainted the console UI with a blue-tinted brand palette, gradient accents, rounded surfaces and a rebuilt dark theme
 - Replaced the hand-drawn sidebar glyph with the Ishiki wordmark, collapsing to a compact icon on narrow screens
 
 ### Fixed
+
 - Fixed missing descriptions on the `ishiki` root command and the `ishiki.chat`/`ishiki.standard` command groups
 
 ## [0.0.2] - 2026-10-26
 
 ### Added
+
 - Model editor switches fields by model type and imports declarations from a provider's remote model list through a server-side proxy
 - Model and Profile editors sync between form and YAML RAW mode and validate input before saving
 - Profile creation wizard steps through base info, model, channel claims, instructions, and engine, then creates the profile in one step
 - Usage page renders daily line charts from raw usage records
 
 ### Changed
+
 - Console adopts the manual-style visual system: a custom sidebar, paper and ink surfaces with one blue signal, a bundled Outfit Latin subset, and denser tables, forms, and panels
 - Package metadata now carries a description, keywords, repository, homepage, and bug tracker, and declares the `ishiki` service it implements together with the optional `console` service, so npm and the Koishi market can present it
 - README describes the new console editing and wizard flow
 - The plugin re-exports the gateway factory and type alongside agent types and runtime helpers, so engine and tool packs no longer depend on `@yesimagent/gateway` directly
 
 ### Removed
+
 - Audit page and its console endpoint
 
 ## [0.0.1] - 2026-10-25
 
 ### Added
+
 - Per-profile `pacing` step budget: `maxSteps` caps one waking (default 20), `wrapUpSteps` (default 2) reminds the model before the cap so the last step sends something, and `progressAt` (default 8) asks once for a mid-task progress bubble. Both reminders ride only the affected request and never enter the stored transcript; `0` disables either one.
 - Image lifetimes for attachments: `once` (default; consumed only when the image-bearing response is persisted), `recent` (keep the latest viewed images, pruned in batches), and `retain` (stay eligible while the source record remains in context). `attachment.recentImageCount` (default 3) and `attachment.imagePruneBatchSize` (default 2) control pruning; final codemode `attachments[]` items and direct `read` calls under `imageInput` can override the lifetime.
 - Incremental tool catalogs with `catalogMode`, `fullSnapshotEvery`, and `knownIndex`; incremental updates send only new, changed, or removed tools, with catalog-version recovery after context compaction.
@@ -132,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Standard context engine commands for usage, summary, and compaction
 
 ### Changed
+
 - Management internals share one `digest()` (in `management/atomic.ts`) and one `domainLabel()` (in `management/reference.ts`) instead of per-file copies in profiles, models, sessions, and runtimes.
 - The `v3` context, toolcall and wakeup engines moved to the separate `koishi-plugin-ishiki-engine-v3` plugin, together with their JSON parser and Jinja templates. Enable that plugin to keep using `engine: v3`.
 - Request projection tracks image delivery per item: `once` commits only when the image-bearing response is persisted (the ledger entry is appended with that response), `recent` keeps the latest viewed images and prunes the oldest viewed in batches, `retain` stays eligible while its source record survives, and failed or aborted steps do not consume. Terminal rejections are stated once, and projected message prefixes keep their order, IDs and timestamps until selection or pruning changes.
@@ -163,6 +181,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Profile and model managers route narrow edits (create, set field, channels, extensions, persona, provider/declaration/group upserts) through one serialized read-modify-validate-write path, and activation rejects claim overlaps with other active profiles
 
 ### Removed
+
 - The `toolsearch` profile section, the standalone `search` tool, `ishiki.tools.catalog` messages, and the incremental catalog state machine. Discovery now lives inside codemode as the `searchTools` and `describeTool` globals, which never change the callable set or the model schema.
 - `codemode.maxToolInputBytes`, `codemode.maxToolOutputBytes` and `codemode.maxResultBytes`: the sandbox uses its own output and store limits, and the model preview budget is `codemode.maxOutputTokens`. Profiles that still set them fail activation with an explicit migration error.
 - The `@ai-sdk/code-mode` dependency and its `vendor/tool-prompt.ts` description builder; declarations come from `@earendil-works/pi-codemode`.
@@ -174,6 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `attachment.maxImageRenders`, replaced by image lifetimes; profiles that still set it fail activation with a migration error
 
 ### Fixed
+
 - Assets without a directly downloadable source return `resource_unavailable` with their metadata URL and platform-neutral recovery guidance. HTTP fetch errors retain status or network error codes without exposing source URLs.
 - Codemode instructions keep temporary download URLs in local variables across tool calls within one execution and return only the final operation's result.
 - Declared `msgs` wake windows count committed inbound input again: the wait machine subscribes to `message.appended` and `turn.start` to arm, count, and fire them.
@@ -187,4 +207,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.4...HEAD
 [0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.3...koishi-plugin-ishiki@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.2...koishi-plugin-ishiki@0.0.3
-[0.0.2]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki@0.0.2
+[0.0.2]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.1...koishi-plugin-ishiki@0.0.2
+[0.0.1]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki@0.0.1
