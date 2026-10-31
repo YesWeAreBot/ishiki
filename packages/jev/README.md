@@ -1,0 +1,9 @@
+# koishi-plugin-ishiki-jev
+
+JEV is a standalone Ishiki wakeup engine. Install it alongside `koishi-plugin-ishiki`, enable the plugin, select `jev` as the wakeup engine, and configure a decision model declared in Ishiki's gateway model configuration.
+
+The decision model evaluates message relation, readiness, social fit, contribution value, topic openness, persona interest, and cancellation as separate evidence. Deterministic policy handles direct replies, group participation, cooldowns, conversation budgets, and pacing. `quiet`, `natural`, and `talkative` are Profile-level controls for unsolicited group participation. At the default `threshold: 0.7`, natural admits positive evidence from 0.55 and talkative can go down to 0.52; changing `threshold` adjusts these floors, while `quiet` raises them. These floors apply only to unsolicited participation, which still requires positive opening and contribution evidence above 0.5. Directly addressed replies follow separate rules. No style bypasses withdrawal, closed-topic, cooldown, conversation-budget, or participation-ratio limits. The `botNames` list supplies persona aliases for direct-address classification.
+
+JEV uses Ishiki Gateway's decision interface and owns neither provider credentials nor model HTTP requests. Messages arriving during an active agent turn are retained in a bounded per-channel queue and reconsidered after `turn.done`; only successful send-message receipts update conversation history and participation limits. JEV remains an optional plugin: when installed, Ishiki's Profile editor builds its graphical fields from the registered engine schema; it is not hard-coded into the core UI. Channel-mode Profiles have independent per-channel runtimes, while JEV preferences are Profile-level. To tune groups differently, assign them to separate channel-mode Profiles rather than adding per-channel overrides.
+
+Build and test from the repository root with the workspace scripts.

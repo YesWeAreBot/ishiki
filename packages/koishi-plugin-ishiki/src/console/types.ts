@@ -2,6 +2,7 @@ import type {
   CacheSnapshot,
   EnginesDirectory,
   ExtensionsDirectory,
+  JevSnapshot,
   ModelOption,
   ModelsConfigInput,
   ModelsDocument,
@@ -54,6 +55,7 @@ declare module "@koishijs/console" {
       ishikiSessions: SessionsSnapshot;
       ishikiUsage: UsageSnapshot;
       ishikiCache: CacheSnapshot;
+      ishikiJev: JevSnapshot;
     }
   }
 
@@ -88,5 +90,6 @@ declare module "@koishijs/console" {
 
     "ishiki/observability/usage": (filters?: UsageFilters) => Promise<ConsoleResult<UsageSnapshot>>;
     "ishiki/observability/cache": () => Promise<ConsoleResult<CacheSnapshot>>;
+    "ishiki/jev/trace": () => Promise<ConsoleResult<JevSnapshot>>;
   }
 }

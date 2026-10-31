@@ -412,3 +412,42 @@ export interface ExtensionsDirectory {
     attachment: SchemaNode;
   };
 }
+
+/* JEV */
+
+export type JevMode = "reply" | "join" | "wait";
+
+/** 一次 JEV 判定的语义证据：relation 是五选一的概率分布，其余是各自独立的布尔概率。 */
+export interface JevEvidenceView {
+  relation: Record<string, number>;
+  ready: number;
+  receptive: number;
+  worthwhile: number;
+  social: number;
+  withdrawn: number;
+  closed: number;
+  interested: number;
+}
+
+/** 一次判定记录：模型证据与本地规则的结论放在一起，便于对照门槛看为什么没说话。 */
+export interface JevDecisionView {
+  id: string;
+  at: number;
+  runtimeId: string;
+  channelId: string;
+  mode: JevMode;
+  reason: string;
+  relation: string;
+  probability: number;
+  threshold: number;
+  focused: string;
+  pendingCount: number;
+  durationMs: number;
+  evidence?: JevEvidenceView;
+  error?: string;
+}
+
+export interface JevSnapshot {
+  decisions: JevDecisionView[];
+  collectedAt: number;
+}

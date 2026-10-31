@@ -1,0 +1,65 @@
+{
+  "name": "koishi-plugin-ishiki-jev",
+  "version": "0.0.1",
+  "description": "JEV participation and wakeup engine for Ishiki using gateway decision models",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "engine",
+    "ishiki",
+    "jev",
+    "koishi"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/tree/main/packages/jev",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/jev"
+  },
+  "files": [
+    "lib"
+  ],
+  "type": "module",
+  "main": "./lib/index.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js",
+      "require": "./lib/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "devDependencies": {
+    "@yesimagent/core": "0.0.9",
+    "@yesimagent/gateway": "0.0.9",
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": "0.0.3",
+    "schemastery": "^3.18.0"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": ">=0.0.3 <0.1.0",
+    "schemastery": "^3.18.0"
+  },
+  "koishi": {
+    "description": {
+      "zh": "JEV 群聊参与与唤醒引擎",
+      "en": "JEV participation and wakeup engine"
+    },
+    "service": {
+      "required": [
+        "ishiki"
+      ]
+    }
+  }
+}

@@ -6,6 +6,7 @@ import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gat
 import { Context, Service, type Session } from "koishi";
 import Logger from "reggol";
 import Schema from "schemastery";
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
 import { parse as parceYaml } from "yaml";
 
 import { loadCodemode } from "./builtin-tools/codemode.js";
@@ -20,6 +21,7 @@ import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionContext } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { loadInstructionFiles, renderInstructions } from "./instructions.js";
+import { JevTraceStore } from "./jev-trace.js";
 import { Management } from "./management/index.js";
 import type { RuntimeMeta } from "./management/types.js";
 import { installDefaultPreset } from "./preset.js";
@@ -38,7 +40,7 @@ import {
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import type { IshikiEvent } from "./types.js";
-import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
+import { StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
 interface Route {
@@ -77,6 +79,8 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
   public readonly dataPath: string;
   public readonly logger: Logger;
   public readonly gateway: Gateway;
+  /** 唤醒判定的观测缓冲；只读，不参与决策。 */
+  public readonly jevTrace = new JevTraceStore();
 
   private readonly handler = new StandardHandler();
   private readonly routes = new Map<string, Route[]>();
@@ -104,16 +108,22 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
       writeFileSync(modelConfigFile, "");
     }
     const modelConfig = (parceYaml(readFileSync(modelConfigFile, "utf-8")) as GatewayConfig) ?? {};
-    this.gateway = createGateway({
-      config: modelConfig,
-      fetch: this.config.dumpRequests ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataPath, "requests") }) : undefined,
+    const proxyAgent = new EnvHttpProxyAgent({
+      httpProxy: process.env.HTTP_PROXY ?? "http://127.0.0.1:10808",
+      httpsProxy: process.env.HTTPS_PROXY ?? "http://127.0.0.1:10808",
+      noProxy: process.env.NO_PROXY ?? "localhost,127.0.0.1",
     });
+    const proxyFetch: typeof globalThis.fetch = (input, init) =>
+      undiciFetch(input as never, { ...init, dispatcher: proxyAgent } as never) as unknown as Promise<Response>;
+    const transport = this.config.dumpRequests
+      ? createDumpFetch({ logger: this.logger, directory: path.resolve(this.dataPath, "requests"), fetch: proxyFetch })
+      : proxyFetch;
+    this.gateway = createGateway({ config: modelConfig, fetch: transport });
 
     ctx.plugin(StandardContextEngine);
     ctx.plugin(ChatContextEngine);
 
     ctx.plugin(StandardWakeupEngine);
-    ctx.plugin(JevWakeupEngine);
     ctx.plugin(WillingnessWakeupEngine);
 
     ctx.plugin(NativeToolcallEngine);

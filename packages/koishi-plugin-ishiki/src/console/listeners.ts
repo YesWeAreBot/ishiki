@@ -5,7 +5,7 @@ import type { Context } from "koishi";
 
 import type Ishiki from "../index.js";
 import { ManagementError, describeError } from "../management/errors.js";
-import { CacheProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
+import { CacheProvider, JevProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
 import type { ConsoleResult } from "./types.js";
 
 const READ = 1;
@@ -35,6 +35,7 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   ctx.plugin(SessionsProvider, host);
   ctx.plugin(UsageProvider, host);
   ctx.plugin(CacheProvider, host);
+  ctx.plugin(JevProvider, host);
 
   management.events.on("models.changed", (payload) => {
     ctx.get("console")?.broadcast("models.changed", payload, { authority: READ });
@@ -56,6 +57,13 @@ export function installConsole(ctx: Context, host: Ishiki): void {
     void ctx.get("console.services.ishikiSessions")?.refresh();
     void ctx.get("console.services.ishikiUsage")?.refresh();
   });
+
+  // 每次唤醒判定都会刷新一次观测面板；判定本身已按 debounce 限流，这里不做额外采样。
+  const disposeTrace = host.jevTrace.subscribe(() => {
+    ctx.get("console")?.broadcast("jev.changed", {}, { authority: READ });
+    void ctx.get("console.services.ishikiJev")?.refresh();
+  });
+  ctx.on("dispose", () => disposeTrace());
 
   ctx.console.addListener("ishiki/models/validate", (input) => run(() => host.management.models.validate(input)), { authority: READ });
   ctx.console.addListener("ishiki/models/remote", (query) => run(() => host.management.models.listRemote(query)), { authority: READ });
@@ -154,6 +162,7 @@ export function installConsole(ctx: Context, host: Ishiki): void {
 
   ctx.console.addListener("ishiki/observability/usage", (filters) => run(() => host.management.usage.snapshot(filters)), { authority: READ });
   ctx.console.addListener("ishiki/observability/cache", () => run(() => host.management.cache.read()), { authority: READ });
+  ctx.console.addListener("ishiki/jev/trace", () => run(() => host.jevTrace.snapshot()), { authority: READ });
 
   ctx.console.addEntry(path.join(ctx.baseDir, "node_modules", "koishi-plugin-ishiki", "dist"));
 }

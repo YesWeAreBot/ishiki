@@ -2,7 +2,7 @@ import { DataService, type Console } from "@koishijs/console";
 import type { Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import type { CacheSnapshot, ModelsDocument, UsageSnapshot } from "../management/types.js";
+import type { CacheSnapshot, JevSnapshot, ModelsDocument, UsageSnapshot } from "../management/types.js";
 import type { ProfilesSnapshot, RuntimesSnapshot, SessionsSnapshot } from "./types.js";
 
 abstract class IshikiService<T> extends DataService<T> {
@@ -69,6 +69,16 @@ export class UsageProvider extends IshikiService<UsageSnapshot> {
     const usage = this.host.management.usage;
     await usage.sync();
     return usage.snapshot();
+  }
+}
+
+export class JevProvider extends IshikiService<JevSnapshot> {
+  constructor(ctx: Context, host: Ishiki) {
+    super(ctx, "ishikiJev", host);
+  }
+
+  override async get(): Promise<JevSnapshot> {
+    return this.host.jevTrace.snapshot();
   }
 }
 
