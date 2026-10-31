@@ -1,4 +1,4 @@
-import type { ImageLifetime } from "../types.js";
+import type { ImageLifetime } from "../types/messages.js";
 import { ResourceError } from "./errors.js";
 
 /** Attachment lifetimes, most transient first. */

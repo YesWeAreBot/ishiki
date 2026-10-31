@@ -23,7 +23,8 @@ import {
 
 import type { CodemodeConfig } from "../profile/index.js";
 import type { ResourceCenter } from "../resource/center.js";
-import type { AttachmentItem, IshikiCodemodeStore } from "../types.js";
+import { keepsFailedToolAttachments } from "../resource/tool-output.js";
+import type { AttachmentItem, IshikiCodemodeStore } from "../types/messages.js";
 import { createCatalog, DESCRIBE_TOOL_GLOBAL, SEARCH_TOOLS_GLOBAL } from "./codemode/catalog.js";
 import { prepareCodemodeOutput } from "./codemode/output.js";
 import { FINISH_TOOL } from "./finish.js";
@@ -130,7 +131,14 @@ const INTENT_INPUT_SCHEMA = jsonSchema<CodemodeInput & { i: string }>({
   additionalProperties: false,
 });
 
-const toModelOutput = (options: { output: CodemodeToolResult }): ToolResultOutput => ({ type: "text", value: options.output.text });
+const toModelOutput = (options: { output: CodemodeToolResult }): ToolResultOutput =>
+  options.output.result.ok
+    ? { type: "text", value: options.output.text }
+    : {
+        type: "error-text",
+        value: options.output.text,
+        ...(options.output.items.length === 0 ? {} : { providerOptions: { ishiki: { keepAttachments: true } } }),
+      };
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
@@ -346,8 +354,12 @@ export async function createCodemode(options: CodemodeOptions): Promise<Codemode
           const record = pending.get(part.toolCallId);
           if (record === undefined) continue;
           pending.delete(part.toolCallId);
-          const kind = part.output.type;
-          if (kind === "error-text" || kind === "error-json" || kind === "execution-denied") continue;
+          if (
+            (part.output.type === "error-text" || part.output.type === "error-json" || part.output.type === "execution-denied") &&
+            !keepsFailedToolAttachments(part.output)
+          ) {
+            continue;
+          }
           matched.push(record);
         }
       }

@@ -4,7 +4,7 @@ import Schema from "schemastery";
 
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import type { IshikiMessageCreated } from "../types.js";
+import type { IshikiMessageCreated } from "../types/messages.js";
 import { WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
 const SEND_MESSAGE_TOOL = "send_message";

@@ -403,7 +403,7 @@ export class ClockHandler implements SchemeHandler {
 
 ## 事件与消息类型
 
-`IshikiEvent`（`src/types.ts`）是 core `AgentCustomMessage` 声明的联合：
+`IshikiEvent`（`src/types/messages.ts`）是 core `AgentCustomMessage` 声明的联合：
 
 - `ishiki.message.created` / `ishiki.message.deleted`：入站消息与撤回。
 - `ishiki.attachment`：附件记录，由 runtime 或统一输出出口写入。

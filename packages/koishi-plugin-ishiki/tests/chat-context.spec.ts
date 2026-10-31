@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   boundaryIndex,
+  buildCompactPrompt,
   buildShakeBundle,
   ChatContextInstance,
   makeToolCallMap,
@@ -14,6 +15,7 @@ import {
   planCompact,
   planShake,
   projectChat,
+  renderCompactOriginal,
   selectHotStart,
   type ChatBudget,
   type IshikiChatCompact,
@@ -35,6 +37,7 @@ const budget: ChatBudget = {
 };
 
 const rate = 0.5;
+const VALID_SUMMARY = "## 人物与关系\n测试\n## 偏好与边界\n无\n## 约定与承诺\n无\n## 未完成话题\n无\n## 已确认事实\n无\n## 工作状态\n无\n## 当前氛围\n平静";
 
 function user(id: string, text: string): AgentEntry<"message"> {
   return createEntry("message", createUserMessage(text), { id, timestamp: 1 });
@@ -60,6 +63,71 @@ function taskStep(prefix: string, payload: string): AgentEntry[] {
 
 function step(prefix: string, payload: string): AgentEntry[] {
   return [user(`${prefix}u`, `${prefix} 开始`), ...taskStep(prefix, payload)];
+}
+
+async function maintenanceHarness(
+  entries: AgentEntry[],
+  options: { compactModel?: string; gateway?: Record<string, unknown>; onGenerate?: (options: Record<string, unknown>) => void } = {},
+) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-chat-maintenance-"));
+  let calls = 0;
+  const model = {
+    specificationVersion: "v2",
+    provider: "provider",
+    modelId: "base",
+    supportedUrls: {},
+    doGenerate: async (input: unknown) => {
+      calls += 1;
+      options.onGenerate?.(input as Record<string, unknown>);
+      return {
+        content: [{ type: "text", text: VALID_SUMMARY }],
+        finishReason: "stop",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      };
+    },
+  };
+  const agent = {
+    channel: { subscribe: () => () => {} },
+    storage: {
+      read: async () => entries,
+      append: async (...batch: readonly AgentEntry[]) => {
+        entries.push(...batch);
+      },
+    },
+    isIdle: () => true,
+    getModel: () => model,
+  } as unknown as Agent;
+  const resources = new ResourceCenter("chat-maintenance", home);
+  const instance = new ChatContextInstance(
+    {
+      maxTokens: 10_000,
+      hotRatio: 0.001,
+      hotMinMessages: 1,
+      shakeMinToolRatio: 0.0001,
+      shakeBatchRatio: 1,
+      compactMinCoveredRatio: 0.01,
+      minRegionTokens: 0,
+      compactModel: options.compactModel,
+    },
+    {
+      runtimeId: "chat-maintenance",
+      domain: { mode: "channel", platform: "test", selfId: "bot", channelId: "channel" },
+      home,
+      root: home,
+      fiber: {} as never,
+      logger: { level: 1, debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as never,
+      resources,
+      gateway: options.gateway,
+    } as never,
+  );
+  instance.attach(agent);
+  return {
+    entries,
+    instance,
+    calls: () => calls,
+    cleanup: () => fs.rm(home, { recursive: true, force: true }),
+  };
 }
 
 describe("chat planner", () => {
@@ -134,6 +202,28 @@ describe("chat planner", () => {
     expect(plan?.end).toBe(3);
     expect(plan?.throughEntryId).toBe("later");
   });
+
+  it("removes reasoning from compact source and exposes the summary target", () => {
+    const entries = [
+      createEntry(
+        "message",
+        createAssistantMessage([
+          { type: "reasoning", text: "private reasoning" },
+          { type: "text", text: "visible answer" },
+        ]),
+        { id: "assistant" },
+      ),
+    ];
+    const original = renderCompactOriginal(entries, 0, 0);
+    expect(original).toContain("visible answer");
+    expect(original).not.toContain("private reasoning");
+    expect(JSON.parse(buildCompactPrompt({ shakes: [], records: [], targetTokens: 2_400 }))).toEqual({
+      previousSummary: null,
+      foldedBlocks: [],
+      records: [],
+      targetTokens: 2_400,
+    });
+  });
 });
 
 describe("shake rendering", () => {
@@ -169,18 +259,27 @@ describe("chat engine maintenance", () => {
     try {
       const entries: AgentEntry[] = [
         user("u1", "开始"),
-        call("a1", "c1", "取大块", "x"),
+        createEntry(
+          "message",
+          createAssistantMessage([
+            { type: "reasoning", text: "private reasoning" },
+            { type: "tool-call", toolCallId: "c1", toolName: "read", input: { i: "取大块", url: "local://x" } },
+          ]),
+          { id: "a1", timestamp: 2 },
+        ),
         result("t1", "c1", "x".repeat(4000)),
         createEntry("message", createAssistantMessage([{ type: "text", text: "done" }]), { id: "a2" }),
       ];
       let compactAttempts = 0;
+      let compactOptions: Record<string, unknown> | undefined;
       const model = {
         specificationVersion: "v2",
         provider: "test",
         modelId: "test",
         supportedUrls: {},
-        doGenerate: async () => {
+        doGenerate: async (options: unknown) => {
           compactAttempts += 1;
+          compactOptions = options as Record<string, unknown>;
           return {
             content:
               compactAttempts === 1
@@ -188,7 +287,7 @@ describe("chat engine maintenance", () => {
                 : [
                     {
                       type: "text",
-                      text: "## 人物与关系\n测试\n## 偏好与边界\n无\n## 约定与承诺\n无\n## 未完成话题\n无\n## 已确认事实\n无\n## 工作状态\n无\n## 当前氛围\n平静",
+                      text: VALID_SUMMARY,
                     },
                   ],
             finishReason: "stop",
@@ -252,6 +351,9 @@ describe("chat engine maintenance", () => {
       expect(compactEntry?.data.stats?.summaryTokens).toBeGreaterThan(0);
       expect(compactEntry?.data.stats?.freedTokens).toBeGreaterThanOrEqual(0);
       expect(compactEntry?.data.attempts).toHaveLength(2);
+      expect(compactOptions).toMatchObject({ reasoning: "none", maxOutputTokens: 3_500 });
+      expect(JSON.stringify(compactOptions?.prompt)).toContain('\\"targetTokens\\":500');
+      expect(JSON.stringify(compactOptions?.prompt)).not.toContain("private reasoning");
       for (const [index, attempt] of compactEntry!.data.attempts!.entries()) {
         expect(attempt).toMatchObject({
           attempt: index + 1,
@@ -260,6 +362,8 @@ describe("chat engine maintenance", () => {
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
         });
       }
+      const compactText = await fs.readFile(path.join(home, "resources", "artifacts", "compact", path.basename(compactEntry!.data.artifact!)), "utf8");
+      expect(compactText).not.toContain("private reasoning");
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
@@ -284,7 +388,7 @@ describe("chat engine maintenance", () => {
           content: [
             {
               type: "text",
-              text: "## 人物与关系\n测试\n## 偏好与边界\n无\n## 约定与承诺\n无\n## 未完成话题\n无\n## 已确认事实\n无\n## 工作状态\n无\n## 当前氛围\n平静",
+              text: VALID_SUMMARY,
             },
           ],
           finishReason: "stop",
@@ -332,6 +436,140 @@ describe("chat engine maintenance", () => {
       expect(projected.some((entry) => entry.type === "message" && JSON.stringify(entry.data).includes("上下文折叠"))).toBe(true);
     } finally {
       await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("limits a long turn to one automatic compact below the emergency threshold", async () => {
+    const entries: AgentEntry[] = [
+      user("root", "开始"),
+      ...taskStep("one", "x".repeat(4000)),
+      ...taskStep("two", "y".repeat(4000)),
+      ...taskStep("three", "z".repeat(4000)),
+      ...taskStep("four", "w".repeat(4000)),
+      user("current", "继续"),
+    ];
+    const harness = await maintenanceHarness(entries);
+    try {
+      const request = { turnId: "turn", signal: new AbortController().signal };
+      await harness.instance.prepareEntries(entries, request);
+      expect(harness.calls()).toBe(1);
+      expect(harness.entries.filter((entry) => entry.type === "ishiki.chat.compact")).toHaveLength(1);
+
+      harness.entries.push(
+        user("filler", "q".repeat(13_800)),
+        createEntry("message", createAssistantMessage([{ type: "text", text: "filler answer" }]), { id: "filler-a" }),
+        user("next", "继续"),
+      );
+      const before = await harness.instance.stats();
+      expect(before.over).toBe(true);
+      expect(before.messageTokens).toBeGreaterThan(before.highWaterTokens);
+      expect(before.messageTokens).toBeLessThan(9_500);
+      const internalPlan = (harness.instance as unknown as { plan: (entries: readonly AgentEntry[]) => { compact?: unknown } }).plan(harness.entries);
+      expect(internalPlan.compact).toBeDefined();
+
+      await harness.instance.prepareEntries(harness.entries, request);
+      expect(harness.calls()).toBe(1);
+      expect(harness.entries.filter((entry) => entry.type === "ishiki.chat.compact")).toHaveLength(1);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it("uses the agent model when no compact model is configured", async () => {
+    const entries: AgentEntry[] = [
+      user("root", "开始"),
+      ...taskStep("one", "x".repeat(4000)),
+      ...taskStep("two", "y".repeat(4000)),
+      ...taskStep("three", "z".repeat(4000)),
+      user("current", "继续"),
+    ];
+    const generated: Array<Record<string, unknown>> = [];
+    const harness = await maintenanceHarness(entries, { onGenerate: (options) => generated.push(options) });
+    try {
+      const result = await harness.instance.forceCompact();
+      expect(result.appended).toBe(true);
+      expect(harness.calls()).toBe(1);
+      expect(generated[0]).toMatchObject({ reasoning: "none", maxOutputTokens: 3_500 });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it("derives a reasoning-free model from the configured compact model", async () => {
+    const entries: AgentEntry[] = [
+      user("root", "开始"),
+      ...taskStep("one", "x".repeat(4000)),
+      ...taskStep("two", "y".repeat(4000)),
+      ...taskStep("three", "z".repeat(4000)),
+      user("current", "继续"),
+    ];
+    const references: string[] = [];
+    let compactOptions: Record<string, unknown> | undefined;
+    const compactModel = {
+      specificationVersion: "v2",
+      provider: "provider",
+      modelId: "base",
+      supportedUrls: {},
+      doGenerate: async (options: unknown) => {
+        compactOptions = options as Record<string, unknown>;
+        return {
+          content: [{ type: "text", text: VALID_SUMMARY }],
+          finishReason: "stop",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [],
+        };
+      },
+    };
+    const gateway = {
+      groups: () => [],
+      languageModel: (reference: string) => {
+        references.push(reference);
+        return compactModel;
+      },
+    };
+    const harness = await maintenanceHarness(entries, { compactModel: "provider:base:high", gateway });
+    try {
+      const result = await harness.instance.forceCompact();
+      expect(result.appended).toBe(true);
+      expect(references).toEqual(["provider:base:high", "provider:base:none"]);
+      expect(harness.calls()).toBe(0);
+      expect(compactOptions).toMatchObject({ reasoning: "none", maxOutputTokens: 3_500 });
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it("allows a second automatic compact when the projection reaches the emergency threshold", async () => {
+    const entries: AgentEntry[] = [
+      user("root", "开始"),
+      ...taskStep("one", "x".repeat(4000)),
+      ...taskStep("two", "y".repeat(4000)),
+      ...taskStep("three", "z".repeat(4000)),
+      ...taskStep("four", "w".repeat(4000)),
+      user("current", "继续"),
+    ];
+    const harness = await maintenanceHarness(entries);
+    try {
+      const request = { turnId: "turn", signal: new AbortController().signal };
+      await harness.instance.prepareEntries(entries, request);
+      expect(harness.calls()).toBe(1);
+
+      harness.entries.push(
+        user("filler", "q".repeat(19_400)),
+        createEntry("message", createAssistantMessage([{ type: "text", text: "filler answer" }]), { id: "filler-a" }),
+        user("next", "继续"),
+      );
+      const before = await harness.instance.stats();
+      expect(before.over).toBe(true);
+      expect(before.messageTokens).toBeGreaterThanOrEqual(9_500);
+      const internalPlan = (harness.instance as unknown as { plan: (entries: readonly AgentEntry[]) => { compact?: unknown } }).plan(harness.entries);
+      expect(internalPlan.compact).toBeDefined();
+
+      await harness.instance.prepareEntries(harness.entries, request);
+      expect(harness.calls()).toBe(2);
+      expect(harness.entries.filter((entry) => entry.type === "ishiki.chat.compact")).toHaveLength(2);
+    } finally {
+      await harness.cleanup();
     }
   });
 });

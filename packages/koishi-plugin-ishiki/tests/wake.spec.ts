@@ -24,7 +24,7 @@ import type { ExtensionInstance } from "../src/extension.js";
 import { CodemodeConfig } from "../src/profile/config.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AgentRuntime } from "../src/runtime.js";
-import type { IshikiMessageCreated } from "../src/types.js";
+import type { IshikiMessageCreated } from "../src/types/messages.js";
 import {
   StandardWakeupInstance,
   WillingnessWakeupConfig,

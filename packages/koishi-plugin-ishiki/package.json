@@ -48,6 +48,8 @@
     "@satorijs/element": "^3.2.0",
     "@yesimagent/core": "0.0.9",
     "@yesimagent/gateway": "0.0.9",
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0",
     "reggol": "^1.7.1",
     "schemastery": "^3.18.0",
     "yaml": "^2.9.0"

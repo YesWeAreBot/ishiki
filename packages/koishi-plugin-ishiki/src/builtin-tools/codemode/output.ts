@@ -3,7 +3,7 @@ import type { CodemodeResult } from "@earendil-works/pi-codemode";
 import type { ResourceCenter } from "../../resource/center.js";
 import { processOutput } from "../../resource/output.js";
 import { renderTextPage, textFits, type TextBudget } from "../../resource/text.js";
-import type { AttachmentItem } from "../../types.js";
+import type { AttachmentItem } from "../../types/messages.js";
 
 /** Rough model-visible size of one token; the profile budget is expressed in tokens. */
 const CHARS_PER_TOKEN = 4;

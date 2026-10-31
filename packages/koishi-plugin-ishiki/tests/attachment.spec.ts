@@ -30,8 +30,9 @@ import { supportsImageInput } from "../src/resource/capabilities.js";
 import { captureResources } from "../src/resource/capture.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { AttachmentConfig } from "../src/resource/config.js";
+import { decodeImage, encodeImage } from "../src/resource/image.js";
 import { processOutput } from "../src/resource/output.js";
-import { attachmentMessages, AttachmentProjection } from "../src/resource/projection.js";
+import { AttachmentProjection, attachmentMessages } from "../src/resource/projection.js";
 import { TEXT_BUDGET } from "../src/resource/text.js";
 import { AgentRuntime } from "../src/runtime.js";
 import { StandardWakeupInstance } from "../src/wakeup/index.js";
@@ -70,7 +71,7 @@ function jsonValue(output: ToolResultOutput): JSONValue {
 }
 
 function textOf(output: ToolResultOutput): string {
-  if (output.type !== "text") throw new Error("expected text output");
+  if (output.type !== "text" && output.type !== "error-text") throw new Error("expected text output");
   return output.value;
 }
 
@@ -437,6 +438,42 @@ describe("request projection", () => {
     expect(JSON.stringify(next)).not.toContain("tool a, call 1");
     await commitImages(projection, messages);
     expect(imageParts(await projection.project(messages, "turn"))).toEqual([]);
+  });
+
+  it("downsamples large images and caches the prepared dimensions", async () => {
+    const encoded = encodeImage({
+      width: 864,
+      height: 1920,
+      mediaType: "image/png",
+      data: Buffer.alloc(864 * 1920 * 4, 255),
+    });
+    const url = await center.store.writeArtifact("source", encoded.bytes, { mediaType: "image/png" });
+    const attachment = createCustomMessage("ishiki.attachment", {
+      source: "tool",
+      toolName: "image",
+      toolCallId: "large",
+      items: [{ url, mediaType: "image/png", byteLength: encoded.bytes.byteLength, lifetime: "retain" }],
+    });
+    const messages = [toolMessage("image", "large"), attachment];
+    const projection = new AttachmentProjection(center, { imageInput: true });
+    projection.restore([], messages);
+
+    const first = await projection.project(messages, "turn");
+    const part = imageParts(first)[0];
+    if (part?.data.type !== "data") throw new Error("expected inline prepared image");
+    const prepared = decodeImage(part.data.data);
+    expect(Math.max(prepared.width, prepared.height)).toBe(1_568);
+    expect(prepared.width).toBeLessThan(864);
+
+    const cached = (projection as unknown as { cache: Map<string, { bytes: Uint8Array; size: number }> }).cache.get(url);
+    if (cached === undefined) throw new Error("expected prepared image cache");
+    const cachedImage = decodeImage(cached.bytes);
+    expect({ width: cachedImage.width, height: cachedImage.height, size: cached.size }).toEqual({
+      width: prepared.width,
+      height: prepared.height,
+      size: cached.bytes.byteLength,
+    });
+    expect(await projection.project(messages, "turn")).toEqual(first);
   });
 
   it("keeps retain images stable across committed steps and runtime reconstruction", async () => {
@@ -1123,7 +1160,7 @@ describe("real Agent / codemode / provider smoke", () => {
     });
     const messages = await probe.run();
     const output = results(messages)[0]!.output;
-    expect(output.type).toBe("text");
+    expect(output.type).toBe("error-text");
     expect(textOf(output)).toContain("=== STATUS ===\nfailed");
     expect(textOf(output)).toContain("=== TEXT ===\nbefore the failure");
     expect(textOf(output)).toContain("=== ERROR ===\nscript: Error: fixture failure");

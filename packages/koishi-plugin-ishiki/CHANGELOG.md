@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added an `image` tool that inspects, resizes, crops, rotates, and converts stored PNG/JPEG resources
+- Added a configurable summary model for standard context compaction
+
+### Changed
+- PNG/JPEG attachments are downscaled to a 1568 px long edge before they are sent to the model
+- Codemode timeout, memory, output-token, and text budgets now use wider defaults
+
+### Fixed
+- Attachments produced before a tool call fails can be kept when the tool opts in
+- `send_message` failures now include a stable error code
 ## [0.0.4] - 2026-10-30
 
 ### Breaking Changes

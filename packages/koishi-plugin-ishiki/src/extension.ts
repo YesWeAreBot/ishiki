@@ -1,4 +1,5 @@
 import { ToolSet } from "@yesimagent/core";
+import type { Gateway } from "@yesimagent/gateway";
 import { Awaitable, Service, type Context } from "koishi";
 import type Logger from "reggol";
 import type Schema from "schemastery";
@@ -18,6 +19,8 @@ export interface ExtensionContext {
   readonly logger: Logger;
   /** runtime 的资源中心：扩展经它读 asset/artifact、注册自定义 scheme。 */
   readonly resources: ResourceCenter;
+  /** 网关与 profile 当前模型引用，用于解析摘要等辅助模型。 */
+  readonly gateway: Gateway;
 }
 
 export interface ExtensionInstance {

@@ -4,7 +4,7 @@ import type { ResourceCenter, ResourceText } from "../resource/center.js";
 import { ResourceError } from "../resource/errors.js";
 import { IMAGE_LIFETIMES, parseImageLifetime } from "../resource/lifetime.js";
 import { renderTextPage, TEXT_BUDGET } from "../resource/text.js";
-import type { ImageLifetime } from "../types.js";
+import type { ImageLifetime } from "../types/messages.js";
 
 export const READ_TOOL = "read";
 

@@ -5,7 +5,7 @@ export interface TextBudget {
   maxChars: number;
 }
 
-export const TEXT_BUDGET: TextBudget = { maxLines: 2000, maxChars: 30_000 };
+export const TEXT_BUDGET: TextBudget = { maxLines: 400, maxChars: 12_000 };
 
 /** Position within the original selected representation, not within a displayed page. */
 export interface FileTextSource {

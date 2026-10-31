@@ -11,7 +11,7 @@ import Schema from "schemastery";
 import { SEND_MESSAGE_TOOL } from "../builtin-tools/send-message.js";
 import type { ExtensionContext } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import type { IshikiMessageCreated } from "../types.js";
+import type { IshikiMessageCreated } from "../types/messages.js";
 import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 import type { StandardWakeupConfig } from "./standard.engine.js";
 

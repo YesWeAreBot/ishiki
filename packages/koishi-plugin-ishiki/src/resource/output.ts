@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { JSONValue, ToolResultOutput } from "@yesimagent/core";
 
-import type { AttachmentItem, ImageLifetime } from "../types.js";
+import type { AttachmentItem, ImageLifetime } from "../types/messages.js";
 import type { ResourceCenter, ResourcePayload } from "./center.js";
 import { ResourceError } from "./errors.js";
 import { parseImageLifetime } from "./lifetime.js";
@@ -68,7 +68,9 @@ export async function processOutput(
   raw?: unknown,
   imageInput = true,
 ): Promise<ProcessedOutput> {
-  if (converted.type === "error-text" || converted.type === "error-json" || converted.type === "execution-denied") return { output: converted, items: [] };
+  if (converted.type === "error-text" || converted.type === "error-json" || converted.type === "execution-denied") {
+    return { output: await externalizeError(center, toolName, converted), items: [] };
+  }
 
   const items: AttachmentItem[] = [];
   const output =
@@ -94,6 +96,30 @@ export async function processOutput(
     mediaType: output.type === "json" ? "application/json" : "text/plain",
   });
   return { output: { type: "text", value: renderTextPage(visible, { url: artifact, offset: 0, line: 1, column: 1 }) }, items };
+}
+
+/** Keep error semantics while replacing an over-budget error body with a safe archive reference. */
+async function externalizeError(
+  center: ResourceCenter,
+  toolName: string,
+  output: Extract<ToolResultOutput, { type: "error-text" | "error-json" | "execution-denied" }>,
+): Promise<Extract<ToolResultOutput, { type: "error-text" | "error-json" | "execution-denied" }>> {
+  const visible = output.type === "error-text" ? output.value : output.type === "error-json" ? JSON.stringify(output.value, null, 2) : (output.reason ?? "");
+  if (textFits(visible)) return output;
+  const artifact = await center.store.writeArtifact(toolName, Buffer.from(visible, "utf8"), {
+    mediaType: output.type === "error-json" ? "application/json" : "text/plain",
+  });
+  const summary = `Tool failed; complete error output archived at ${artifact} (${visible.length} characters).`;
+  if (output.type === "error-text") return { ...output, value: summary };
+  if (output.type === "execution-denied") return { ...output, reason: summary };
+  return {
+    ...output,
+    value: {
+      error: "Tool failed; complete error output archived",
+      artifact,
+      characters: visible.length,
+    },
+  };
 }
 
 /**
