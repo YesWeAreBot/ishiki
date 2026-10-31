@@ -361,7 +361,9 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 | --- | --- | --- |
 | `standard` | `standard` | `direct/atSelf/quoteSelf: boolean`（均默认 true）、`keywords: string[]`（默认空） |
 | `willingness` | `willingness` | `base: 12`、`atMention: 100`、`isQuote: 15`、`isDirectMessage: 40`、`imageGain: 8`、`keywords: []`、`keywordMultiplier: 1.2`、`defaultMultiplier: 1`、`maxWillingness: 100`、`initialWillingness: 0`、`decayHalfLifeSeconds: 600`、`hotWindowSeconds: 15`、`warmWindowSeconds: 60`、`hotDecayWeight: 0.3`、`warmDecayWeight: 0.7`、`probabilityThreshold: 55`、`probabilityAmplifier: 0.04`、`replyCost: 35`、`atMentionForce/quoteForce/directForce: false`、`participationWindowSeconds: 60`、`participationInfluence: 0.5` |
-| `jev` | `jev` | `model`（默认 `typesafe:jev-latest`）、`threshold: 0.7`、`addressedThreshold: 0.7`、`cooldownMs: 30000`、`minIntervalMs: 2000`、`debounceMs: 800`、`maxWaitMs: 2500`、`conversationMs: 120000`、`contextMaxAgeMs: 900000`、`decisionMaxAgeMs: 10000`、`participationWindowMs: 300000`、`maxParticipation: 0.25`、`minParticipationTurns: 6`、`maxConsecutiveReplies: 4`、`timeoutMs: 3000`、`historyMessages: 16`、`contextChars: 3000`、`instruction: "你是群聊中的参与者。先理解上下文，再在确实有合适内容时自然接话。"`、`interests: []`、`rules: Partial<standard>`（默认 `{ direct: true, atSelf: true, quoteSelf: false, keywords: [] }`） |
+| `jev` | `jev` | `model`（必填，`models.yaml` 中的 `type: decision` 模型引用）、`threshold: 0.7`、`addressedThreshold: 0.7`、`cooldownMs: 30000`、`globalCooldownMs: 60000`、`channelStyles: {}`、`minIntervalMs: 2000`、`debounceMs: 800`、`maxWaitMs: 2500`、`conversationMs: 120000`、`contextMaxAgeMs: 900000`、`decisionMaxAgeMs: 10000`、`participationWindowMs: 300000`、`maxParticipation: 0.25`、`minParticipationTurns: 6`、`maxConsecutiveReplies: 4`、`historyMessages: 16`、`contextChars: 6000`、`instruction: ""`、`interests: []`、`botNames: []`、`style: natural`、`prefilter: safe`、`rules`（默认 `{ direct: true, atSelf: true, quoteSelf: false, keywords: [] }`） |
+
+`jev` 的模型判定调用固定使用 8 秒超时，不提供 `timeoutMs` 配置。
 
 ### toolcall
 

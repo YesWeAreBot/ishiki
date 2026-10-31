@@ -231,9 +231,9 @@ attachment:
 #     maxParticipation: 0.25 # 窗口内主动发言允许占比
 #     minParticipationTurns: 6 # 参与比例开始生效的消息数量
 #     maxConsecutiveReplies: 4 # 连续定向回复次数上限
-#     timeoutMs: 3000 # 单次决策调用超时（毫秒）
 #     historyMessages: 16 # 判定上下文中的最近消息数量
-#     contextChars: 3000 # 判定上下文的最大字符数
+#     contextChars: 6000 # 判定上下文的最大字符数
+#     prefilter: safe # 模型调用前的本地预筛：off、safe、strict
 #     # 兜底规则：命中即唤醒，不调用模型。默认只开私聊与 @。
 #     # 只在 engine: jev 这一段里写；写成 jev 同级的 standard 段不会被读。
 #     rules:

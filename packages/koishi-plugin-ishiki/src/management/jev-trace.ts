@@ -1,4 +1,4 @@
-import type { JevDecisionView, JevSnapshot } from "./management/types.js";
+import type { JevDecisionView, JevSnapshot } from "./types.js";
 
 const CAPACITY = 200;
 

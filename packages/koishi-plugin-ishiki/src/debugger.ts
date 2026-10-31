@@ -7,7 +7,6 @@ import type Logger from "reggol";
 export interface DumpFetchOptions {
   readonly logger: Logger;
   readonly directory: string;
-  readonly fetch?: typeof globalThis.fetch;
 }
 
 const PREFIX = "[ishiki:debug]";
@@ -166,7 +165,7 @@ export function createDumpFetch(options: DumpFetchOptions): typeof globalThis.fe
   let sequence = 0;
   return async (input, init) => {
     const payload = await requestBody(input, init);
-    const response = await (options.fetch ?? globalThis.fetch)(input, init);
+    const response = await globalThis.fetch(input, init);
     if (!response.body) return response;
 
     sequence += 1;

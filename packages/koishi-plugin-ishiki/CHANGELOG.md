@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added per-channel JEV participation styles, profile-wide join cooldown, bot name hints, and local prefilter options
+
+### Changed
+- JEV decision calls now use a fixed 8-second timeout and a default context budget of 6000 characters
+- Moved the JEV decision trace store under management and surfaced scene and skip reasons in the console page
+
+### Removed
+- Removed the undici proxy transport; model requests now use the runtime fetch implementation
 ## [0.0.4] - 2026-10-30
 
 ### Breaking Changes

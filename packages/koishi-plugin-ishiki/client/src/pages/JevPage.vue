@@ -52,7 +52,10 @@ const counts = computed(() => {
   let skipped = 0;
   for (const item of decisions.value) {
     if (item.error !== undefined) continue;
-    if (item.prefiltered) skipped += 1;
+    if (item.prefiltered) {
+      skipped += 1;
+      continue;
+    }
     if (item.mode === "reply") reply += 1;
     else if (item.mode === "join") join += 1;
     else wait += 1;
@@ -66,6 +69,8 @@ const STEP_TEXT: Record<string, string> = {
   ready: "是否说完",
   closed: "话题是否结束",
   "conversation-budget": "连续回复额度",
+  "expired-conversation": "对话已过期",
+  "global-frequency": "全局冷却",
   "turn-spacing": "判定间隔",
   "no-contribution": "贡献底线",
   "no-opening": "插话空间",
@@ -88,7 +93,8 @@ function stepLabel(key: string): string {
 
 function formatStep(step: JevStepView): string {
   if (step.value === undefined) return "";
-  if (step.key === "join-cooldown") return `${Math.round(step.value / 1000)} 秒 / 冷却 ${Math.round((step.line ?? 0) / 1000)} 秒`;
+  if (step.key === "join-cooldown" || step.key === "global-frequency")
+    return `${Math.round(step.value / 1000)} 秒 / 冷却 ${Math.round((step.line ?? 0) / 1000)} 秒`;
   const value = step.value.toFixed(2);
   return step.line === undefined ? value : `${value} / 线 ${step.line.toFixed(2)}`;
 }
@@ -99,6 +105,7 @@ function prefilterText(reason: string): string {
     duplicate: "同一人刚说过一样的话",
     "media-only": "只有表情或图片",
     cooldown: "还在冷却时间内",
+    "global-frequency": "全局冷却时间内",
     spacing: "距上次主动唤醒过近",
     "participation-limit": "主动发言比例已满",
     "participation-disabled": "主动参与已关闭",
@@ -191,7 +198,7 @@ onMounted(() => {
     <PageHeader
       title="唤醒判定"
       eyebrow="JEV"
-      desc="每次判定都会记录模型给出的语义证据与本地规则的最终结论。证据各自独立，不相乘也不平均；阈值只作用于对应的那一条规则。"
+      desc="判定记录保留模型给出的语义证据与本地规则的最终结论。证据各自独立，不相乘也不平均；阈值只作用于对应的那一条规则。"
     >
       <template #actions>
         <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="refresh(false)">
@@ -237,7 +244,7 @@ onMounted(() => {
       <div v-else-if="decisions.length === 0" class="panel">
         <EmptyState
           title="还没有判定记录"
-          desc="判定发生在群里有人说话之后。收到消息并完成一次判定后，这里会显示证据与结论；历史记录只保存在内存中，重启后清空。"
+          desc="判定发生在会话里有人说话之后。收到消息并完成一次判定后，这里会显示证据与结论；历史记录只保存在内存中，重启后清空。"
           icon="cache"
         >
           <button type="button" class="btn btn-sm btn-primary" :disabled="loading" @click="refresh(false)">重新读取</button>
@@ -250,11 +257,11 @@ onMounted(() => {
             <div class="panel-title">
               {{ modeMeta(item).label }}
               <span class="muted">·</span>
-              <span class="mono">{{ item.reason }}</span>
+              <span class="mono">{{ reasonText(item) }}</span>
             </div>
             <div class="panel-sub">
-              {{ formatDateTime(item.at) }} · {{ relativeTime(item.at) }} · 群 {{ item.channelId }} · {{ formatNumber(item.pendingCount) }} 条合批 ·
-              {{ item.durationMs }} ms
+              {{ formatDateTime(item.at) }} · {{ relativeTime(item.at) }} · {{ item.context?.scene ?? "频道" }} {{ item.channelId }} ·
+              {{ formatNumber(item.pendingCount) }} 条合批 · {{ item.durationMs }} ms
             </div>
           </div>
           <div class="panel-actions">

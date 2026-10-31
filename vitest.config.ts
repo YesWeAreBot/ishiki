@@ -3,11 +3,12 @@ import { createRequire } from "node:module";
 import { defineConfig } from "vitest/config";
 
 // Vite cannot reliably reproduce Koishi's package loader chain from an isolated
-// linker. Resolve the same installed core entries as Koishi without coupling the
-// test runner to one package manager or dependency version.
-const require = createRequire(import.meta.url);
-const koishiCore = require.resolve("@koishijs/core");
-const satoriCore = require.resolve("@satorijs/core");
+// linker. Resolve the core entries through the workspace package's Koishi
+// installation so both pnpm and Bun's isolated layouts share the same path.
+const packageRequire = createRequire(new URL("./packages/koishi-plugin-ishiki/package.json", import.meta.url));
+const koishiRequire = createRequire(packageRequire.resolve("koishi"));
+const koishiCore = koishiRequire.resolve("@koishijs/core");
+const satoriCore = koishiRequire.resolve("@satorijs/core");
 
 export default defineConfig({
   resolve: {
