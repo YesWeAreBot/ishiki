@@ -3,6 +3,7 @@ import { Service, type Context } from "koishi";
 import Schema from "schemastery";
 
 import type { ExtensionHost } from "../extension.js";
+import { JevTraceStore } from "../management/jev-trace.js";
 import type { EngineConfig } from "../profile/index.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types/messages.js";
 import { WakeupEngine, atSelf, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
@@ -679,7 +680,8 @@ export class JevWakeupInstance implements WakeupEngineInstance {
   private readonly rules: JevRules;
   private readonly channels = new Map<string, Channel>();
   private readonly frequency: ReturnType<typeof getJevFrequencyLedger>;
-  constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionHost) {
+  private readonly traceStore: JevTraceStore;
+  constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionHost, traceStore = new JevTraceStore()) {
     this.config = {
       ...DEFAULT,
       ...config,
@@ -694,6 +696,7 @@ export class JevWakeupInstance implements WakeupEngineInstance {
       rules: { ...DEFAULT.rules, ...config.rules },
     };
     this.context = context;
+    this.traceStore = traceStore;
     this.frequency = getJevFrequencyLedger(context.fiber);
     this.rules = { ...DEFAULT_JEV_RULES, ...this.config.rules };
   }
@@ -804,10 +807,8 @@ export class JevWakeupInstance implements WakeupEngineInstance {
       };
     },
   ): void {
-    const store = this.context.fiber.ishiki?.jevTrace;
-    if (store === undefined) return;
     try {
-      store.record({
+      this.traceStore.record({
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         at: Date.now(),
         runtimeId: this.context.runtimeId,
@@ -1379,10 +1380,17 @@ declare module "./engine.js" {
 }
 export class JevWakeupEngine extends WakeupEngine<"jev"> {
   readonly Schema = JevWakeupConfig;
+  readonly trace = new JevTraceStore();
   constructor(ctx: Context) {
     super(ctx, "jev");
   }
   public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, "jev">>): WakeupEngineInstance {
-    return new JevWakeupInstance(config.jev ?? {}, host);
+    return new JevWakeupInstance(config.jev ?? {}, host, this.trace);
   }
+}
+
+export function getJevTrace(ctx: Context): JevTraceStore {
+  const engine = WakeupEngine.GetService(ctx, "jev");
+  if (!(engine instanceof JevWakeupEngine)) throw new Error("JEV wakeup engine is not available");
+  return engine.trace;
 }

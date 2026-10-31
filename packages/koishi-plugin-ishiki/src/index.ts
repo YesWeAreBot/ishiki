@@ -23,7 +23,6 @@ import { Extension, type ExtensionHost } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { loadInstructionFiles, renderInstructions } from "./instructions.js";
 import { Management } from "./management/index.js";
-import { JevTraceStore } from "./management/jev-trace.js";
 import type { RuntimeMeta } from "./management/types.js";
 import { directoryName, loadProfiles, matchesChannel, matchesPattern, type ChannelFilter, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
@@ -101,9 +100,6 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
   public readonly dataPath: string;
   public readonly logger: Logger;
   public readonly gateway: Gateway;
-  /** 唤醒判定的观测缓冲；只读，不参与决策。 */
-  public readonly jevTrace = new JevTraceStore();
-
   private readonly handler = new StandardHandler();
   private readonly routes = new Map<string, Route[]>();
   private readonly active = new Set<Route>();

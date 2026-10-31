@@ -5,6 +5,7 @@ import type { Context } from "koishi";
 
 import type Ishiki from "../index.js";
 import { ManagementError, describeError } from "../management/errors.js";
+import { getJevTrace } from "../wakeup/jev.engine.js";
 import { CacheProvider, JevProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
 import type { ConsoleResult } from "./types.js";
 
@@ -28,6 +29,7 @@ async function run<T>(task: () => T | Promise<T>): Promise<ConsoleResult<T>> {
 /** 注册控制台数据服务、写操作与广播；控制台只通过这里接触核心运行时。 */
 export function installConsole(ctx: Context, host: Ishiki): void {
   const management = host.management;
+  const jevTrace = getJevTrace(ctx);
 
   ctx.plugin(ModelsProvider, host);
   ctx.plugin(ProfilesProvider, host);
@@ -59,7 +61,7 @@ export function installConsole(ctx: Context, host: Ishiki): void {
   });
 
   // 每次唤醒判定都会刷新一次观测面板；判定本身已按 debounce 限流，这里不做额外采样。
-  const disposeTrace = host.jevTrace.subscribe(() => {
+  const disposeTrace = jevTrace.subscribe(() => {
     ctx.get("console")?.broadcast("jev.changed", {}, { authority: READ });
     void ctx.get("console.services.ishikiJev")?.refresh();
   });
@@ -162,7 +164,7 @@ export function installConsole(ctx: Context, host: Ishiki): void {
 
   ctx.console.addListener("ishiki/observability/usage", (filters) => run(() => host.management.usage.snapshot(filters)), { authority: READ });
   ctx.console.addListener("ishiki/observability/cache", () => run(() => host.management.cache.read()), { authority: READ });
-  ctx.console.addListener("ishiki/jev/trace", () => run(() => host.jevTrace.snapshot()), { authority: READ });
+  ctx.console.addListener("ishiki/jev/trace", () => run(() => jevTrace.snapshot()), { authority: READ });
 
   ctx.console.addEntry(path.join(ctx.baseDir, "node_modules", "koishi-plugin-ishiki", "dist"));
 }

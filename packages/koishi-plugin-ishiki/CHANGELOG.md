@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moved the JEV decision trace store under management and surfaced scene and skip reasons in the console page
 - PNG/JPEG attachments are downscaled to a 1568 px long edge before they are sent to the model
 - Codemode timeout, memory, output-token, and text budgets now use wider defaults
+- JEV decision traces are now owned by the JEV wakeup engine instead of the plugin instance
 
 ### Removed
 - Removed the undici proxy transport; model requests now use the runtime fetch implementation

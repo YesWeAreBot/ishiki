@@ -1,7 +1,11 @@
 import { createCustomMessage, type Agent, type AgentEvent, type Experimental_DecisionModelV4Result as DecisionModelResult } from "@yesimagent/core";
+import { App, type Context } from "koishi";
 import { describe, expect, it, vi } from "vitest";
 
+import { JevTraceStore } from "../src/management/jev-trace.js";
+import type { JevDecisionView } from "../src/management/types.js";
 import type { IshikiMessageCreated } from "../src/types.js";
+import { WakeupEngine } from "../src/wakeup/engine.js";
 import {
   clipJevText,
   decideJev,
@@ -10,7 +14,9 @@ import {
   JEV_QUESTIONS,
   JevFrequencyLedger,
   JevWakeupConfig,
+  JevWakeupEngine,
   JevWakeupInstance,
+  getJevTrace,
   parseJevChoice,
   parseJevEvidence,
   prefilterJev,
@@ -21,6 +27,20 @@ import {
   type JevPolicyConfig,
   type Participation,
 } from "../src/wakeup/jev.engine.js";
+
+describe("JEV trace ownership", () => {
+  it("resolves the trace from the JEV engine service", async () => {
+    const app = new App();
+    app.plugin(JevWakeupEngine);
+    await app.start();
+    try {
+      const engine = app.get(WakeupEngine.GetName("jev")) as JevWakeupEngine;
+      expect(getJevTrace(app as Context)).toBe(engine.trace);
+    } finally {
+      await app.stop();
+    }
+  });
+});
 
 const policy: JevPolicyConfig = {
   threshold: 0.7,
@@ -176,7 +196,9 @@ describe("JEV wakeup lifecycle", () => {
   it("applies channel styles to the model, policy and trace without changing directed replies", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const states: Array<{ bot: { style: string }; pending_message: { text: string } }> = [];
-    const records: Array<{ mode: string; config?: { style: string }; threshold: number; focused: string }> = [];
+    const trace = new JevTraceStore();
+    const records: JevDecisionView[] = [];
+    trace.subscribe((record) => records.push(record));
     const agent = {
       isIdle: () => true,
       wait: async () => {},
@@ -194,7 +216,6 @@ describe("JEV wakeup lifecycle", () => {
       logger: { debug: vi.fn<(message: string) => void>(), warn: vi.fn<(message: string) => void>() },
       fiber: {
         ishiki: {
-          jevTrace: { record: (record: (typeof records)[number]) => records.push(record) },
           gateway: {
             decisionModel: () => ({
               supportedQuestionTypes: ["boolean", "choice"],
@@ -239,6 +260,7 @@ describe("JEV wakeup lifecycle", () => {
         rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
       },
       context as never,
+      trace,
     );
     const dispose = engine.attach(agent);
     const emit = async (channelId: string, content: string) => {
