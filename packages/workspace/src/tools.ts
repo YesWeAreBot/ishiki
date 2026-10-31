@@ -42,6 +42,9 @@ Run a bash command inside the sandbox.
 The sandbox is a JavaScript-interpreted virtual environment, not a host shell: only files under the mounts are visible, and the command set is not the host's.
 {% endif %}
 Write paths outside the current working directory in full. cd, aliases, functions, and exported variables do not persist between calls.
+{% if not native %}
+/tmp belongs to the current sandbox lifetime. Read a /tmp file only after the same or an earlier successful call created it; a failed or timed-out call may leave nothing behind. Write results that must survive to the workspace or an artifact.
+{% endif %}
 {% if gitBashPaths %}
 Command text follows git-bash path syntax: /d/work means D:\\work. A path inside a string that only gets handed to another program (a JavaScript string passed to node, a config value) is not converted, so write D:/... there.
 Write scratch files under the working directory rather than /tmp: the shell, a program it starts, and the file tools may resolve /tmp to different folders.
@@ -108,7 +111,7 @@ export function createWorkspaceTools(sandbox: WorkspaceShell): ToolSet {
         const sections = [`exit code: ${output.exitCode}`];
         if (output.stdout.length > 0) sections.push(`stdout:\n${output.stdout}`);
         if (output.stderr.length > 0) sections.push(`stderr:\n${output.stderr}`);
-        return { type: "text" as const, value: sections.join("\n\n") };
+        return { type: output.exitCode === 0 ? ("text" as const) : ("error-text" as const), value: sections.join("\n\n") };
       },
       execute: (input, options) => sandbox.exec(input.command, options.abortSignal),
     }),

@@ -40,6 +40,7 @@ Network: {{ network }}
 Command timeout: {{ timeoutMs }} ms; a timeout returns exit code 124.
 Executor output safety limit: {{ maxExecutionOutputBytes }} bytes. Inside codemode you receive the raw output; the runtime handles model-visible previews and archives. Return structured results instead of stringifying or slicing them yourself.
 Shell state does not persist between calls: cd, aliases, functions, and exported variables are not retained. Put a directory change on the same line (cd <dir> && <command>).
+/tmp belongs to this sandbox lifetime. Read a /tmp file only after the same or an earlier successful call created it; a failed or timed-out call may leave nothing behind. Write results that must survive to the workspace or an artifact.
 {% if javascript %}
 js-exec is available: run JavaScript / TypeScript in QuickJS with a partial Node.js module surface. Only files inside the sandbox are accessible.
 {% endif %}
