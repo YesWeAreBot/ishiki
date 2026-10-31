@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codemode timeout, memory, output-token, and text budgets now use wider defaults
 - JEV decision traces are now owned by the JEV wakeup engine instead of the plugin instance
 - The JEV console panel is now installed only when the JEV wakeup engine is loaded
+- Removed unused Vue and console dev dependencies from the plugin package
 
 ### Removed
 - Removed the undici proxy transport; model requests now use the runtime fetch implementation
