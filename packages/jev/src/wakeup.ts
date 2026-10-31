@@ -38,7 +38,7 @@ const DEFAULT: JevWakeupConfig = {
   addressedThreshold: 0.7,
   cooldownMs: 30000,
   globalCooldownMs: 60000,
-  channelCooldowns: {},
+  channelStyles: {},
   minIntervalMs: 2000,
   debounceMs: 800,
   maxWaitMs: 2500,
@@ -60,7 +60,7 @@ const DEFAULT: JevWakeupConfig = {
 };
 export interface JevWakeupConfig extends JevPolicyConfig {
   model: string;
-  channelCooldowns: Record<string, number>;
+  channelStyles: Record<string, JevParticipationStyle>;
   debounceMs: number;
   maxWaitMs: number;
   contextMaxAgeMs: number;
@@ -80,9 +80,9 @@ export const JevWakeupConfig = Schema.object({
   addressedThreshold: Schema.number().min(0).max(1).default(0.7),
   cooldownMs: Schema.number().min(0).default(30000).description("同一群主动加入的发言冷却（毫秒）"),
   globalCooldownMs: Schema.number().min(0).default(60000).description("当前 Profile 跨群的主动发言冷却（毫秒）"),
-  channelCooldowns: Schema.dict(Schema.number().min(0))
+  channelStyles: Schema.dict(Schema.union(["quiet", "natural", "talkative"]))
     .default({})
-    .description("单群主动发言冷却覆盖，键格式 platform:selfId/channelId，例如 onebot:123456/987654"),
+    .description("单群主动加入倾向覆盖，键格式 platform:selfId/channelId，例如 onebot:123456/987654"),
   debounceMs: Schema.number().min(0).default(800),
   maxWaitMs: Schema.number().min(0).default(2500),
   conversationMs: Schema.number().min(0).default(120000),
@@ -199,7 +199,9 @@ export class JevWakeupInstance implements WakeupEngineInstance {
       ...DEFAULT,
       ...config,
       model: config.model?.trim() ?? "",
-      channelCooldowns: Object.fromEntries(Object.entries(config.channelCooldowns ?? {}).filter(([, value]) => Number.isFinite(value) && value >= 0)),
+      channelStyles: Object.fromEntries(
+        Object.entries(config.channelStyles ?? {}).filter(([, value]) => value === "quiet" || value === "natural" || value === "talkative"),
+      ),
       historyMessages: Math.min(MAX_HISTORY, Math.max(1, Math.floor(config.historyMessages ?? DEFAULT.historyMessages))),
       contextChars: Math.min(30000, Math.max(2000, config.contextChars ?? DEFAULT.contextChars)),
       interests: (config.interests ?? []).map((x) => x.trim()).filter(Boolean),
@@ -259,12 +261,11 @@ export class JevWakeupInstance implements WakeupEngineInstance {
   /** 判定当时的关键配置，用于向操作者解释门槛来源。 */
   private configView(channel?: string) {
     return {
-      style: this.config.style,
+      style: this.config.channelStyles[channel ?? ""] ?? this.config.style,
       threshold: this.config.threshold,
       addressedThreshold: this.config.addressedThreshold,
-      cooldownMs: this.config.channelCooldowns[channel ?? ""] ?? this.config.cooldownMs,
+      cooldownMs: this.config.cooldownMs,
       globalCooldownMs: this.config.globalCooldownMs ?? 0,
-      channelCooldownMs: this.config.channelCooldowns[channel ?? ""] ?? this.config.cooldownMs,
       minIntervalMs: this.config.minIntervalMs,
       maxParticipation: this.config.maxParticipation,
       maxConsecutiveReplies: this.config.maxConsecutiveReplies,
@@ -302,7 +303,6 @@ export class JevWakeupInstance implements WakeupEngineInstance {
         addressedThreshold: number;
         cooldownMs: number;
         globalCooldownMs: number;
-        channelCooldownMs: number;
         minIntervalMs: number;
         maxParticipation: number;
         maxConsecutiveReplies: number;
@@ -422,10 +422,8 @@ export class JevWakeupInstance implements WakeupEngineInstance {
             this.config.botNames.some((name) => message.content.includes(name)),
         );
         const channelAddress = `${messages.at(-1)!.platform}:${messages.at(-1)!.selfId}/${messages.at(-1)!.channelId}`;
-        const policyConfig: JevWakeupConfig = {
-          ...this.config,
-          cooldownMs: this.config.channelCooldowns[channelAddress] ?? this.config.cooldownMs,
-        };
+        const style = this.config.channelStyles[channelAddress] ?? this.config.style;
+        const policyConfig = this.config;
         const skipped = prefilterJev({
           now,
           state: {
@@ -445,7 +443,7 @@ export class JevWakeupInstance implements WakeupEngineInstance {
           mediaOnly: messages.every((message) => visibleJevText(message.content).length === 0),
         });
         if (skipped) {
-          const threshold = jevParticipationThreshold(this.config.threshold, this.config.style);
+          const threshold = jevParticipationThreshold(this.config.threshold, style);
           this.context.logger.debug(`wakeup jev [${s.id}] wait prefilter:${skipped.reason}`);
           this.trace(s, {
             mode: "wait",
@@ -517,7 +515,6 @@ export class JevWakeupInstance implements WakeupEngineInstance {
           pendingIds: messages.map((m) => m.messageId),
           quoteId: focus.quote?.id,
         });
-        const style = this.config.style;
         const state = {
           bot: {
             id: focus.selfId,

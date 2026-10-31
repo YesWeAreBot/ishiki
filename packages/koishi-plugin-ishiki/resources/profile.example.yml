@@ -208,7 +208,9 @@ attachment:
 #     instruction: "" # 可设为例如「只在能自然接话、不打断别人时加入」
 #     # 机器人的显示名和昵称，用于判断中文群聊中的直接称呼。
 #     botNames: [] # 例如：["小助手"]
-#     style: natural # quiet 更谨慎；talkative 更愿意参与，但不会绕过贡献、冷却和参与比例判断。
+#     style: natural # 默认主动加入倾向；quiet 更谨慎，talkative 更愿意参与，但不会绕过贡献等判断。
+#     channelStyles: # 单群主动加入倾向，键 platform:selfId/channelId；未列出的群继承 style。
+#       "onebot:123456/987654": quiet # 这个群更谨慎；也可选 natural 或 talkative。
 #     # 本 bot 关心的话题，供 interested 证据使用。
 #     interests:
 #       - LLM 工程与调试
@@ -219,7 +221,6 @@ attachment:
 #     addressedThreshold: 0.7 # 定向消息的地址证据门槛
 #     cooldownMs: 30000 # 默认单群主动加入最小间隔（毫秒）
 #     globalCooldownMs: 60000 # Profile 内跨群的主动发言间隔（毫秒）
-#     channelCooldowns: {} # 群级主动发言间隔覆盖；键 platform:selfId/channelId
 #     minIntervalMs: 2000 # 同一频道连续主动唤醒之间的最小间隔
 #     debounceMs: 800 # 同批消息的合并等待时间
 #     maxWaitMs: 2500 # 首批消息等待合并的最长时间

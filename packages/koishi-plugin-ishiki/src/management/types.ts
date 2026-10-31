@@ -454,7 +454,6 @@ export interface JevConfigView {
   addressedThreshold: number;
   cooldownMs: number;
   globalCooldownMs: number;
-  channelCooldownMs: number;
   minIntervalMs: number;
   maxParticipation: number;
   maxConsecutiveReplies: number;

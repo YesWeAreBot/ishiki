@@ -124,6 +124,107 @@ describe("JEV wakeup lifecycle", () => {
     dispose();
   });
 
+  it("applies channel styles to the model, policy and trace without changing directed replies", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const states: Array<{ bot: { style: string }; pending_message: { text: string } }> = [];
+    const records: Array<{ mode: string; config?: { style: string }; threshold: number; focused: string }> = [];
+    const agent = {
+      isIdle: () => true,
+      wait: async () => {},
+      continue: vi.fn<() => void>(),
+      storage: { read: () => [] },
+      channel: {
+        subscribe: (_name: "agent", listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as Agent;
+    const context = {
+      runtimeId: "styles",
+      logger: { debug: vi.fn<(message: string) => void>(), warn: vi.fn<(message: string) => void>() },
+      fiber: {
+        ishiki: {
+          jevTrace: { record: (record: (typeof records)[number]) => records.push(record) },
+          gateway: {
+            decisionModel: () => ({
+              supportedQuestionTypes: ["boolean", "choice"],
+              doDecide: async ({ state }: { state: Array<{ value: (typeof states)[number] }> }) => {
+                const input = state[0]!.value;
+                states.push(input);
+                const directed = input.pending_message.text.includes("<at");
+                const contribution = input.pending_message.text.includes("low") ? 0.53 : 0.6;
+                return {
+                  answers: {
+                    relation: {
+                      type: "choice",
+                      probabilities: directed
+                        ? { addressed: 0.95, followup: 0.01, open: 0.01, other: 0.01, ambient: 0.02 }
+                        : { addressed: 0, followup: 0, open: 0, other: 0, ambient: 1 },
+                    },
+                    ready: { type: "boolean", probability: 0.95 },
+                    receptive: { type: "boolean", probability: contribution },
+                    worthwhile: { type: "boolean", probability: 0.1 },
+                    social: { type: "boolean", probability: contribution },
+                    withdrawn: { type: "boolean", probability: 0 },
+                    closed: { type: "boolean", probability: 0 },
+                    interested: { type: "boolean", probability: 0 },
+                  },
+                };
+              },
+            }),
+          },
+        },
+      },
+    };
+    const engine = new JevWakeupInstance(
+      {
+        model: "decision",
+        debounceMs: 0,
+        maxWaitMs: 0,
+        cooldownMs: 0,
+        globalCooldownMs: 0,
+        minIntervalMs: 0,
+        maxParticipation: 1,
+        channelStyles: { "test:bot/quiet": "quiet", "test:bot/talkative": "talkative" },
+        rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
+      },
+      context as never,
+    );
+    const dispose = engine.attach(agent);
+    const emit = async (channelId: string, content: string) => {
+      const message: IshikiMessageCreated = {
+        timestamp: Date.now(),
+        platform: "test",
+        selfId: "bot",
+        channelId,
+        messageId: `${channelId}-${content}`,
+        content,
+        isDirect: false,
+        user: { id: "member" },
+      };
+      for (const listener of listeners) listener({ type: "message.appended", message: createCustomMessage("ishiki.message.created", message) });
+      await vi.waitFor(() => expect(records.some((record) => record.focused === content)).toBe(true));
+      return records.find((record) => record.focused === content)!;
+    };
+    try {
+      const quiet = await emit("quiet", "borderline quiet");
+      expect(quiet).toMatchObject({ mode: "wait", config: { style: "quiet" } });
+      expect(quiet.threshold).toBeCloseTo(0.8);
+      const natural = await emit("natural", "borderline natural");
+      expect(natural).toMatchObject({ mode: "join", config: { style: "natural" } });
+      expect(natural.threshold).toBeCloseTo(0.7);
+      expect(await emit("natural", "low natural")).toMatchObject({ mode: "wait", config: { style: "natural" } });
+      const talkative = await emit("talkative", "low talkative");
+      expect(talkative).toMatchObject({ mode: "join", config: { style: "talkative" } });
+      expect(talkative.threshold).toBeCloseTo(0.55);
+      expect(await emit("quiet", '<at id="bot"/> quiet directed')).toMatchObject({ mode: "reply", config: { style: "quiet" } });
+      expect(states.map((input) => input.bot.style)).toEqual(["quiet", "natural", "natural", "talkative", "quiet"]);
+    } finally {
+      dispose();
+    }
+  });
+
   it("skips the model call for a repeated message but still evaluates a mention", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const calls: unknown[] = [];

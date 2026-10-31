@@ -116,10 +116,11 @@ function configRows(item: JevDecisionView): Array<{ label: string; value: string
   const config = item.config;
   if (config === undefined) return [];
   return [
-    { label: "档位", value: STYLE_TEXT[config.style] ?? config.style },
-    { label: "门槛", value: config.threshold.toFixed(2) },
+    { label: "本群主动加入倾向", value: STYLE_TEXT[config.style] ?? config.style },
+    { label: "档位基准线", value: item.threshold.toFixed(2) },
+    { label: "基础门槛", value: config.threshold.toFixed(2) },
     { label: "定向线", value: config.addressedThreshold.toFixed(2) },
-    { label: "主动发言冷却（群）", value: `${Math.round(config.channelCooldownMs / 1000)} 秒` },
+    { label: "主动发言冷却（群）", value: `${Math.round(config.cooldownMs / 1000)} 秒` },
     { label: "主动发言冷却（全局）", value: `${Math.round(config.globalCooldownMs / 1000)} 秒` },
     { label: "唤醒间隔", value: `${Math.round(config.minIntervalMs / 1000)} 秒` },
     { label: "参与比例", value: `${Math.round(config.maxParticipation * 100)}%` },
