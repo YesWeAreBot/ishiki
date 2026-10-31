@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-31
+
 ### Breaking Changes
 
 - The extension invoke hook now receives `ExtensionHost` before the config
@@ -50,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Server summaries combine declared instructions with the exposed tool-name index
 - Duplicate exposed tool names across servers now raise a `ToolConflictError` instead of silently overwriting earlier tools
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.3...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.4...HEAD
+[0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.3...koishi-plugin-ishiki-mcp-client@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.2...koishi-plugin-ishiki-mcp-client@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-mcp-client@0.0.1...koishi-plugin-ishiki-mcp-client@0.0.2
 [0.0.1]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-mcp-client@0.0.1

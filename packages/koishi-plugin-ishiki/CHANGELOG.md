@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-10-31
+
 ### Breaking Changes
 - Renamed `ExtensionContext` to `ExtensionHost`; `Extension`, context, toolcall, and wakeup invoke hooks now receive the host before the config
 - Management write methods and runtime controls no longer accept an `operator` argument
@@ -32,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Attachments produced before a tool call fails can be kept when the tool opts in
 - `send_message` failures now include a stable error code
+
 ## [0.0.4] - 2026-10-30
 
 ### Breaking Changes
@@ -202,7 +205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attachment extraction requires a payload or URL up front.
 - The first request carries the baseline tool catalog instead of an empty one.
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.4...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.5...HEAD
+[0.0.5]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.4...koishi-plugin-ishiki@0.0.5
 [0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.3...koishi-plugin-ishiki@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.2...koishi-plugin-ishiki@0.0.3
 [0.0.2]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.1...koishi-plugin-ishiki@0.0.2

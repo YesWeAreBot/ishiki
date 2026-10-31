@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-ishiki-workspace",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Workspace tools for Ishiki: sandboxed or native shell, file tools and skills",
   "keywords": [
     "agent",
@@ -45,11 +45,11 @@
   },
   "devDependencies": {
     "koishi": "^4.18.11",
-    "koishi-plugin-ishiki": ">=0.0.4 <0.1.0"
+    "koishi-plugin-ishiki": ">=0.0.5 <0.1.0"
   },
   "peerDependencies": {
     "koishi": "^4.18.11",
-    "koishi-plugin-ishiki": ">=0.0.4 <0.1.0"
+    "koishi-plugin-ishiki": ">=0.0.5 <0.1.0"
   },
   "koishi": {
     "description": {
