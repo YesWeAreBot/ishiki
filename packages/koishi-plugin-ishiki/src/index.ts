@@ -40,7 +40,7 @@ import {
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import type { IshikiEvent } from "./types.js";
-import { StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
+import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
 interface Route {
@@ -94,8 +94,6 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
   constructor(ctx: Context, config: Ishiki.Config) {
     super(ctx, "ishiki");
     this.config = config;
-    // 未安装独立 JEV 插件时，控制台不应展示唤醒判定页面。
-    this.jevTrace.isInstalled = () => this.ctx.get(WakeupEngine.GetName("jev")) !== undefined;
     this.logger = ctx.logger("ishiki");
     this.logger.level = config.logLevel;
 
@@ -127,6 +125,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
 
     ctx.plugin(StandardWakeupEngine);
     ctx.plugin(WillingnessWakeupEngine);
+    ctx.plugin(JevWakeupEngine);
 
     ctx.plugin(NativeToolcallEngine);
     ctx.plugin(HermesToolcallEngine);

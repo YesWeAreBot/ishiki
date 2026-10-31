@@ -1,19 +1,12 @@
 import type { Agent, AgentMessage, JSONValue } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
-import {
-  WakeupEngine,
-  atSelf,
-  StandardWakeupInstance,
-  StandardWakeupConfig,
-  type ExtensionContext,
-  type EngineConfig,
-  type WakeupEngineInstance,
-  type WakeupEngines,
-} from "koishi-plugin-ishiki";
-import type { IshikiMessageCreated, IshikiMessageDeleted } from "koishi-plugin-ishiki";
 import Schema from "schemastery";
 
+import type { ExtensionContext } from "../extension.js";
+import type { EngineConfig } from "../profile/index.js";
+import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
 import { selectJevContext, projectJevLine, clipJevText, type JevContextLine } from "./context.js";
+import { WakeupEngine, atSelf, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 import { getJevFrequencyLedger } from "./frequency.js";
 import {
   decideJev,
@@ -27,6 +20,7 @@ import {
   type JevPrefilterMode,
   type Participation,
 } from "./policy.js";
+import { StandardWakeupConfig, StandardWakeupInstance } from "./standard.engine.js";
 
 const MAX_HISTORY = 64;
 const MAX_CHANNELS = 512;
@@ -878,7 +872,7 @@ export class JevWakeupInstance implements WakeupEngineInstance {
     };
   }
 }
-declare module "koishi-plugin-ishiki" {
+declare module "./engine.js" {
   interface WakeupEngines {
     jev: JevWakeupConfig;
   }

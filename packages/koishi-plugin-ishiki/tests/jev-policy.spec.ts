@@ -1,8 +1,8 @@
 import type { Experimental_DecisionModelV4Result as DecisionModelResult } from "@yesimagent/core";
 import { describe, expect, it } from "vitest";
 
-import { clipJevText, projectJevLine, selectJevContext, type JevContextLine } from "../src/context.js";
-import { JevFrequencyLedger } from "../src/frequency.js";
+import { clipJevText, projectJevLine, selectJevContext, type JevContextLine } from "../src/wakeup/context.js";
+import { JevFrequencyLedger } from "../src/wakeup/frequency.js";
 import {
   decideJev,
   isDirectedJev,
@@ -13,7 +13,7 @@ import {
   prefilterJev,
   type JevEvidence,
   type JevPolicyConfig,
-} from "../src/policy.js";
+} from "../src/wakeup/policy.js";
 
 const policy: JevPolicyConfig = {
   threshold: 0.7,

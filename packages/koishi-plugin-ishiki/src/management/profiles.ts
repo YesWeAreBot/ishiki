@@ -569,11 +569,13 @@ export class ProfilesManager {
   private async summary(id: string): Promise<ProfileSummary> {
     const loaded = await this.load(id);
     const record = this.host.profiles.get(id);
+    const wakeup = isRecord(loaded.raw.wakeup) ? loaded.raw.wakeup : {};
     const state: ProfileState = record === undefined ? "inactive" : record.mounted ? "active" : "loading";
     return {
       id,
       model: typeof loaded.raw.model === "string" ? loaded.raw.model : "",
       mode: loaded.raw.mode === "cross" ? "cross" : "channel",
+      wakeupEngine: record?.profile.settings.wakeup.engine ?? (typeof wakeup.engine === "string" ? wakeup.engine : "standard"),
       channels: Object.keys((loaded.raw.channels as Record<string, unknown> | undefined) ?? {}),
       state,
       runtimeCount: record?.runtimes.size ?? 0,

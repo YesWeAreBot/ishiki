@@ -31,7 +31,6 @@ const BOOLEAN_ROWS: Array<{ key: BooleanKey; label: string; hint: string }> = [
 ];
 
 const snapshot = ref<JevSnapshot | undefined>(store.jev);
-const installed = computed(() => snapshot.value?.installed !== false);
 const loading = ref(false);
 const attempted = ref(false);
 const errorText = ref("");
@@ -188,7 +187,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <PageShell v-if="installed">
+  <PageShell>
     <PageHeader
       title="唤醒判定"
       eyebrow="JEV"

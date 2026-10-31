@@ -116,6 +116,7 @@ export interface ProfileSummary {
   id: string;
   model: string;
   mode: "channel" | "cross";
+  wakeupEngine: string;
   channels: string[];
   state: ProfileState;
   runtimeCount: number;
@@ -510,6 +511,4 @@ export interface JevDecisionView {
 export interface JevSnapshot {
   decisions: JevDecisionView[];
   collectedAt: number;
-  /** 是否已安装并启用了独立的 JEV 唤醒插件；未安装时控制台不展示相关页面。 */
-  installed: boolean;
 }

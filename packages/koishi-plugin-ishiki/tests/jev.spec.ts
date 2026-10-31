@@ -1,9 +1,9 @@
 import { createCustomMessage, type Agent, type AgentEvent } from "@yesimagent/core";
-import type { IshikiMessageCreated } from "koishi-plugin-ishiki";
 import { describe, expect, it, vi } from "vitest";
 
-import { decideJev, parseJevEvidence, type JevEvidence, type Participation } from "../src/policy.js";
-import { JevWakeupInstance } from "../src/wakeup.js";
+import type { IshikiMessageCreated } from "../src/types.js";
+import { JevWakeupInstance } from "../src/wakeup/jev.engine.js";
+import { decideJev, parseJevEvidence, type JevEvidence, type Participation } from "../src/wakeup/policy.js";
 
 const config = {
   threshold: 0.7,

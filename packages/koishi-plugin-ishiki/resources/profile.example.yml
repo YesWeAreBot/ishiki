@@ -183,12 +183,12 @@ attachment:
 #     participationInfluence: 0.5  # 参与窗口内最高的额外加成比例
 
 # ── profiles/jev/profile.yaml ───────────────────────────────────────────────
-# 唤醒交给 Jev 决策模型判定：规则命中时直接唤醒，其余消息合并后询问模型。
+# JEV 是 Ishiki 核心内置唤醒引擎。规则命中时直接唤醒，其余消息合并后询问模型。
 # 模型密钥和地址写在 models.yaml；本段只保存该目录中的模型引用与本地判定参数。
 #
 # model: openai:gpt-5.6-luna
 # context:
-#   engine: standard # 上下文与唤醒各自独立，这里只把唤醒换掉
+#   engine: standard
 # wakeup:
 #   engine: jev
 #   jev:
