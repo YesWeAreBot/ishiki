@@ -24,5 +24,5 @@ export const AttachmentConfig: Schema<AttachmentConfig> = Schema.object({
     .description("一次请求内图片总字节上限")
     .default(10 * 1024 * 1024),
   maxImageCount: Schema.number().min(0).description("一次请求内的图片数量上限").default(4),
-  maxImageDimension: Schema.number().min(1).description("图片长边像素上限，超出时缩放").default(8000),
+  maxImageDimension: Schema.number().min(1).description("图片长边像素上限，超出时降采样").default(1568),
 });

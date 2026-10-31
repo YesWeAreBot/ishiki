@@ -1,6 +1,6 @@
 import h from "@satorijs/element";
 
-import type { AttachmentItem } from "../types.js";
+import type { AttachmentItem } from "../types/messages.js";
 import type { ResourceCenter } from "./center.js";
 
 /** Inbound media element types the platform layer registers as lazy resources. */

@@ -51,6 +51,7 @@ describe("sandbox prompt", () => {
     expect(instructions).toContain("sandbox-environment skill");
     expect(instructions).toContain("partial Node.js module surface");
     expect(instructions).toContain("subprocess and the sqlite3 module are absent");
+    expect(instructions).toContain("/tmp belongs to this sandbox lifetime");
     expect(instructions).not.toContain("commands are interpreted by JavaScript");
     expect(instructions).not.toContain("full standard library");
   });

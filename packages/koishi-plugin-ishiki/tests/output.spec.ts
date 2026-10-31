@@ -18,7 +18,7 @@ import { createReadTool } from "../src/builtin-tools/read.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { processOutput } from "../src/resource/output.js";
 import { AttachmentProjection } from "../src/resource/projection.js";
-import type { AttachmentItem, ImageLifetime } from "../src/types.js";
+import type { AttachmentItem, ImageLifetime } from "../src/types/messages.js";
 
 /** Two distinct, valid 1x1 PNG images. */
 const PNG_A = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -210,5 +210,30 @@ describe("invalid lifetime boundary", () => {
       processOutput(center, "probe", { type: "json", value: { attachments: [{ type: "note", lifetime: "forever" }] } as JSONValue }),
     ).rejects.toMatchObject({ code: "invalid_attachment_lifetime" });
     expect(await center.store.names("artifact", "probe")).toEqual([]);
+  });
+});
+
+describe("error output budget", () => {
+  it("archives an oversized error-text while keeping its error type", async () => {
+    const detail = "error detail\n".repeat(2000);
+    const result = await processOutput(center, "bash", { type: "error-text", value: detail });
+    if (result.output.type !== "error-text") throw new Error("expected error-text");
+    expect(result.output.value).toContain("complete error output archived at artifact://bash/");
+    expect(result.output.value).not.toContain(detail);
+    const artifact = /artifact:\/\/bash\/[a-f0-9]+\.bin/.exec(result.output.value)?.[0];
+    if (artifact === undefined) throw new Error("expected archived error URL");
+    const payload = await center.resolve(artifact);
+    expect(payload.type === "text" ? payload.text : Buffer.from(payload.bytes).toString("utf8")).toBe(detail);
+  });
+
+  it("archives an oversized error-json without exposing its payload", async () => {
+    const result = await processOutput(center, "codemode", { type: "error-json", value: { detail: "failure\n".repeat(2000) } });
+    if (result.output.type !== "error-json") throw new Error("expected error-json");
+    expect(result.output.value).toMatchObject({ error: "Tool failed; complete error output archived", characters: expect.any(Number) });
+    expect(JSON.stringify(result.output.value)).not.toContain("failure");
+    const artifact = result.output.value.artifact;
+    if (typeof artifact !== "string") throw new Error("expected archived error URL");
+    const payload = await center.resolve(artifact);
+    expect(payload.type === "text" ? payload.text : Buffer.from(payload.bytes).toString("utf8")).toContain('"detail"');
   });
 });

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- Narrative context and toolcall engines now take `ExtensionHost` before the config in their invoke hooks
+
 ### Added
 - Paired `narrative` context and tool-calling engines, moved out of `koishi-plugin-ishiki` into their own plugin: incremental persisted scripts, separate Narrator/Planner, Action Decoder and Replyer stages, gateway-selectable specialist models, history compaction and recovery from marked assistant output. Host tool execution, attachments and turn-ending behavior remain in the existing Agent runtime.
 

@@ -7,15 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- Renamed `ExtensionContext` to `ExtensionHost`; `Extension`, context, toolcall, and wakeup invoke hooks now receive the host before the config
+
 ### Added
 - Added per-channel JEV participation styles, profile-wide join cooldown, bot name hints, and local prefilter options
+- Added an `image` tool that inspects, resizes, crops, rotates, and converts stored PNG/JPEG resources
+- Added a configurable summary model for standard context compaction
 
 ### Changed
 - JEV decision calls now use a fixed 8-second timeout and a default context budget of 6000 characters
 - Moved the JEV decision trace store under management and surfaced scene and skip reasons in the console page
+- PNG/JPEG attachments are downscaled to a 1568 px long edge before they are sent to the model
+- Codemode timeout, memory, output-token, and text budgets now use wider defaults
 
 ### Removed
 - Removed the undici proxy transport; model requests now use the runtime fetch implementation
+
+### Fixed
+- Attachments produced before a tool call fails can be kept when the tool opts in
+- `send_message` failures now include a stable error code
 ## [0.0.4] - 2026-10-30
 
 ### Breaking Changes

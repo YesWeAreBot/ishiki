@@ -11,7 +11,7 @@ Ishiki 的运行建立在 `yesimagent` 之上。`@yesimagent/core` 提供 Agent 
 
 - 从 `profiles/<目录>/profile.yml` 读取并校验声明，编译频道认领；
 - 为每个 profile 建立一条 Koishi fiber，按需派生 runtime；
-- 按 profile 的三段配置解析引擎服务，产出各 runtime 的上下文与唤醒实例，以及 profile 级共享的工具调用包装；
+- 按 profile 的三段配置解析引擎服务，为各 runtime 产出上下文、唤醒与工具调用实例；
 - 装配扩展、内置工具与每个 runtime 的资源中心；
 - 把 Koishi 会话整形成 `IshikiEvent`，路由到对应 runtime。
 
@@ -54,10 +54,10 @@ Koishi 的 `internal/session` 事件由 `session-handler` 整形为 `ishiki.mess
 
 profile 激活时，主插件从三段配置里收集服务名，连同 `extends` 的扩展服务一起，作为 `ctx.inject` 的依赖表。服务齐全后执行装配：
 
-- `ContextEngine.GetService(fiber, name)` 与 `WakeupEngine.GetService(fiber, name)` 取出 provider，对每个 runtime 调用 `[Service.invoke](配置, ExtensionContext)`，得到该实例的引擎实例；
-- `ToolcallEngine.GetService(fiber, name)` 取出 provider，在 profile 装配期调用一次，用返回的包装器包住模型。
+- `ContextEngine.GetService(fiber, name)` 与 `WakeupEngine.GetService(fiber, name)` 取出 provider，对每个 runtime 调用 `[Service.invoke](ExtensionHost, 配置)`，得到该实例的引擎实例；
+- `ToolcallEngine.GetService(fiber, name)` 取出 provider，对每个 runtime 调用 `[Service.invoke](ExtensionHost, 配置)`，用返回的包装器包住 profile 共享的底层模型。
 
-由此得到状态归属：上下文与唤醒的会话状态按 runtime 隔离；工具调用包装与模型按 profile 共享，包装器里不能放某个会话的状态。任何一个必需服务缺席，profile 记录一条错误并停在等待态，其他 profile 继续运行。
+由此得到状态归属：上下文、唤醒与工具调用的实例状态按 runtime 隔离；底层模型对象按 profile 共享，包装器不得修改或替换它。任何一个必需服务缺席，profile 记录一条错误并停在等待态，其他 profile 继续运行。
 
 ## profile、route 与 runtime
 
@@ -69,7 +69,7 @@ profile 激活时，主插件从三段配置里收集服务名，连同 `extends
 
 channel 模式为每个频道派生独立 runtime，历史与资源互不相通，`send_message` 直接发到当前频道。cross 模式把认领的频道合流为一个 runtime，共享上下文与事实日志；消息在事实流里带频道坐标，`send_message` 要求 `target: { sid, channelId }`，并用同一份认领名单校验。runtime 按需创建：常见时机是第一条落到该地址的输入；创建后，后续输入与显式唤醒复用同一实例。
 
-扩展按 profile 的 `extends.<包名>` 装配。每个包导出 `Extension` 子类，由自己的插件入口注册为 `ishiki.ext.<名字>`；主插件在 runtime 构造前调用 `[Service.invoke](配置, ExtensionContext)`，得到 `ExtensionInstance`。实例的 `extendTools` 与 `extendInstructions` 由内核每轮调用一次，`attach` 在 runtime 构造完成后执行，`stop` 与 `attach` 返回的释放函数在 runtime 停止时执行。扩展服务的注册与生命周期归它自己的插件作用域。
+扩展按 profile 的 `extends.<包名>` 装配。每个包导出 `Extension` 子类，由自己的插件入口注册为 `ishiki.ext.<名字>`；主插件在 runtime 构造前调用 `[Service.invoke](ExtensionHost, 配置)`，得到 `ExtensionInstance`。实例的 `extendTools` 与 `extendInstructions` 由内核每轮调用一次，`attach` 在 runtime 构造完成后执行，`stop` 与 `attach` 返回的释放函数在 runtime 停止时执行。扩展服务的注册与生命周期归它自己的插件作用域。
 
 ## 工具面与资源
 
@@ -99,7 +99,7 @@ flowchart TB
     ISHIKI --> ROUTE["Route<br/>profile 及其 runtime 集合"]
     PROFILE["profile.yml · instruction files"] -.->|"激活"| ROUTE
 
-    GATEWAY --> WRAP["工具调用包装<br/>每 profile 一份"]
+    GATEWAY --> MODEL["模型入口<br/>每 profile 一份"]
     ROUTE -->|"事件投递"| DELIVER
 
     subgraph RUNTIME["AgentRuntime（每个地址一份）"]
@@ -107,13 +107,14 @@ flowchart TB
         WAKE["唤醒引擎实例"] -.->|"订阅 message.appended"| FACT
         WAKE --> AGENT["core Agent<br/>轮次执行"]
         CTX["上下文引擎实例"] --> AGENT
+        MODEL --> WRAP["工具调用包装<br/>每 runtime 一份"]
+        WRAP --> AGENT
         AGENT --> TOOLS["工具面<br/>内置 · 扩展 · search · codemode"]
         TOOLS --> CENTER["ResourceCenter<br/>asset · artifact · local · 扩展方案"]
         EXT["扩展实例"] -.-> TOOLS
         EXT -.->|"注册方案"| CENTER
     end
 
-    WRAP -->|"包住模型"| AGENT
     TOOLS --> SEND["send_message"]
     SEND --> ADAPTER
 ```
@@ -123,13 +124,13 @@ flowchart TB
 - 平台差异集中在边缘：`session-handler` 负责入站整形，附件捕获把媒体元素登记为资源，`send_message` 负责出站渲染与发送。路由、上下文与工具执行只处理整形后的事实。
 - `Ishiki` 服务持有 profile 加载、路由表与模型网关；profile 的激活、服务和扩展的解析由 `ctx.inject` 门控。
 - `AgentRuntime` 是资源、事实日志与引擎实例的归属点。扩展挂到 runtime 上，贡献工具、提示词或资源方案。
-- 模型在 profile 级共享：`narrative` 这类工具调用包装只创建一次，运行时按实例传入各自的上下文与唤醒实例。
+- 底层模型对象在 profile 级共享；工具调用实例与包装器按 runtime 创建，`narrative` 等变体因此可以读取当前 runtime 的宿主信息。
 
 ## 当前形态与独立运行
 
 当前仓库唯一的宿主是 `koishi-plugin-ishiki`：profile 激活依赖 Koishi fiber，引擎与扩展以 Koishi Service 注册，输入来自 Koishi 会话，发送走 Koishi 适配器。
 
-`@yesimagent/core` 与 `@yesimagent/gateway` 本身不依赖 Koishi。独立于 Koishi 的运行方式是项目的发展方向；现有 provider 基类与 `ExtensionContext` 仍使用 Koishi 的服务和生命周期机制。
+`@yesimagent/core` 与 `@yesimagent/gateway` 本身不依赖 Koishi。独立于 Koishi 的运行方式是项目的发展方向；现有 provider 基类与 `ExtensionHost` 仍使用 Koishi 的服务和生命周期机制。
 
 ## 术语表
 

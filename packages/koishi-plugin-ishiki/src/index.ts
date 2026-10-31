@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { AgentPlugin } from "@yesimagent/core";
 import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gateway";
@@ -10,6 +11,7 @@ import { parse as parceYaml } from "yaml";
 
 import { loadCodemode } from "./builtin-tools/codemode.js";
 import { createFinish } from "./builtin-tools/finish.js";
+import { createImage, IMAGE_TOOL } from "./builtin-tools/image.js";
 import { createReadTool } from "./builtin-tools/read.js";
 import { createSendMessage } from "./builtin-tools/send-message.js";
 import { IshikiCommands } from "./commands/contribute.js";
@@ -17,13 +19,12 @@ import { installCommands } from "./commands/index.js";
 import { installConsole } from "./console/index.js";
 import { ChatContextEngine, ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
-import { Extension, type ExtensionContext } from "./extension.js";
+import { Extension, type ExtensionHost } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { loadInstructionFiles, renderInstructions } from "./instructions.js";
 import { Management } from "./management/index.js";
 import { JevTraceStore } from "./management/jev-trace.js";
 import type { RuntimeMeta } from "./management/types.js";
-import { installDefaultPreset } from "./preset.js";
 import { directoryName, loadProfiles, matchesChannel, matchesPattern, type ChannelFilter, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
@@ -38,8 +39,30 @@ import {
   YamlXmlToolcallEngine,
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
-import type { IshikiEvent } from "./types.js";
+import type { IshikiEvent } from "./types/messages.js";
 import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
+
+// ESM 由模块 URL 定位，CJS 由 __dirname 定位；两者都从当前目录上跳到包根。
+const moduleDirectory = typeof __dirname === "string" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+const presetDirectory = path.resolve(moduleDirectory, "..", "resources", "presets");
+
+const presetFiles = [
+  { source: "default/profile.yaml", target: "profiles/default/profile.yaml" },
+  { source: "default/PERSONA.md", target: "profiles/default/PERSONA.md" },
+  { source: "models.yaml", target: "models.yaml" },
+] as const;
+
+/** 只在全新的数据目录释放预设，避免向已有安装写入或覆盖用户配置。 */
+export function installDefaultPreset(dataPath: string): boolean {
+  if (existsSync(dataPath) && readdirSync(dataPath).length > 0) return false;
+
+  for (const file of presetFiles) {
+    const target = path.join(dataPath, file.target);
+    mkdirSync(path.dirname(target), { recursive: true });
+    copyFileSync(path.join(presetDirectory, file.source), target, constants.COPYFILE_EXCL);
+  }
+  return true;
+}
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */
 interface Route {
@@ -211,9 +234,9 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
         }
         const toolcall = ToolcallEngine.GetService(fiber, settings.toolcall.engine);
         const failover = this.gateway.groups().includes(settings.model) || (settings.failover.attempts ?? 1) > 1;
-        const model = toolcall(settings.toolcall).wrap(
-          failover ? new FailoverModel(this.gateway, settings.model, settings.failover, this.logger) : this.gateway.languageModel(settings.model),
-        );
+        const baseModel = failover
+          ? new FailoverModel(this.gateway, settings.model, settings.failover, this.logger)
+          : this.gateway.languageModel(settings.model);
         const contextProvider = ContextEngine.GetService(fiber, settings.context.engine);
         const wakeupProvider = WakeupEngine.GetService(fiber, settings.wakeup.engine);
         const instructionFiles = loadInstructionFiles(settings.instructions, profile.root);
@@ -240,7 +263,17 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
           if (!mounted) throw new Error(`profile "${profile.id}" is disposed`);
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
           const resources = new ResourceCenter(key, home);
-          const context: ExtensionContext = { runtimeId: key, fiber, domain, home, root: profile.root, logger: this.logger, resources };
+          const host: ExtensionHost = {
+            runtimeId: key,
+            fiber,
+            domain,
+            home,
+            root: profile.root,
+            logger: this.logger,
+            resources,
+            gateway: this.gateway,
+          };
+          const model = toolcall(host, settings.toolcall).wrap(baseModel);
           const runtime = new AgentRuntime({
             id: key,
             home,
@@ -248,12 +281,17 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
             instructions,
             tools: {
               read: createReadTool({ center: resources, lifetime: readLifetime }),
+              [IMAGE_TOOL]: createImage({
+                center: resources,
+                maxDimension: settings.attachment.maxImageDimension ?? 1_568,
+                imageInput: settings.attachment.imageInput,
+              }),
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing, resources }),
               finish: createFinish(),
             },
-            extensions: extensions.map(({ extension, config }) => extension(config, context)).filter((ext) => ext !== undefined),
-            context: contextProvider(settings.context, context),
-            wakeup: wakeupProvider(settings.wakeup, context),
+            extensions: extensions.map(({ extension, config }) => extension(host, config)).filter((ext) => ext !== undefined),
+            context: contextProvider(host, settings.context),
+            wakeup: wakeupProvider(host, settings.wakeup),
             codemode: settings.codemode,
             pacing: settings.pacing,
             debugStream: this.config.debugStream,
@@ -522,7 +560,7 @@ export * from "./debugger.js";
 export * from "./extension.js";
 export * from "./failover.js";
 export * from "./runtime.js";
-export * from "./types.js";
+export * from "./types/messages.js";
 
 export * from "./context/index.js";
 export * from "./toolcall/index.js";

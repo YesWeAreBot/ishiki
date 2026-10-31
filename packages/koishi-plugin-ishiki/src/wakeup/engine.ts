@@ -2,7 +2,7 @@ import type { Agent } from "@yesimagent/core";
 import { h, Service, type Context } from "koishi";
 import Schema from "schemastery";
 
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
 import { listServices, registerService } from "../registry.js";
 
@@ -54,5 +54,5 @@ export abstract class WakeupEngine<K extends keyof WakeupEngines = keyof WakeupE
     registerService(ctx, "wakeup", String(name), this);
   }
 
-  public abstract [Service.invoke](config: EngineConfig<Pick<WakeupEngines, K>>, context: ExtensionContext): WakeupEngineInstance;
+  public abstract [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, K>>): WakeupEngineInstance;
 }

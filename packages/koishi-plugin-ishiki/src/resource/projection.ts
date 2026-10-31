@@ -1,9 +1,10 @@
 import { createEntry, createUserMessage, type AgentEntry, type AgentMessage, type UserContent } from "@yesimagent/core";
 
-import type { AttachmentItem, ImageLifetime, IshikiAttachment } from "../types.js";
+import type { AttachmentItem, ImageLifetime, IshikiAttachment } from "../types/messages.js";
 import type { ResourceCenter, ResourceFile } from "./center.js";
 import type { AttachmentConfig } from "./config.js";
-import { imageSize } from "./media.js";
+import { prepareImageForModel } from "./image.js";
+import { keepsFailedToolAttachments } from "./tool-output.js";
 
 const INLINE_IMAGE_TYPES: Record<string, true> = { "image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true };
 
@@ -26,7 +27,9 @@ export function attachmentMessages(messages: readonly AgentMessage[]): AgentMess
         if (part.type !== "tool-result") continue;
         results.set(
           JSON.stringify([part.toolName, part.toolCallId]),
-          part.output.type !== "error-text" && part.output.type !== "error-json" && part.output.type !== "execution-denied",
+          part.output.type !== "error-text" && part.output.type !== "error-json" && part.output.type !== "execution-denied"
+            ? true
+            : keepsFailedToolAttachments(part.output),
         );
       }
     }
@@ -126,7 +129,7 @@ export class AttachmentProjection {
     const maxImageBytes = this.policy.maxImageBytes ?? 5 * 1024 * 1024;
     const maxTotalImageBytes = this.policy.maxTotalImageBytes ?? 10 * 1024 * 1024;
     const maxImageCount = this.policy.maxImageCount ?? 4;
-    const maxImageDimension = this.policy.maxImageDimension ?? 8000;
+    const maxImageDimension = this.policy.maxImageDimension ?? 1_568;
     const groups = new Map<AgentMessage, Candidate[]>();
     const candidates: Candidate[] = [];
     for (const message of messages) {
@@ -179,36 +182,40 @@ export class AttachmentProjection {
       };
       if (!this.policy.imageInput) reject("model image input disabled");
       else if (!item.mediaType.startsWith("image/")) reject("unsupported media type");
-      else if (item.byteLength !== undefined && item.byteLength > maxImageBytes) reject("single image byte limit");
-      else if (item.byteLength !== undefined && item.byteLength > maxTotalImageBytes) reject("image exceeds the request byte budget");
       else {
         const duplicate = inlined.get(item.url);
         if (duplicate !== undefined) {
           candidate.include = duplicate;
           candidate.size = duplicate.size;
-        } else if (inlined.size >= maxImageCount || (item.byteLength !== undefined && totalBytes + item.byteLength > maxTotalImageBytes)) {
-          candidate.reason = "not supplied this request: image count or byte budget; waiting for capacity";
-          if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
-          continue;
         } else {
           try {
             const cached = this.cache.get(item.url);
             const payload = cached ?? (await this.center.resolve(item.url));
-            candidate.size = payload.size;
             const mediaType = payload.mediaType ?? item.mediaType;
-            const dimensions = cached === undefined && payload.type === "file" ? imageSize(payload.bytes) : {};
             if (payload.type !== "file" || INLINE_IMAGE_TYPES[mediaType] !== true) reject("unsupported image encoding");
-            else if (payload.size > maxImageBytes) reject("single image byte limit");
-            else if (payload.size > maxTotalImageBytes) reject("image exceeds the request byte budget");
-            else if (Math.max(dimensions.width ?? 0, dimensions.height ?? 0) > maxImageDimension) reject("image dimension limit");
-            else if (totalBytes + payload.size > maxTotalImageBytes) {
-              candidate.reason = "not supplied this request: image byte budget; waiting for capacity";
-              if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
-              continue;
-            } else {
-              candidate.include = payload;
-              inlined.set(item.url, payload);
-              totalBytes += payload.size;
+            else {
+              const prepared = prepareImageForModel(payload.bytes, mediaType, maxImageDimension);
+              const include: ResourceFile = {
+                ...payload,
+                bytes: prepared.bytes,
+                mediaType: prepared.mediaType,
+                size: prepared.bytes.byteLength,
+              };
+              candidate.size = include.size;
+              if (inlined.size >= maxImageCount) {
+                candidate.reason = "not supplied this request: image count budget; waiting for capacity";
+                if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
+              } else if (include.size > maxImageBytes) reject("single image byte limit");
+              else if (include.size > maxTotalImageBytes) reject("image exceeds the request byte budget");
+              else if (totalBytes + include.size > maxTotalImageBytes) {
+                candidate.reason = "not supplied this request: image byte budget; waiting for capacity";
+                if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
+              } else {
+                candidate.include = include;
+                inlined.set(item.url, include);
+                totalBytes += include.size;
+                if (payload.immutable) this.cache.set(item.url, include);
+              }
             }
           } catch (error) {
             candidate.reason = `not supplied this request: resource unavailable (${error instanceof Error ? error.message : String(error)})`;

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { Logger, Schema, Service } from "koishi";
 import type { Context } from "koishi";
 import { Extension, jsonSchema, tool } from "koishi-plugin-ishiki";
-import type { ExtensionContext, ExtensionInstance, ToolSet } from "koishi-plugin-ishiki";
+import type { ExtensionHost, ExtensionInstance, ToolSet } from "koishi-plugin-ishiki";
 
 export interface NoteSettings {
   prefix: string;
@@ -33,7 +33,7 @@ class NoteExtension extends Extension<NoteSettings> {
     this.logger.level = config.logLevel;
   }
 
-  public [Service.invoke](config: NoteSettings, context: ExtensionContext): ExtensionInstance {
+  public [Service.invoke](host: ExtensionHost, config: NoteSettings): ExtensionInstance {
     return {
       extendInstructions: () => "Use note_write to record durable notes.",
       extendTools: (): ToolSet => ({
@@ -50,7 +50,7 @@ class NoteExtension extends Extension<NoteSettings> {
             required: ["url"],
           }),
           execute: async ({ text }) => {
-            await appendFile(join(context.home, "notes.txt"), `${config.prefix}: ${text}\n`, "utf8");
+            await appendFile(join(host.home, "notes.txt"), `${config.prefix}: ${text}\n`, "utf8");
             return { url: "local://notes.txt" };
           },
         }),
@@ -89,13 +89,13 @@ export interface ExtensionInstance {
 装配与生命周期：
 
 - `Schema` 是**实例配置**的 Schema，对应 profile 的 `extends.<名字>.config`。它与插件自身的 Koishi 配置（构造器第二个参数、命名空间 `Config`）相互独立；缺省时实例配置原样透传。配置校验在 profile 激活时执行一次，无效配置会使该 profile 激活失败并记录错误。
-- `[Service.invoke](config, context)` 在每个 runtime 创建时调用一次，`context` 是该 runtime 的 `ExtensionContext`。返回 `undefined` 表示这个 runtime 不贡献任何内容。
-- 每个 runtime 得到独立的 `ExtensionInstance`。需要跨 runtime 共享的连接池、索引等状态放在 Extension Service 实例上，并按 `context.root` 区分 profile；在 `context.fiber` 的 `dispose` 事件里关闭。
+- `[Service.invoke](host, config)` 在每个 runtime 创建时调用一次，`host` 是该 runtime 的 `ExtensionHost`。返回 `undefined` 表示这个 runtime 不贡献任何内容。
+- 每个 runtime 得到独立的 `ExtensionInstance`。需要跨 runtime 共享的连接池、索引等状态放在 Extension Service 实例上，并按 `host.root` 区分 profile；在 `host.fiber` 的 `dispose` 事件里关闭。
 - `extendTools` 与 `extendInstructions` 在每轮第一步组装工具面与提示词时调用；开启 toolsearch 时，`extendTools` 还会在初始化阶段调用一次，用于写入基线目录。内核不缓存返回值，跨轮稳定的结果请放在实例闭包里。
 - 工具合并顺序为：内核工具（`read`、`send_message`、`finish`）、各扩展按 `extends` 顺序贡献的工具、`wait`，随后是 codemode 收窄与 toolsearch 的 `search`。工具撞名在实际组装时抛出 `ToolConflictError`；每轮组装时的错误进入该轮次的 `turn.failed`，开启 toolsearch 时的初始化组装也可能报告错误。`wait`、`codemode`、`search` 是内核保留名。
 - `attach(handle)` 在 runtime 构造完成后调用一次。返回值可以是释放函数，也可以是解析为释放函数的 Promise；抛错只记录警告，不会阻止 runtime 启动。
 - `stop()` 与 `attach` 返回的释放函数都在 runtime 停止时执行，`stop()` 先执行。定时器、订阅与外部资源在这两个位置清理。
-- `context.resources.attach(handler)` 注册资源方案并返回注销函数。资源中心按 runtime 隔离，注销函数在 runtime 停止前调用即可。
+- `host.resources.attach(handler)` 注册资源方案并返回注销函数。资源中心按 runtime 隔离，注销函数在 runtime 停止前调用即可。
 
 ### 运行时句柄（AgentRuntime）
 
@@ -120,7 +120,7 @@ export interface ExtensionInstance {
 
 `deliver` 与 `wake` 的完整语义见下文「运行时：输入提交与唤醒」。
 
-### ExtensionContext 字段
+### ExtensionHost 字段
 
 <TypeTable
   type={{
@@ -152,6 +152,10 @@ export interface ExtensionInstance {
       type: 'ResourceCenter',
       description: '实例资源中心，注册自定义 scheme 用',
     },
+    gateway: {
+      type: 'Gateway',
+      description: '模型网关，用于解析摘要等辅助模型',
+    },
   }}
 />
 
@@ -173,9 +177,9 @@ export interface ExtensionInstance {
 
 三族引擎都是继承各自基类的 Koishi Service，服务名由基类的 `GetName` 生成：
 
-- `ishiki.engine.context.<名字>`，基类 `ContextEngine`，provider 的 `[Service.invoke](config, context: ExtensionContext)` 返回 `ContextEngineInstance`。
-- `ishiki.engine.wakeup.<名字>`，基类 `WakeupEngine`，provider 的 `[Service.invoke](config, context: ExtensionContext)` 返回 `WakeupEngineInstance`。
-- `ishiki.engine.toolcall.<名字>`，基类 `ToolcallEngine`，provider 的 `[Service.invoke](config)` 返回 `ToolcallEngineInstance`。包装器在 profile 级共享，因此这里不接收 runtime 坐标。
+- `ishiki.engine.context.<名字>`，基类 `ContextEngine`，provider 的 `[Service.invoke](host: ExtensionHost, config)` 返回 `ContextEngineInstance`。
+- `ishiki.engine.wakeup.<名字>`，基类 `WakeupEngine`，provider 的 `[Service.invoke](host: ExtensionHost, config)` 返回 `WakeupEngineInstance`。
+- `ishiki.engine.toolcall.<名字>`，基类 `ToolcallEngine`，provider 的 `[Service.invoke](host: ExtensionHost, config)` 返回 `ToolcallEngineInstance`。
 
 一个 runtime 在每一族里只使用一个变体。provider 在 profile 激活时按配置里的名字取到，实例创建时机见下文各族的说明。
 
@@ -214,7 +218,7 @@ import { resolve } from "node:path";
 import { Service } from "koishi";
 import type { Context } from "koishi";
 import { ContextEngine } from "koishi-plugin-ishiki";
-import type { ContextEngineInstance, ContextEngines, EngineConfig, ExtensionContext } from "koishi-plugin-ishiki";
+import type { ContextEngineInstance, ContextEngines, EngineConfig, ExtensionHost } from "koishi-plugin-ishiki";
 
 export interface BriefingConfig {
   filename: string;
@@ -231,8 +235,8 @@ export class BriefingContextEngine extends ContextEngine<"briefing"> {
     super(ctx, "briefing");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "briefing">>, context: ExtensionContext): ContextEngineInstance {
-    const filename = resolve(context.root, config.briefing?.filename ?? "briefing.md");
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<ContextEngines, "briefing">>): ContextEngineInstance {
+    const filename = resolve(host.root, config.briefing?.filename ?? "briefing.md");
     return {
       instructions: () => readFile(filename, "utf8"),
     };
@@ -279,7 +283,7 @@ export abstract class ToolcallEngineInstance {
 
 - `middleware()` 返回 `LanguageModelV4Middleware`；`wrap()` 用 `wrapLanguageModel` 组合它。返回 `undefined` 表示不改写模型调用（`native` 的做法）。
 - 覆盖 `wrap()` 可以返回自定义的 `LanguageModelV4`。多阶段、多模型编排都写在这个实现里：`narrative` 的 `NarrativeToolcallInstance` 在 `doGenerate` / `doStream` 内运行 Narrator，再分支到 Action Decoder 或 Replyer，最后返回标准的 content、finishReason 与 usage。它要求叙事上下文提供的输入标记；缺少标记时该轮报错。
-- 实例在 profile 激活时创建一次，`wrap()` 也只调用一次，包装后的模型由该 profile 的所有 runtime 共用。会话状态不能放在这里。
+- 实例在每个 runtime 创建时生成一次，`wrap()` 也随之调用一次。实例可以持有当前 runtime 的状态，但不得修改或替换由多个 runtime 共用的底层模型对象。
 
 下面的引擎通过 middleware 给每次模型调用追加一条系统说明：
 
@@ -287,7 +291,7 @@ export abstract class ToolcallEngineInstance {
 import { Service } from "koishi";
 import type { Context } from "koishi";
 import { ToolcallEngine, ToolcallEngineInstance } from "koishi-plugin-ishiki";
-import type { EngineConfig, LanguageModelV4CallOptions, LanguageModelV4Middleware, ToolcallEngines } from "koishi-plugin-ishiki";
+import type { EngineConfig, ExtensionHost, LanguageModelV4CallOptions, LanguageModelV4Middleware, ToolcallEngines } from "koishi-plugin-ishiki";
 
 export interface GroundingConfig {
   instruction: string;
@@ -320,7 +324,7 @@ export class GroundingToolcallEngine extends ToolcallEngine<"grounding"> {
     super(ctx, "grounding");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ToolcallEngines, "grounding">>): ToolcallEngineInstance {
+  public [Service.invoke](_host: ExtensionHost, config: EngineConfig<Pick<ToolcallEngines, "grounding">>): ToolcallEngineInstance {
     return new GroundingInstance(config.grounding?.instruction ?? "Cite a resource URL for every factual claim.");
   }
 }
@@ -403,7 +407,7 @@ export class ClockHandler implements SchemeHandler {
 
 ## 事件与消息类型
 
-`IshikiEvent`（`src/types.ts`）是 core `AgentCustomMessage` 声明的联合：
+`IshikiEvent`（`src/types/messages.ts`）是 core `AgentCustomMessage` 声明的联合：
 
 - `ishiki.message.created` / `ishiki.message.deleted`：入站消息与撤回。
 - `ishiki.attachment`：附件记录，由 runtime 或统一输出出口写入。

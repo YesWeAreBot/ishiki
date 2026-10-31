@@ -1,7 +1,7 @@
 import { asSchema, jsonSchema, tool } from "@yesimagent/core";
 import { describe, expect, it } from "vitest";
 
-import { withIntent } from "../src/tools/intent.js";
+import { withIntent } from "../src/builtin-tools/index.js";
 
 const options = { toolCallId: "call-1", messages: [] } as const;
 

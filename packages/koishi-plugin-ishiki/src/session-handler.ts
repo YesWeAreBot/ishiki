@@ -1,7 +1,7 @@
 import { createCustomMessage } from "@yesimagent/core";
 import { type Session } from "koishi";
 
-import type { IshikiEvent } from "./types.js";
+import type { IshikiEvent } from "./types/messages.js";
 
 export interface SessionHandler {
   handle(session: Session): IshikiEvent | undefined;

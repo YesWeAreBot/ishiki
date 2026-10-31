@@ -9,7 +9,10 @@ export type ResourceErrorCode =
   | "resource_unavailable"
   | "resource_not_found"
   | "resource_too_large"
-  | "resource_read_failed";
+  | "resource_read_failed"
+  | "image_format_unsupported"
+  | "image_decode_failed"
+  | "image_operation_invalid";
 
 export class ResourceError extends Error {
   public constructor(

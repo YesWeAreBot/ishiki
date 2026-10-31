@@ -1,4 +1,4 @@
-import type { ExtensionContext, Agent, AgentEntry } from "koishi-plugin-ishiki";
+import type { ExtensionHost, Agent, AgentEntry } from "koishi-plugin-ishiki";
 import { createAgent, createAssistantMessage, createEntry, createMemoryStorage, createUserMessage } from "koishi-plugin-ishiki";
 import { describe, expect, it } from "vitest";
 
@@ -10,7 +10,7 @@ const MODEL = {} as never;
 /** Only `warn` is ever reached by these tests. */
 const LOGGER = { warn() {}, error() {}, info() {}, debug() {} } as never;
 
-const fixture: ExtensionContext = {
+const fixture: ExtensionHost = {
   runtimeId: "narrative-test",
   domain: { mode: "channel", platform: "test", selfId: "self", channelId: "channel" },
   home: "",
@@ -18,6 +18,7 @@ const fixture: ExtensionContext = {
   fiber: {} as never,
   logger: LOGGER,
   resources: {} as never,
+  gateway: {} as never,
 };
 
 function agentWith(entries: AgentEntry[] = []): Agent {

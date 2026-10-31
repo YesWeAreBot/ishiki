@@ -9,6 +9,7 @@ import type { WorkspaceConfig } from "../src/config.js";
 import { sandboxExecutionLimits } from "../src/execution-limits.js";
 import { createSandbox } from "../src/sandbox.js";
 import { resolveLayout, type ShellOptions } from "../src/shell.js";
+import { createWorkspaceTools } from "../src/tools.js";
 
 const silent = { warn() {}, info() {}, debug() {}, error() {} } as unknown as Logger;
 
@@ -75,6 +76,17 @@ describe("sandbox execution limits", () => {
     const result = await shell.exec("js-exec /home/workspace/loop.mjs");
     expect(result.exitCode).toBe(124);
     expect(result.stderr).toContain("js-exec exceeded its execution deadline");
+  });
+
+  it("marks a non-zero bash exit as an error result", async () => {
+    const shell = await mount();
+    const bash = createWorkspaceTools(shell).bash;
+    const output = await bash.execute!({ command: "printf failure >&2\nexit 7" }, { abortSignal: new AbortController().signal } as never);
+    expect(output).toEqual({ stdout: "", stderr: "failure", exitCode: 7 });
+    expect(bash.toModelOutput!({ input: { command: "exit 7" }, output })).toEqual({
+      type: "error-text",
+      value: "exit code: 7\n\nstderr:\nfailure",
+    });
   });
 });
 

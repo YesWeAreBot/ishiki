@@ -1,6 +1,7 @@
 import { Service, type Context, type Logger } from "koishi";
 import type {
   EngineConfig,
+  ExtensionHost,
   FailoverConfig,
   LanguageModelV4,
   LanguageModelV4CallOptions,
@@ -344,10 +345,10 @@ export class NarrativeToolcallEngine extends ToolcallEngine<"narrative"> {
     super(ctx, "narrative");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ToolcallEngines, "narrative">>): ToolcallEngineInstance {
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<ToolcallEngines, "narrative">>): ToolcallEngineInstance {
     const options: Partial<NarrativeToolcallConfig> = config.narrative ?? {};
-    const gateway = this.ctx.ishiki.gateway;
-    const logger = this.ctx.ishiki.logger;
+    const gateway = host.gateway;
+    const logger = host.logger;
     const instructions: NarrativeRoleInstructions = {
       ...(options.narratorInstructions === undefined ? {} : { narrator: options.narratorInstructions }),
       ...(options.decoderInstructions === undefined ? {} : { decoder: options.decoderInstructions }),

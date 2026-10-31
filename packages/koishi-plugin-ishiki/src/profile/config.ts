@@ -61,12 +61,12 @@ export interface CodemodeConfig {
 export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
   enable: Schema.boolean().description("启用代码模式沙箱").default(true),
   direct: Schema.array(Schema.string()).description("直接暴露给脚本的宿主工具名称").default([]),
-  timeoutMs: Schema.number().min(1).description("单次执行的超时时间（毫秒），脚本里的 @options 可以覆盖").default(30_000),
+  timeoutMs: Schema.number().min(1).description("单次执行的超时时间（毫秒），脚本里的 @options 可以覆盖").default(120_000),
   memoryLimitBytes: Schema.number()
     .min(1)
     .description("沙箱内存上限（字节），创建时固定")
-    .default(256 * 1024 * 1024),
-  maxOutputTokens: Schema.number().min(0).description("工具结果里 RESULT/TEXT/CONSOLE 预览的字符预算（按每 token 4 字符折算），0 表示省略预览").default(10_000),
+    .default(512 * 1024 * 1024),
+  maxOutputTokens: Schema.number().min(0).description("工具结果里 RESULT/TEXT/CONSOLE 预览的字符预算（按每 token 4 字符折算），0 表示省略预览").default(3_000),
 });
 
 export interface PacingConfig {

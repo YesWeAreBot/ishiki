@@ -1,5 +1,5 @@
 import { Logger, Schema, Service, type Context } from "koishi";
-import { Extension, type ExtensionContext, type ToolSet } from "koishi-plugin-ishiki";
+import { Extension, type ExtensionHost, type ToolSet } from "koishi-plugin-ishiki";
 
 import { WorkspaceConfig } from "./config.js";
 import { createNativeShell } from "./native.js";
@@ -22,14 +22,14 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
     this.dataPath = ctx.ishiki.dataPath;
   }
 
-  public [Service.invoke](config: WorkspaceConfig, context: ExtensionContext) {
+  public [Service.invoke](host: ExtensionHost, config: WorkspaceConfig) {
     const shellOptions = {
       config,
-      home: context.home,
-      root: context.root,
+      home: host.home,
+      root: host.root,
       dataPath: this.dataPath,
       logger: this.logger,
-      resources: context.resources,
+      resources: host.resources,
     };
     const layout = resolveLayout(shellOptions);
 
@@ -39,8 +39,8 @@ class WorkspaceExtension extends Extension<WorkspaceConfig> {
     const box = (): Promise<WorkspaceShell> => (shell ??= layout.backend === "native" ? createNativeShell(layout) : createSandbox(layout, shellOptions));
     const disposers: Array<() => void> = [];
     // 资源 URL 面：技能内容与 workspace 文件视图（沙箱实际可见的文件系统；native 是宿主视图）。
-    disposers.push(context.resources?.attach(new SkillScheme(layout.skills)));
-    disposers.push(context.resources?.attach(new WorkspaceScheme(async () => (await box()).fs)));
+    disposers.push(host.resources?.attach(new SkillScheme(layout.skills)));
+    disposers.push(host.resources?.attach(new WorkspaceScheme(async () => (await box()).fs)));
     return {
       name: "ishiki.workspace",
       extendTools: async () => (tools ??= createWorkspaceTools(await box())),

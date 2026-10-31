@@ -5,8 +5,7 @@ import { App } from "koishi";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-import Ishiki from "../src/index.js";
-import { installDefaultPreset } from "../src/preset.js";
+import Ishiki, { installDefaultPreset } from "../src/index.js";
 import { resolveProfile } from "../src/profile/config.js";
 
 const temporaryRoot = path.resolve("cache", "test-presets");

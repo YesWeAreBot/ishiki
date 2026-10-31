@@ -7,16 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- The extension invoke hook now receives `ExtensionHost` before the config
+
 ### Added
 - Added a bundled `sandbox-environment` skill that routes work across just-bash, QuickJS, WebAssembly Python, SQLite, networking, and sandbox files, with detailed runtime references loaded only when needed
 
 ### Changed
 - The sandbox prompt now names just-bash, describes the partial Node.js module surface and missing Python modules, and points to the environment skill for runtime-specific details
+- Sandbox prompts now warn that `/tmp` only lives for the current sandbox lifetime and that files worth keeping belong in the workspace or an artifact
 
 ### Fixed
 - The JavaScript `fs` bootstrap now provides `constants`, `Stats` and `Dirent` instances, `accessSync`, file URL path arguments, `COPYFILE_EXCL`, and `Buffer` results from `readFileBuffer`
 - Sandbox commands now pass the configured timeout to just-bash's overall, JavaScript, Python, and SQLite limits, so `js-exec` no longer stops at its built-in 30-second limit
-
+- Sandbox `bash` now returns error output when the exit code is non-zero, so failures are not mistaken for success
 ## [0.0.4] - 2026-10-30
 
 ### Added

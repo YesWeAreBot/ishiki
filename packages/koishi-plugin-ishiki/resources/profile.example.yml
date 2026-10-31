@@ -67,9 +67,9 @@ codemode:
   # 这里列出的业务工具同时留在模型目录里，程序里也仍然够得着；没列出的业务工具收进沙箱、
   # 从模型目录里消失，只有程序的 tools 里调得到。
   direct: []
-  timeoutMs: 30000 # 单次沙箱执行的总时限（毫秒），程序可用 // @options 覆盖
-  memoryLimitBytes: 268435456 # 256 MiB，QuickJS 内存预算
-  maxOutputTokens: 10000 # 工具结果里 RESULT / TEXT / CONSOLE 预览的预算，按 4 字符 ≈ 1 token 折算
+  timeoutMs: 120000 # 单次沙箱执行的总时限（毫秒），程序可用 // @options 覆盖
+  memoryLimitBytes: 536870912 # 512 MiB，QuickJS 内存预算
+  maxOutputTokens: 3000 # 工具结果里 RESULT / TEXT / CONSOLE 预览的预算，按 4 字符 ≈ 1 token 折算
 
 # 一次唤醒（一轮）的步数预算。maxSteps 是硬上限：走到这一步 runtime 直接结束这一轮，
 # 所以剩下的步数不够时，程序会在每次请求前附一句「还剩几步」的提醒，
@@ -97,7 +97,8 @@ typing:
 # 改写生命周期只有两个入口：codemode 程序通过 image() 保存的图片项，或 imageInput 开启时直接 read 的 lifetime 参数。
 # 工具原始媒体在最终输出阶段归档为 artifact；下一 step 以带来源说明的 user/file 消息加载。
 # codemode 内 read 始终返回 JSON-safe base64，纯文本模型也可将图片传给后续工具。
-# 不自动缩放；超过预算的图片等待容量，不能加载或不支持的媒体逐轮重试并保留 URL 与原因说明。
+# PNG/JPEG 在模型输入前按长边上限等比例缩小；GIF/WebP 只读取尺寸，超限时明确报不支持处理。
+# 超过预算的图片等待容量；不能加载的媒体逐轮重试并保留 URL 与原因说明。
 attachment:
   imageInput: false
   recentImageCount: 3 # recent 生命周期的目标保留数
@@ -105,9 +106,9 @@ attachment:
   maxImageBytes: 5242880 # 单图 5 MiB
   maxTotalImageBytes: 10485760 # 整次请求 10 MiB，跨平台与工具附件累计
   maxImageCount: 4
-  maxImageDimension: 8000 # 已知尺寸的单边像素上限
+  maxImageDimension: 1568 # PNG/JPEG 送入模型前的长边像素上限
 
-# read 与统一出口共用一份文本预算：2000 行、单行 2000 字符、30000 UTF-16 字符。
+# read 与统一出口共用一份文本预算：400 行、单行 2000 字符、12000 UTF-16 字符。
 # :1-200 / :50+30 选择行。超长单行会被截断，截掉的部分只能在 codemode 或沙箱里读到。
 # ?view=meta 查看元数据，不取字节。
 # MCP 插件旧 limits 已移入 resources。

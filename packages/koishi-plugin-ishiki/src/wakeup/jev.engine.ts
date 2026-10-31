@@ -2,9 +2,9 @@ import type { Agent, AgentMessage, JSONValue } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
 import Schema from "schemastery";
 
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types.js";
+import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types/messages.js";
 import { WakeupEngine, atSelf, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
 /** Faithful, bounded projections preserve the referenced turn without synthetic summaries. */
@@ -675,11 +675,11 @@ function toLine(m: IshikiMessageCreated): Line {
 }
 export class JevWakeupInstance implements WakeupEngineInstance {
   readonly config: JevWakeupConfig;
-  private readonly context: ExtensionContext;
+  private readonly context: ExtensionHost;
   private readonly rules: JevRules;
   private readonly channels = new Map<string, Channel>();
   private readonly frequency: ReturnType<typeof getJevFrequencyLedger>;
-  constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionContext) {
+  constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionHost) {
     this.config = {
       ...DEFAULT,
       ...config,
@@ -1382,7 +1382,7 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
   constructor(ctx: Context) {
     super(ctx, "jev");
   }
-  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "jev">>, context: ExtensionContext): WakeupEngineInstance {
-    return new JevWakeupInstance(config.jev ?? {}, context);
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, "jev">>): WakeupEngineInstance {
+    return new JevWakeupInstance(config.jev ?? {}, host);
   }
 }

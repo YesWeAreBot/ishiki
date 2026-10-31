@@ -7,16 +7,18 @@ import {
   type Agent,
   type AgentEntry,
   type AgentMessage,
+  type LanguageModelV4,
   type LanguageModelUsage,
   type ToolResultOutput,
 } from "@yesimagent/core";
+import { Gateway } from "@yesimagent/gateway";
 import { Service, type Context } from "koishi";
 import type Logger from "reggol";
 import Schema from "schemastery";
 
 import { CONFIRM_OPTION, confirm } from "../commands/context.js";
 import { expectRuntime, type ExtensionCommandDecl } from "../commands/contribute.js";
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import { ManagementError } from "../management/errors.js";
 import type { RuntimeView } from "../management/types.js";
 import type { EngineConfig, InstanceDomain } from "../profile/index.js";
@@ -25,12 +27,27 @@ import type { AgentRuntime } from "../runtime.js";
 import { ContextEngine, type ContextEngineInstance, type ContextEngines, type ContextRequest } from "./engine.js";
 import { collapse, formatClock, MEMORY_HEAD, renderLine, renderText, visibleSize } from "./render.js";
 
-const DEFAULT_CONTEXT_TOKENS = 32_000;
+const DEFAULT_CONTEXT_TOKENS = 48_000;
 const FALLBACK_TOKENS_PER_CHAR = 0.5;
 const MIN_SAMPLE_GAP = 0.1;
 
+const CHAT_DEFAULTS = {
+  highWaterRatio: 0.75,
+  targetRatio: 0.5,
+  hotRatio: 0.25,
+  hotMinMessages: 4,
+  shakeMinToolRatio: 0.1,
+  shakeBatchRatio: 0.25,
+  minRegionTokens: 200,
+  compactTargetRatio: 0.05,
+  compactMinCoveredRatio: 0.2,
+  compactMaxOutputTokens: 3_500,
+} as const;
+
 export interface ChatContextConfig {
   maxTokens: number;
+  /** 摘要模型引用；留空时从当前模型派生关闭 reasoning 的版本。 */
+  compactModel?: string;
   highWaterRatio: number;
   targetRatio: number;
   hotRatio: number;
@@ -49,16 +66,17 @@ export interface ChatContextConfig {
 
 export const ChatContextConfig = Schema.object({
   maxTokens: Schema.number().min(0).default(DEFAULT_CONTEXT_TOKENS).description("消息预算的 token 上限，不含 system 与工具定义；0 关闭预算"),
-  highWaterRatio: Schema.number().min(0).max(1).default(0.7).description("消息 token 达到预算的该比例时触发整理"),
-  targetRatio: Schema.number().min(0).max(1).default(0.5).description("整理后的目标比例，用于统计与手动预览"),
-  hotRatio: Schema.number().min(0).max(1).default(0.375).description("热区占预算的比例，热区内的消息不折叠"),
-  hotMinMessages: Schema.number().min(1).default(4).description("热区至少保留的消息条数"),
-  shakeMinToolRatio: Schema.number().min(0).max(1).default(0.1).description("一次 shake 至少覆盖的工具 token 比例"),
-  shakeBatchRatio: Schema.number().min(0).max(1).default(0.25).description("一次 shake 的批次 token 上限比例"),
-  minRegionTokens: Schema.number().min(0).default(200).description("digest 中附带 artifact 行号的工具结果最小 token 数"),
-  compactTargetRatio: Schema.number().min(0).max(1).default(0.06).description("摘要长度占预算的比例"),
-  compactMinCoveredRatio: Schema.number().min(0).max(1).default(0.25).description("一次 compact 至少覆盖的 token 比例"),
-  compactMaxOutputTokens: Schema.number().min(1).default(2_500).description("摘要生成的输出 token 上限"),
+  compactModel: Schema.string().description("摘要模型引用；留空时从当前模型派生关闭 reasoning 的版本"),
+  highWaterRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.highWaterRatio).description("消息 token 达到预算的该比例时触发整理"),
+  targetRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.targetRatio).description("整理后的目标比例，用于统计与手动预览"),
+  hotRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.hotRatio).description("热区占预算的比例，热区内的消息不折叠"),
+  hotMinMessages: Schema.number().min(1).default(CHAT_DEFAULTS.hotMinMessages).description("热区至少保留的消息条数"),
+  shakeMinToolRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.shakeMinToolRatio).description("一次 shake 至少覆盖的工具 token 比例"),
+  shakeBatchRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.shakeBatchRatio).description("一次 shake 的批次 token 上限比例"),
+  minRegionTokens: Schema.number().min(0).default(CHAT_DEFAULTS.minRegionTokens).description("digest 中附带 artifact 行号的工具结果最小 token 数"),
+  compactTargetRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.compactTargetRatio).description("摘要长度占预算的比例"),
+  compactMinCoveredRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.compactMinCoveredRatio).description("一次 compact 至少覆盖的 token 比例"),
+  compactMaxOutputTokens: Schema.number().min(1).default(CHAT_DEFAULTS.compactMaxOutputTokens).description("摘要生成的输出 token 上限"),
   fallbackTokensPerChar: Schema.number().min(0.001).default(FALLBACK_TOKENS_PER_CHAR).description("未标定时每字符的 token 估算"),
   tokensPerCharMin: Schema.number().min(0).default(0.1).description("标定得到的 token/字符 下限"),
   tokensPerCharMax: Schema.number().min(0).default(1.5).description("标定得到的 token/字符 上限"),
@@ -817,7 +835,14 @@ export function renderCompactOriginal(entries: readonly AgentEntry[], from: numb
     }
     if (entry.type === "message") {
       lines.push(`### ${entry.id} · ${entry.data.role}`);
-      lines.push(renderText(entry.data, domain));
+      const message =
+        entry.data.role === "assistant" && Array.isArray(entry.data.content)
+          ? {
+              ...entry.data,
+              content: entry.data.content.filter((part) => part.type !== "reasoning" && part.type !== "reasoning-file"),
+            }
+          : entry.data;
+      lines.push(renderText(message, domain));
       continue;
     }
     if (entry.type === "ishiki.chat.shake") {
@@ -863,6 +888,12 @@ export const CHAT_COMPACT_INSTRUCTIONS = `你是 ishiki 的记忆整理器。把
 - 摘要语言跟随对话的主要语言。
 - 每条信息写清主体，避免“他”“那个”“上面说的”这类无指代表达。`;
 
+const CHAT_COMPACT_SECTIONS = ["## 人物与关系", "## 偏好与边界", "## 约定与承诺", "## 未完成话题", "## 已确认事实", "## 工作状态", "## 当前氛围"] as const;
+
+function isCompactSummary(text: string): boolean {
+  return CHAT_COMPACT_SECTIONS.every((section) => text.includes(section));
+}
+
 export interface CompactPromptInput {
   previous?: string;
   shakes: ReadonlyArray<{ id: string; digest: string }>;
@@ -875,24 +906,25 @@ export function buildCompactPrompt(input: CompactPromptInput): string {
     previousSummary: input.previous ?? null,
     foldedBlocks: input.shakes,
     records: input.records,
+    targetTokens: input.targetTokens,
   });
 }
 
 function normalizeConfig(config: Partial<ChatContextConfig>): ChatContextConfig {
   const maxTokens = config.maxTokens ?? DEFAULT_CONTEXT_TOKENS;
-  const compactTargetRatio = config.compactTargetRatio ?? 0.06;
   return {
     maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 0,
-    highWaterRatio: config.highWaterRatio ?? 0.7,
-    targetRatio: config.targetRatio ?? 0.5,
-    hotRatio: config.hotRatio ?? 0.375,
-    hotMinMessages: Math.max(1, Math.round(config.hotMinMessages ?? 4)),
-    shakeMinToolRatio: config.shakeMinToolRatio ?? 0.1,
-    shakeBatchRatio: config.shakeBatchRatio ?? 0.25,
-    minRegionTokens: Math.max(0, config.minRegionTokens ?? 200),
-    compactTargetRatio,
-    compactMinCoveredRatio: config.compactMinCoveredRatio ?? 0.25,
-    compactMaxOutputTokens: Math.max(1, Math.round(config.compactMaxOutputTokens ?? 2_500)),
+    compactModel: config.compactModel?.trim() || undefined,
+    highWaterRatio: config.highWaterRatio ?? CHAT_DEFAULTS.highWaterRatio,
+    targetRatio: config.targetRatio ?? CHAT_DEFAULTS.targetRatio,
+    hotRatio: config.hotRatio ?? CHAT_DEFAULTS.hotRatio,
+    hotMinMessages: Math.max(1, Math.round(config.hotMinMessages ?? CHAT_DEFAULTS.hotMinMessages)),
+    shakeMinToolRatio: config.shakeMinToolRatio ?? CHAT_DEFAULTS.shakeMinToolRatio,
+    shakeBatchRatio: config.shakeBatchRatio ?? CHAT_DEFAULTS.shakeBatchRatio,
+    minRegionTokens: Math.max(0, config.minRegionTokens ?? CHAT_DEFAULTS.minRegionTokens),
+    compactTargetRatio: config.compactTargetRatio ?? CHAT_DEFAULTS.compactTargetRatio,
+    compactMinCoveredRatio: config.compactMinCoveredRatio ?? CHAT_DEFAULTS.compactMinCoveredRatio,
+    compactMaxOutputTokens: Math.max(1, Math.round(config.compactMaxOutputTokens ?? CHAT_DEFAULTS.compactMaxOutputTokens)),
     fallbackTokensPerChar: config.fallbackTokensPerChar ?? FALLBACK_TOKENS_PER_CHAR,
     tokensPerCharMin: config.tokensPerCharMin ?? 0.1,
     tokensPerCharMax: config.tokensPerCharMax ?? 1.5,
@@ -1032,6 +1064,7 @@ export class ChatContextInstance implements ContextEngineInstance {
   private readonly logger?: Logger;
   private readonly domain?: InstanceDomain;
   private readonly resources: ResourceCenter;
+  private readonly gateway: Gateway;
 
   private readonly maxTokens: number;
   private readonly highWater: number;
@@ -1051,12 +1084,15 @@ export class ChatContextInstance implements ContextEngineInstance {
   private over = false;
   private maintaining?: Promise<void>;
   private abort?: AbortController;
+  private compactTurnId?: string;
+  private compactCount = 0;
 
-  constructor(config: Partial<ChatContextConfig>, context: ExtensionContext) {
+  constructor(config: Partial<ChatContextConfig>, host: ExtensionHost) {
     this.config = normalizeConfig(config);
-    this.logger = context.logger;
-    this.domain = context.domain;
-    this.resources = context.resources;
+    this.logger = host.logger;
+    this.domain = host.domain;
+    this.resources = host.resources;
+    this.gateway = host.gateway;
     this.maxTokens = this.config.maxTokens;
     this.highWater = this.maxTokens * this.config.highWaterRatio;
     this.target = this.maxTokens * this.config.targetRatio;
@@ -1122,7 +1158,11 @@ export class ChatContextInstance implements ContextEngineInstance {
     this.agent = agent;
     const unsubscribe = agent.channel.subscribe("agent", (event) => {
       if (event.type === "turn.step") this.observe(event.usage);
-      else if (event.type === "turn.done") this.finishTurn();
+      else if (event.type === "turn.done") {
+        this.compactTurnId = undefined;
+        this.compactCount = 0;
+        this.finishTurn();
+      }
     });
     return () => {
       this.abort?.abort();
@@ -1133,6 +1173,7 @@ export class ChatContextInstance implements ContextEngineInstance {
 
   async prepareEntries(entries: readonly AgentEntry[], request?: ContextRequest): Promise<readonly AgentEntry[]> {
     if (this.maxTokens === 0) return entries;
+    this.beginTurn(request?.turnId);
 
     let current = entries;
     if (this.maintaining !== undefined) {
@@ -1143,7 +1184,7 @@ export class ChatContextInstance implements ContextEngineInstance {
     const signal = request?.signal ?? new AbortController().signal;
     let plan = this.plan(current);
     if (plan.over && (plan.shake !== undefined || plan.compact !== undefined) && !signal.aborted) {
-      await this.maintain(current, signal);
+      await this.maintain(current, signal, request?.turnId);
       current = await this.read();
       plan = this.plan(current);
     }
@@ -1265,23 +1306,32 @@ export class ChatContextInstance implements ContextEngineInstance {
     return this.agent === undefined ? [] : this.agent.storage.read();
   }
 
+  private beginTurn(turnId: string | undefined): void {
+    if (turnId === undefined || turnId === this.compactTurnId) return;
+    this.compactTurnId = turnId;
+    this.compactCount = 0;
+  }
+
   private finishTurn(): void {
     if (!this.over || this.maintaining !== undefined || this.agent === undefined) return;
     const abort = new AbortController();
     this.abort = abort;
     void this.read()
-      .then((entries) => this.maintain(entries, abort.signal))
+      .then((entries) => this.maintain(entries, abort.signal, undefined))
+      .catch((error) => {
+        this.logger?.error(`chat context maintenance failed: ${error instanceof Error ? error.message : String(error)}`);
+      })
       .finally(() => {
         if (this.abort === abort) this.abort = undefined;
       });
   }
 
-  private async maintain(entries: readonly AgentEntry[], signal: AbortSignal): Promise<void> {
+  private async maintain(entries: readonly AgentEntry[], signal: AbortSignal, turnId: string | undefined): Promise<void> {
     if (this.maintaining !== undefined) {
       await this.maintaining;
       return;
     }
-    const task = this.runMaintenance(entries, signal);
+    const task = this.runMaintenance(entries, signal, turnId);
     this.maintaining = task;
     try {
       await task;
@@ -1290,24 +1340,26 @@ export class ChatContextInstance implements ContextEngineInstance {
     }
   }
 
-  private async runMaintenance(entries: readonly AgentEntry[], signal: AbortSignal): Promise<void> {
+  private async runMaintenance(entries: readonly AgentEntry[], signal: AbortSignal, turnId: string | undefined): Promise<void> {
     let current = entries;
     for (let pass = 0; pass < 2; pass += 1) {
       if (signal.aborted) return;
-      const plan = this.plan(current);
+      let plan = this.plan(current);
       if (!plan.over) return;
       if (plan.shake !== undefined) {
         const artifact = await this.applyShake(current, plan.shake, signal);
         if (artifact !== undefined) {
           current = await this.read();
-          continue;
+          plan = this.plan(current);
+          if (!plan.over) return;
         }
       }
       if (plan.compact !== undefined) {
+        if (this.compactCount > 0 && plan.projection.messageTokens < this.maxTokens * 0.95) return;
         const result = await this.applyCompact(current, plan.compact, signal);
         if (result !== undefined) {
-          current = await this.read();
-          continue;
+          if (turnId !== undefined && turnId === this.compactTurnId) this.compactCount += 1;
+          return;
         }
       }
       return;
@@ -1353,6 +1405,22 @@ export class ChatContextInstance implements ContextEngineInstance {
     return artifact;
   }
 
+  private compactModel(agent: Agent): LanguageModelV4 {
+    const configured = this.config.compactModel;
+    if (configured === undefined) return agent.getModel();
+
+    const gateway = this.gateway;
+    let base: LanguageModelV4;
+    if (gateway.groups().includes(configured)) {
+      const candidate = gateway.group(configured).candidates()[0];
+      if (candidate === undefined) throw new Error(`chat compact model group "${configured}" has no available candidates`);
+      base = candidate.model;
+    } else {
+      base = gateway.languageModel(configured);
+    }
+    return gateway.languageModel(`${base.provider}:${base.modelId}:none`);
+  }
+
   private async applyCompact(
     entries: readonly AgentEntry[],
     plan: ChatCompactPlan,
@@ -1389,28 +1457,45 @@ export class ChatContextInstance implements ContextEngineInstance {
     const previous = lastChatCompact(entries)?.data.summary;
     const prompt = buildCompactPrompt({ previous, shakes, records, targetTokens: this.compactTarget });
     const system = CHAT_COMPACT_INSTRUCTIONS.replace("{{target}}", String(Math.max(1, Math.round(this.compactTarget))));
-    const model = agent.getModel();
+    const model = this.compactModel(agent);
     let summary: string | undefined;
+    let lastError: unknown;
     const attempts: IshikiChatCompactAttempt[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (signal.aborted) return undefined;
-      const generated = await generateText({
-        model,
-        system,
-        prompt,
-        maxOutputTokens: this.config.compactMaxOutputTokens,
-        abortSignal: signal,
-      });
+      let generated: Awaited<ReturnType<typeof generateText>>;
+      try {
+        generated = await generateText({
+          model,
+          system,
+          prompt,
+          reasoning: "none",
+          maxOutputTokens: this.config.compactMaxOutputTokens,
+          abortSignal: signal,
+        });
+      } catch (error) {
+        if (signal.aborted) return undefined;
+        lastError = error;
+        if (attempt === 1) break;
+        continue;
+      }
       attempts.push({
         attempt: attempt + 1,
         provider: model.provider,
         modelId: model.modelId,
         usage: generated.usage,
       });
-      summary = generated.text.trim();
-      if (summary.length > 0) break;
+      const candidate = generated.text.trim();
+      if (isCompactSummary(candidate)) {
+        summary = candidate;
+        break;
+      }
     }
-    if (summary === undefined || summary.length === 0 || signal.aborted) return undefined;
+    if (signal.aborted) return undefined;
+    if (summary === undefined) {
+      const detail = lastError instanceof Error ? lastError.message : lastError === undefined ? "missing required sections" : String(lastError);
+      throw new Error(`chat compact failed after retry: ${detail}`, lastError === undefined ? undefined : { cause: lastError });
+    }
 
     const name = `compact-${randomUUID()}.log`;
     const artifact = `artifact://compact/${name}`;
@@ -1467,7 +1552,7 @@ export class ChatContextEngine extends ContextEngine<"chat"> {
     registerChatCommands(ctx);
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "chat">>, context: ExtensionContext): ContextEngineInstance {
-    return new ChatContextInstance(config.chat ?? {}, context);
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<ContextEngines, "chat">>): ContextEngineInstance {
+    return new ChatContextInstance(config.chat ?? {}, host);
   }
 }

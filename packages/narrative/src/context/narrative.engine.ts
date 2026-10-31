@@ -13,7 +13,7 @@ import {
   type ContextEngines,
   type ContextRequest,
   type EngineConfig,
-  type ExtensionContext,
+  type ExtensionHost,
   type FileData,
   type InstanceDomain,
   type ToolResultPart,
@@ -264,7 +264,7 @@ export class NarrativeContextInstance implements ContextEngineInstance {
   /** Messages the latest input listed as new; everything else in the request is replay. */
   private presented?: WeakSet<AgentMessage>;
 
-  constructor(config: Partial<NarrativeContextConfig>, context: ExtensionContext) {
+  constructor(config: Partial<NarrativeContextConfig>, host: ExtensionHost) {
     const maxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS;
     const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
     const recentEntries =
@@ -273,8 +273,8 @@ export class NarrativeContextInstance implements ContextEngineInstance {
         : DEFAULT_RECENT_ENTRIES;
     this.config = { maxTokens, refillRatio, recentEntries };
 
-    this.logger = context.logger;
-    this.domain = context.domain;
+    this.logger = host.logger;
+    this.domain = host.domain;
     this.recentEntries = recentEntries;
 
     this.ceiling = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens / TOKENS_PER_CHAR : 0;
@@ -538,7 +538,7 @@ export class NarrativeContextEngine extends ContextEngine<"narrative"> {
     super(ctx, "narrative");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "narrative">>, context: ExtensionContext): ContextEngineInstance {
-    return new NarrativeContextInstance(config.narrative ?? {}, context);
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<ContextEngines, "narrative">>): ContextEngineInstance {
+    return new NarrativeContextInstance(config.narrative ?? {}, host);
   }
 }

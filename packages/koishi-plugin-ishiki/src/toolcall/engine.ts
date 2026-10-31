@@ -3,6 +3,7 @@ import { wrapLanguageModel } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
 import Schema from "schemastery";
 
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
 import { listServices, registerService } from "../registry.js";
 
@@ -47,5 +48,5 @@ export abstract class ToolcallEngine<K extends keyof ToolcallEngines = keyof Too
     registerService(ctx, "toolcall", String(name), this);
   }
 
-  public abstract [Service.invoke](config: EngineConfig<Pick<ToolcallEngines, K>>): ToolcallEngineInstance;
+  public abstract [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<ToolcallEngines, K>>): ToolcallEngineInstance;
 }

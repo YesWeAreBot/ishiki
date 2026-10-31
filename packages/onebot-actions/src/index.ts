@@ -1,5 +1,5 @@
 import { Logger, Schema, Service, type Context } from "koishi";
-import { Extension, type ExtensionContext } from "koishi-plugin-ishiki";
+import { Extension, type ExtensionHost } from "koishi-plugin-ishiki";
 
 import type { Backend, Mode } from "./catalog/types.js";
 import { MediaPublisher } from "./media.js";
@@ -47,24 +47,24 @@ class OneBotExtension extends Extension<OneBotExtensionConfig> {
     this.logger.level = config.logLevel;
   }
 
-  public [Service.invoke](config: OneBotExtensionConfig, context: ExtensionContext) {
+  public [Service.invoke](host: ExtensionHost, config: OneBotExtensionConfig) {
     const backend = config.backend ?? this.defaultBackend;
     const mode = config.mode ?? this.defaultMode;
-    const publisher = this.publisher(context);
+    const publisher = this.publisher(host);
     const options = {
-      ctx: context.fiber,
-      domain: context.domain,
+      ctx: host.fiber,
+      domain: host.domain,
       backend,
       mode,
       deny: config.denyActions,
-      resources: context.resources,
+      resources: host.resources,
       publisher,
       maxInlineBytes: config.maxInlineBytes,
       baseUrl: config.resourceBaseUrl.length > 0 ? config.resourceBaseUrl : undefined,
-      logger: context.logger,
+      logger: host.logger,
     };
 
-    const dispose = context.resources.attach(new CatalogScheme(backend));
+    const dispose = host.resources.attach(new CatalogScheme(backend));
     return {
       name: "ishiki.onebot-actions",
       extendTools: async () => createTools(options),
@@ -76,13 +76,13 @@ class OneBotExtension extends Extension<OneBotExtensionConfig> {
   }
 
   /** 发布器挂在 profile fiber 上：profile 注销时它与 HTTP 路由一起失效。 */
-  private publisher(context: ExtensionContext): MediaPublisher {
-    const existing = this.publishers.get(context.root);
+  private publisher(host: ExtensionHost): MediaPublisher {
+    const existing = this.publishers.get(host.root);
     if (existing !== undefined) return existing;
     const publisher = new MediaPublisher();
-    this.publishers.set(context.root, publisher);
-    context.fiber.on("dispose", () => {
-      this.publishers.delete(context.root);
+    this.publishers.set(host.root, publisher);
+    host.fiber.on("dispose", () => {
+      this.publishers.delete(host.root);
     });
     return publisher;
   }

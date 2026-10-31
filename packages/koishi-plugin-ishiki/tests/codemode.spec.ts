@@ -149,7 +149,9 @@ async function probe(options: {
 
 function toolTexts(messages: AgentMessage[]): string[] {
   return messages.flatMap((message) =>
-    message.role === "tool" ? message.content.flatMap((part) => (part.output.type === "text" ? [part.output.value] : [])) : [],
+    message.role === "tool"
+      ? message.content.flatMap((part) => (part.output.type === "text" || part.output.type === "error-text" ? [part.output.value] : []))
+      : [],
   );
 }
 
@@ -315,7 +317,7 @@ describe("codemode discovery", () => {
     expect(outputs[0]?.type).toBe("error-text");
     expect(JSON.stringify(outputs[0])).toContain("@options only supports");
     expect(outputs[1]?.type).toBe("text");
-    expect(toolTexts(messages)[0]).toContain("=== RESULT ===\n2");
+    expect(toolTexts(messages)[1]).toContain("=== RESULT ===\n2");
   }, 20000);
 });
 

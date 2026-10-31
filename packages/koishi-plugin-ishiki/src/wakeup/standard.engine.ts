@@ -2,9 +2,9 @@ import type { Agent } from "@yesimagent/core";
 import { Service, type Context } from "koishi";
 import Schema from "schemastery";
 
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
-import type { IshikiMessageCreated } from "../types.js";
+import type { IshikiMessageCreated } from "../types/messages.js";
 import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
 
 const DEFAULT_WAKEUP: StandardWakeupConfig = { direct: true, atSelf: true, quoteSelf: true, keywords: [] };
@@ -60,7 +60,7 @@ export class StandardWakeupEngine extends WakeupEngine<"standard"> {
     super(ctx, "standard");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "standard">>, _context: ExtensionContext): WakeupEngineInstance {
+  public [Service.invoke](_host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, "standard">>): WakeupEngineInstance {
     return new StandardWakeupInstance(config.standard ?? {});
   }
 }

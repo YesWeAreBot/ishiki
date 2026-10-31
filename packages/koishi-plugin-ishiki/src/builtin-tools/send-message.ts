@@ -24,7 +24,7 @@ export namespace SendMessageTool {
     continue?: boolean;
     target?: { sid: string; channelId: string };
   }
-  export type Output = { ok: true; ids: string[] } | { ok: false; error: { name: string; message: string }; sent: string[]; failedAt: number };
+  export type Output = { ok: true; ids: string[] } | { ok: false; error: { name: string; code: string; message: string }; sent: string[]; failedAt: number };
 }
 
 /**
@@ -124,29 +124,88 @@ export function createSendMessage(options: SendMessageTool.Options): Tool<SendMe
     execute: async (input) => {
       const ids: string[] = [];
       const allDropped: string[] = [];
-      for (const message of input.messages) {
+      let failure: Extract<SendMessageTool.Output, { ok: false }> | undefined;
+      for (const [index, message] of input.messages.entries()) {
+        let content = message;
+        let media: MediaStats | undefined;
         try {
-          const { content, dropped } = await resolveOutboundMedia(message, options.resources);
+          const resolved = await resolveOutboundMedia(message, options.resources);
+          content = resolved.content;
+          const dropped = resolved.dropped;
           allDropped.push(...dropped);
+          media = describeMedia(content);
           const fragment = input.mode === "element" ? h.parse(content) : h.text(content);
           const sent = await sendToChannel(ctx, domain, input.target, fragment);
           ids.push(...sent);
           await sleep(calculateTypingDelay(message, typing));
         } catch (error) {
-          logger.warn("Failed to send message: %o", error);
+          const safe = safeError(error);
+          const stats = media ?? { count: 0, types: [], bytes: 0 };
+          logger.warn(
+            "send_message failed: bubble=%d/%d mediaCount=%d mediaTypes=%s mediaBytes=%d dropped=%d error=%s",
+            index + 1,
+            input.messages.length,
+            stats.count,
+            stats.types.join(",") || "none",
+            stats.bytes,
+            allDropped.length,
+            safe.name,
+          );
+          failure ??= { ok: false, error: safe, sent: ids, failedAt: index };
           if (input.continue === true) continue;
-          return {
-            ok: false,
-            error: { name: error instanceof Error ? error.name : "Error", message: error instanceof Error ? error.message : String(error) },
-            sent: ids,
-            failedAt: ids.length,
-          };
+          break;
         }
       }
+      if (failure !== undefined) return { ...failure, sent: ids };
       if (allDropped.length > 0) ids.push(`[dropped media: ${allDropped.join("; ")}]`);
       return { ok: true, ids };
     },
+    toModelOutput: ({ output }) => ({ type: output.ok ? ("json" as const) : ("error-json" as const), value: output }),
   });
+}
+
+interface MediaStats {
+  count: number;
+  types: string[];
+  bytes: number;
+}
+
+function describeMedia(content: string): MediaStats {
+  const types = new Set<string>();
+  let count = 0;
+  let bytes = 0;
+  const visit = (element: h) => {
+    const src = element.attrs?.src;
+    if (typeof src === "string") {
+      count += 1;
+      const data = /^data:([^;,]+)(;base64)?,([\s\S]*)$/.exec(src);
+      if (data !== null) {
+        const mediaType = data[1]!;
+        types.add(mediaType);
+        if (data[2] !== undefined) {
+          const encoded = data[3]!;
+          const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+          bytes += Math.floor((encoded.length * 3) / 4) - padding;
+        }
+      } else {
+        types.add(element.type === "img" ? "image/unknown" : `${element.type}/unknown`);
+      }
+    }
+    for (const child of element.children) if (typeof child === "object") visit(child);
+  };
+  for (const element of h.parse(content)) visit(element);
+  return { count, types: [...types].sort(), bytes };
+}
+
+function safeError(error: unknown): { name: string; code: string; message: string } {
+  const name = error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(error.name) ? error.name : "Error";
+  let code = "send_failed";
+  if (error instanceof ResourceError) code = error.code;
+  else if (error !== null && typeof error === "object" && "code" in error) {
+    const value = error.code;
+    if (typeof value === "string" && /^[a-z][a-z0-9_.-]{0,63}$/.test(value)) code = value;
+  }
+  return { name, code, message: "send_message failed" };
 }
 
 async function sendToChannel(ctx: Context, domain: InstanceDomain, target: SendMessageTool.Input["target"], fragment: h.Fragment): Promise<string[]> {
