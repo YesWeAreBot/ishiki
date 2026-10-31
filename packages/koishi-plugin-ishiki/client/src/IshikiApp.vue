@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, type Component } from "vue";
+import { computed, defineAsyncComponent, watch, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import brandIconDark from "./assets/ishiki-icon-dark.svg";
@@ -8,6 +8,7 @@ import brandLogoDark from "./assets/ishiki-logo-dark.svg";
 import brandLogoLight from "./assets/ishiki-logo.svg";
 import ToastHost from "./components/ToastHost.vue";
 import { useIshikiTheme } from "./lib/theme";
+import { store } from "./store";
 
 defineOptions({ name: "IshikiApp" });
 
@@ -22,6 +23,7 @@ const pages: PageEntry[] = [
   { id: "models", path: "/ishiki/models", label: "模型目录", component: defineAsyncComponent(() => import("./pages/ModelsPage.vue")) },
   { id: "profiles", path: "/ishiki/profiles", label: "人格配置", component: defineAsyncComponent(() => import("./pages/ProfilesPage.vue")) },
   { id: "runtimes", path: "/ishiki/runtimes", label: "运行实例", component: defineAsyncComponent(() => import("./pages/RuntimesPage.vue")) },
+  { id: "jev", path: "/ishiki/jev", label: "唤醒判定", component: defineAsyncComponent(() => import("./pages/JevPage.vue")) },
   { id: "sessions", path: "/ishiki/sessions", label: "会话日志", component: defineAsyncComponent(() => import("./pages/SessionsPage.vue")) },
   { id: "usage", path: "/ishiki/usage", label: "用量统计", component: defineAsyncComponent(() => import("./pages/UsagePage.vue")) },
   { id: "cache", path: "/ishiki/cache", label: "缓存状态", component: defineAsyncComponent(() => import("./pages/CachePage.vue")) },
@@ -29,16 +31,21 @@ const pages: PageEntry[] = [
 
 const groups = [
   { label: "运行", ids: ["models", "profiles", "runtimes", "sessions"] },
-  { label: "观测", ids: ["usage", "cache"] },
+  { label: "观测", ids: ["jev", "usage", "cache"] },
 ] as const;
 
-const navGroups = groups.map((group) => ({
-  label: group.label,
-  pages: group.ids.flatMap((id) => {
-    const page = pages.find((entry) => entry.id === id);
-    return page === undefined ? [] : [page];
-  }),
-}));
+const profileSnapshotReady = computed(() => store.engines !== undefined);
+const jevEnabled = computed(() => profileSnapshotReady.value && store.profiles.some((profile) => profile.state === "active" && profile.wakeupEngine === "jev"));
+const navGroups = computed(() =>
+  groups.map((group) => ({
+    label: group.label,
+    pages: group.ids.flatMap((id) => {
+      if (id === "jev" && !jevEnabled.value) return [];
+      const page = pages.find((entry) => entry.id === id);
+      return page === undefined ? [] : [page];
+    }),
+  })),
+);
 
 const route = useRoute();
 const router = useRouter();
@@ -54,7 +61,12 @@ const segments = computed<string[]>(() => {
 
 const activeId = computed(() => {
   const first = segments.value[0];
+  if (first === "jev" && !jevEnabled.value) return "models";
   return pages.some((page) => page.id === first) ? first : "models";
+});
+
+watch([profileSnapshotReady, jevEnabled, segments], () => {
+  if (profileSnapshotReady.value && !jevEnabled.value && segments.value[0] === "jev") void router.push("/ishiki/models");
 });
 
 const current = computed(() => pages.find((page) => page.id === activeId.value) ?? pages[0]);

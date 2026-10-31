@@ -116,6 +116,7 @@ export interface ProfileSummary {
   id: string;
   model: string;
   mode: "channel" | "cross";
+  wakeupEngine: string;
   channels: string[];
   state: ProfileState;
   runtimeCount: number;
@@ -411,4 +412,103 @@ export interface ExtensionsDirectory {
     typing: SchemaNode;
     attachment: SchemaNode;
   };
+}
+
+/* JEV */
+
+export type JevMode = "reply" | "join" | "wait";
+
+/** 一次 JEV 判定的语义证据：relation 是五选一的概率分布，其余是各自独立的布尔概率。 */
+export interface JevEvidenceView {
+  relation: Record<string, number>;
+  ready: number;
+  receptive: number;
+  worthwhile: number;
+  social: number;
+  withdrawn: number;
+  closed: number;
+  interested: number;
+}
+
+/** 参与判定的一条待判消息，保留原始作者与内容，便于对照。 */
+export interface JevMessageView {
+  author: string;
+  text: string;
+  at: number;
+  self: boolean;
+  mentionsBot: boolean;
+}
+
+/** 判定链上的一条规则；ok=false 表示就是它拦下了这次发言。 */
+export interface JevStepView {
+  key: string;
+  ok: boolean;
+  stop?: boolean;
+  value?: number;
+  line?: number;
+}
+
+/** 判定时的关键配置，用来解释门槛从哪来。 */
+export interface JevConfigView {
+  style: string;
+  threshold: number;
+  addressedThreshold: number;
+  cooldownMs: number;
+  globalCooldownMs: number;
+  minIntervalMs: number;
+  maxParticipation: number;
+  maxConsecutiveReplies: number;
+  prefilter: string;
+}
+
+/** 一行模型可见的消息，用于展示判定时到底喂了什么。 */
+export interface JevLineView {
+  author: string;
+  text: string;
+  isBot: boolean;
+  mentionsBot: boolean;
+  secondsAgo: number;
+}
+
+/** 一次判定时交给模型的上下文快照。 */
+export interface JevContextView {
+  scene: string;
+  secondsSinceBotLastSpoke?: number;
+  focus?: JevLineView;
+  pending: JevLineView[];
+  recent: JevLineView[];
+  focusAuthor: string[];
+}
+
+/** 一次判定记录：模型证据与本地规则的结论放在一起，便于对照门槛看为什么没说话。 */
+export interface JevDecisionView {
+  id: string;
+  at: number;
+  runtimeId: string;
+  channelId: string;
+  mode: JevMode;
+  reason: string;
+  relation: string;
+  probability: number;
+  threshold: number;
+  focused: string;
+  pendingCount: number;
+  durationMs: number;
+  evidence?: JevEvidenceView;
+  /** 本批实际待判的消息（有上限，避免观测占用过多内存）。 */
+  messages?: JevMessageView[];
+  /** 逐条规则链，按执行顺序。 */
+  steps?: JevStepView[];
+  /** 判定当时的档位与关键限制。 */
+  config?: JevConfigView;
+  /** 模型实际拿到的上下文（有上限）。 */
+  context?: JevContextView;
+  /** 未调用模型、由本地预筛直接跳过时为 true。 */
+  prefiltered?: boolean;
+  error?: string;
+}
+
+export interface JevSnapshot {
+  decisions: JevDecisionView[];
+  collectedAt: number;
 }

@@ -100,7 +100,6 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
   public readonly dataPath: string;
   public readonly logger: Logger;
   public readonly gateway: Gateway;
-
   private readonly handler = new StandardHandler();
   private readonly routes = new Map<string, Route[]>();
   private readonly active = new Set<Route>();
@@ -136,8 +135,8 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
     ctx.plugin(ChatContextEngine);
 
     ctx.plugin(StandardWakeupEngine);
-    ctx.plugin(JevWakeupEngine);
     ctx.plugin(WillingnessWakeupEngine);
+    ctx.plugin(JevWakeupEngine);
 
     ctx.plugin(NativeToolcallEngine);
     ctx.plugin(HermesToolcallEngine);
