@@ -263,7 +263,7 @@ function positiveInteger(value: unknown): number | undefined {
   <BaseModal
     :open="open"
     :title="editing ? '编辑模型组' : '新建模型组'"
-    desc="模型组决定候选顺序与熔断策略；Profile 的 model 可以直接填写组名。"
+    desc="模型组决定候选顺序与熔断策略；人格配置的模型字段可以直接填写组名。"
     width="min(720px, 100%)"
     @close="requestClose"
   >
@@ -277,7 +277,7 @@ function positiveInteger(value: unknown): number | undefined {
 
     <section class="form-section">
       <div class="form-grid one">
-        <FormField label="组名" required :hint="lockedName === true ? '被 Profile 引用，组名已锁定。' : '引用时不带冒号，例如 chat、vision。'">
+        <FormField label="组名" required :hint="lockedName === true ? '被人格配置引用，组名已锁定。' : '引用时不带冒号，例如 chat、vision。'">
           <input v-model="nameDraft" class="input input-mono" :disabled="lockedName === true" placeholder="chat" autocomplete="off" />
         </FormField>
       </div>
@@ -288,7 +288,7 @@ function positiveInteger(value: unknown): number | undefined {
 
       <div v-if="lockedName === true" class="notice notice-warning" style="margin-top: 12px">
         <Icon name="warningCircle" :size="15" />
-        <span>该组被 Profile 引用，组名不能修改；候选与熔断配置可以调整。</span>
+        <span>该组被人格配置引用，组名不能修改；候选与熔断配置可以调整。</span>
       </div>
     </section>
 
@@ -329,7 +329,7 @@ function positiveInteger(value: unknown): number | undefined {
 
       <div v-if="members.length === 0" class="notice">
         <Icon name="info" :size="15" />
-        <span>还没有候选。模型组至少需要一个语言模型才能通过网关构建。</span>
+        <span>还没有候选。模型组至少需要一个语言模型才能通过模型网关构建。</span>
       </div>
       <div v-else class="stack-sm">
         <div v-for="(member, index) in members" :key="member" class="member-row" style="padding: 8px 10px">

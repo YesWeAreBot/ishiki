@@ -4,7 +4,7 @@ import { computed } from "vue";
 /**
  * RAW 模式编辑器：透明文字的 textarea 叠在按行渲染的高亮层上。textarea 关闭软换行
  * （wrap="off"），高亮层逐行 white-space: pre，两侧渲染结果完全一致；宽度由最长行
- * 决定，容器横向滚动。支持 Tab 缩进、Shift+Tab 反缩进、回车自动对齐和错误行标记。
+ * 决定，容器横向滚动。支持 Tab 缩进、Shift+Tab 反缩进、回车自动缩进和错误行标记。
  */
 const props = withDefaults(
   defineProps<{
@@ -14,7 +14,7 @@ const props = withDefaults(
     ariaLabel?: string;
     minHeight?: number;
   }>(),
-  { ariaLabel: "RAW 配置编辑器", minHeight: 320 },
+  { ariaLabel: "原始配置编辑器", minHeight: 320 },
 );
 
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
@@ -135,13 +135,13 @@ v-html="line"
   overflow: auto;
   max-height: 60vh;
   border: 1px solid var(--line-strong);
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 
 .raw-editor:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .raw-inner {

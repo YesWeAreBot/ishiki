@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import { THINK_LEVELS, findDeclaredModel, modelOptions, parseReference } from "../lib/models";
+import { THINK_LEVEL_LABELS, THINK_LEVELS, findDeclaredModel, modelOptions, parseReference } from "../lib/models";
 import { store } from "../store";
 
 defineOptions({ name: "ModelReferenceSelect" });
@@ -90,7 +90,7 @@ function withLevel(target: string, value: string): string {
       @change="selectLevel(($event.target as HTMLSelectElement).value)"
     >
       <option value="">默认思考等级</option>
-      <option v-for="item in levels" :key="item" :value="item">{{ item }}</option>
+      <option v-for="item in levels" :key="item" :value="item">{{ THINK_LEVEL_LABELS[item as keyof typeof THINK_LEVEL_LABELS] ?? item }}</option>
     </select>
   </div>
 </template>

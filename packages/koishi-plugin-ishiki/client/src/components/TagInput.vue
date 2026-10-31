@@ -4,7 +4,7 @@ import { ref } from "vue";
 import Icon from "./Icon.vue";
 
 const props = withDefaults(defineProps<{ modelValue: string[]; placeholder?: string; ariaLabel?: string }>(), {
-  placeholder: "输入后按 Enter",
+  placeholder: "输入后按回车键",
   ariaLabel: "添加条目",
 });
 const emit = defineEmits<{ "update:modelValue": [value: string[]] }>();

@@ -54,6 +54,12 @@ const ALL_STEPS: StepDef[] = [
 
 const NEW_PROVIDER = "__new";
 
+const ENGINE_LABELS = {
+  context: "上下文引擎",
+  wakeup: "唤醒引擎",
+  toolcall: "工具调用引擎",
+} as const;
+
 const draft = ref<ProfileDraft>(blankProfileDraft());
 const stepIndex = ref(0);
 const touched = ref(false);
@@ -155,9 +161,9 @@ const providerErrors = computed(() => {
   const errors: Record<string, string> = {};
   if (modelSource.value !== "new") return errors;
   if (providerChoice.value === NEW_PROVIDER) {
-    if (newProviderId.value.trim().length === 0) errors.providerId = "新建供应商需要填写供应商 ID。";
+    if (newProviderId.value.trim().length === 0) errors.providerId = "新建供应商需要填写供应商标识。";
     else if (!/^[a-z0-9][a-z0-9._-]*$/i.test(newProviderId.value.trim()))
-      errors.providerId = "供应商 ID 只能包含字母、数字、点、下划线与连字符，并以字母或数字开头。";
+      errors.providerId = "供应商标识只能包含字母、数字、点、下划线与连字符，并以字母或数字开头。";
     else if (store.providers.some((entry) => entry.id === newProviderId.value.trim())) errors.providerId = `供应商 ${newProviderId.value.trim()} 已存在。`;
     if (providerDraft.apiKey.trim().length === 0) errors.apiKey = "新建供应商必须填写 API 密钥，支持 ${环境变量} 引用。";
   }
@@ -326,7 +332,7 @@ async function finish(): Promise<void> {
       props.profile === undefined
         ? await call<ProfileView>("ishiki/profiles/create", draft.value.id.trim(), { config, persona })
         : await call<ProfileView>("ishiki/profiles/save", draft.value.id.trim(), { config, persona }, props.profile.revision);
-    toast("success", props.profile === undefined ? "Profile 已创建" : "Profile 已保存", `${view.id} 完成，应用后才会生效。`);
+    toast("success", props.profile === undefined ? "人格配置已创建" : "人格配置已保存", `${view.id} 完成，应用后才会生效。`);
     submitting.value = false;
     emit("created", view);
   } catch (error) {
@@ -355,7 +361,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
       value:
         channels.length === 0 ? "不认领任何频道" : channels.map((row) => `${row.account.trim()}（${parsePatterns(row.patterns).length} 个模式）`).join("、"),
     },
-    { label: "引擎", value: `context ${draft.value.engines.context} · wakeup ${draft.value.engines.wakeup} · toolcall ${draft.value.engines.toolcall}` },
+    { label: "引擎", value: `上下文 ${draft.value.engines.context} · 唤醒 ${draft.value.engines.wakeup} · 工具调用 ${draft.value.engines.toolcall}` },
     { label: "人格", value: draft.value.persona.trim().length > 0 ? `${draft.value.persona.trim().length} 字` : "留空，稍后在编辑器里写" },
   ];
 }
@@ -365,7 +371,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
   <BaseModal
     :open="open"
     :title="profile === undefined ? '配置向导' : `配置向导 · ${profile.id}`"
-    desc="按步骤完成 Profile 的基础配置；所有内容只在最后一步统一写入。"
+    desc="按步骤完成人格配置；所有内容只在最后一步统一写入。"
     width="min(860px, 100%)"
     :closable="!submitting"
     :close-on-backdrop="!submitting"
@@ -391,7 +397,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
 
     <!-- 第 1 步：基础信息 -->
     <section v-if="step.key === 'basic'" class="stack-sm" style="margin-top: 14px">
-      <FormField label="Profile 标识" required :error="profileErrors.id" hint="作为目录名与引用名，创建后不可修改。">
+      <FormField label="人格配置标识" required :error="profileErrors.id" hint="作为目录名与引用名，创建后不可修改。">
         <input
           :value="draft.id"
           class="input input-mono"
@@ -509,7 +515,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
 
     <!-- 第 3 步：频道认领（跨频道模式跳过） -->
     <section v-else-if="step.key === 'channels'" class="stack-sm" style="margin-top: 14px">
-      <p class="field-hint">认领表决定 Profile 响应哪些频道。账号写成 platform:selfId；模式支持通配与 ! 排除，例如 *、group:*、!private:*。</p>
+      <p class="field-hint">认领表决定人格配置响应哪些频道。账号写成 platform:selfId；模式支持通配与 ! 排除，例如 *、group:*、!private:*。</p>
       <div v-for="(row, index) in draft.channels" :key="index" class="form-grid wizard-channel-row">
         <FormField label="账号" required>
           <input
@@ -557,22 +563,17 @@ function confirmSummary(): Array<{ label: string; value: string }> {
           rows="8"
           spellcheck="false"
           :disabled="submitting"
-          placeholder="用一段话描述这个 Profile 的性格、语气与行为边界。"
+          placeholder="用一段话描述这份人格配置的性格、语气与行为边界。"
           @input="patchDraft({ persona: ($event.target as HTMLTextAreaElement).value })"
         ></textarea>
       </FormField>
       <div class="form-grid three">
-        <FormField
-          v-for="(choices, kind) in engineDirectories"
-          :key="kind"
-          :label="kind === 'context' ? '上下文引擎' : kind === 'wakeup' ? '唤醒引擎' : '工具调用引擎'"
-          hint="决定该环节的处理方式。"
-        >
+        <FormField v-for="(choices, kind) in engineDirectories" :key="kind" :label="ENGINE_LABELS[kind]" hint="决定该环节的处理方式。">
           <select
             :value="draft.engines[kind]"
             class="select"
             :disabled="submitting"
-            :aria-label="`${kind} 引擎`"
+            :aria-label="ENGINE_LABELS[kind]"
             @change="patchDraft({ engines: { ...draft.engines, [kind]: ($event.target as HTMLSelectElement).value } })"
           >
             <option v-for="option in choices" :key="option.name" :value="option.name">
@@ -612,7 +613,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
       </button>
       <button v-else type="button" class="btn btn-primary" :disabled="submitting" @click="finish">
         <span v-if="submitting" class="spinner" aria-hidden="true"></span>
-        {{ submitting ? "写入中…" : profile === undefined ? "创建 Profile" : "保存 Profile" }}
+        {{ submitting ? "写入中…" : profile === undefined ? "创建人格配置" : "保存人格配置" }}
       </button>
     </template>
   </BaseModal>

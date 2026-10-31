@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 
 import { ApiError, call } from "../api";
 import BaseModal from "../components/BaseModal.vue";
+import CopyButton from "../components/CopyButton.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ExpandableText from "../components/ExpandableText.vue";
 import GroupEditor from "../components/GroupEditor.vue";
@@ -459,9 +460,9 @@ function asRecord(value: unknown): Record<string, unknown> {
 <template>
   <PageShell>
     <PageHeader
-      title="模型配置"
-      desc="编辑 models.yaml 的 providers 与 groups。所有表单由服务端 Schema 生成；保存会重建 gateway 目录，并校验 Profile 与模型组引用。"
-      eyebrow="运行 / 模型目录"
+      title="模型目录"
+      desc="维护模型供应商、模型声明与模型组。表单字段由服务端定义生成；保存时会重建模型网关目录，并检查人格配置和模型组的引用关系。"
+      eyebrow="配置 / 模型目录"
     >
       <template #actions>
         <button v-if="tab === 'models'" type="button" class="btn" @click="openNewProvider"><Icon name="plus" :size="15" /> 新增供应商</button>
@@ -488,13 +489,13 @@ function asRecord(value: unknown): Record<string, unknown> {
       >
       <span v-if="models !== undefined" class="sync-note">
         <Icon name="check" :size="13" /> 保存后由数据服务自动同步
-        <button type="button" class="link" style="border: 0; background: none; padding: 0" @click="openProfiles">去 Profile 验证</button>
+        <button type="button" class="link" style="border: 0; background: none; padding: 0" @click="openProfiles">查看人格配置</button>
       </span>
     </div>
 
     <div v-if="models === undefined" class="panel">
       <div class="panel-body">
-        <EmptyState title="模型配置尚未加载" desc="控制台数据服务还没有推送 models.yaml 的解析结果；收到推送后本页会自动显示内容。" icon="clock" />
+        <EmptyState title="模型目录尚未加载" desc="控制台数据服务还没有推送模型配置；收到配置后，本页会自动显示内容。" icon="clock" />
       </div>
     </div>
 
@@ -530,12 +531,7 @@ function asRecord(value: unknown): Record<string, unknown> {
           >
             <button type="button" class="btn btn-soft" @click="clearFilters">清除筛选</button>
           </EmptyState>
-          <EmptyState
-            v-else-if="allRows.length === 0"
-            title="还没有声明模型"
-            desc="models.yaml 的 providers 下没有任何模型；先添加一个模型，再让 Profile 引用它。"
-            icon="models"
-          >
+          <EmptyState v-else-if="allRows.length === 0" title="还没有声明模型" desc="当前还没有声明任何模型。先添加一个模型，再让人格配置引用它。" icon="models">
             <button type="button" class="btn btn-soft" @click="openNewModel()"><Icon name="plus" :size="14" /> 新增模型</button>
           </EmptyState>
 
@@ -552,7 +548,7 @@ function asRecord(value: unknown): Record<string, unknown> {
                     <span>{{ entry.provider.baseUrl ?? "默认端点" }}</span>
                     <span>{{ providerKeyLabel(entry.provider) }}</span>
                     <span>{{ entry.provider.models.length }} 个模型</span>
-                    <span v-if="Object.keys(entry.provider.headers).length > 0">{{ Object.keys(entry.provider.headers).length }} 个 header</span>
+                    <span v-if="Object.keys(entry.provider.headers).length > 0">{{ Object.keys(entry.provider.headers).length }} 个请求头</span>
                   </div>
                 </div>
                 <div class="provider-actions">
@@ -568,7 +564,7 @@ function asRecord(value: unknown): Record<string, unknown> {
                 </div>
               </header>
 
-              <div v-if="entry.rows.length === 0" class="field-hint">这个供应商还没有声明模型。</div>
+              <div v-if="entry.rows.length === 0" class="field-hint">该供应商尚未声明模型。</div>
               <div v-else class="card-grid">
                 <article v-for="row in entry.rows" :key="row.reference" class="model-card">
                   <div class="model-card-top">
@@ -596,13 +592,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 
                   <div class="model-foot">
                     <span v-if="row.model.contextWindow !== undefined"
-                      >上下文 <strong>{{ formatCompact(row.model.contextWindow) }}</strong></span
+                      >上下文窗口 <strong>{{ formatCompact(row.model.contextWindow) }}</strong></span
                     >
                     <span v-if="row.model.maxTokens !== undefined"
-                      >输出 <strong>{{ formatCompact(row.model.maxTokens) }}</strong></span
+                      >最大输出 <strong>{{ formatCompact(row.model.maxTokens) }}</strong></span
                     >
                     <span v-if="row.model.dimensions !== undefined"
-                      >维度 <strong>{{ formatNumber(row.model.dimensions) }}</strong></span
+                      >向量维度 <strong>{{ formatNumber(row.model.dimensions) }}</strong></span
                     >
                     <span v-if="row.model.contextWindow === undefined && row.model.maxTokens === undefined && row.model.dimensions === undefined" class="faint"
                       >没有额外声明</span
@@ -618,7 +614,7 @@ function asRecord(value: unknown): Record<string, unknown> {
           <EmptyState
             v-if="filteredGroups.length === 0 && query.trim().length > 0"
             title="没有匹配的模型组"
-            desc="模型组把多个语言模型编成候选列表；Profile 的 model 可以直接引用组名。"
+            desc="模型组把多个语言模型编排为候选列表；人格配置的模型字段可以直接引用组名。"
             icon="search"
           >
             <button type="button" class="btn btn-soft" @click="query = ''">清除搜索</button>
@@ -626,23 +622,23 @@ function asRecord(value: unknown): Record<string, unknown> {
           <EmptyState
             v-else-if="groups.length === 0"
             title="还没有模型组"
-            desc="模型组按故障转移或轮询把请求分给多个语言模型；被 Profile 引用后即可直接使用组名。"
+            desc="模型组按故障转移或轮询把请求分给多个语言模型；被配置引用后即可直接使用组名。"
             icon="profile"
           >
             <button type="button" class="btn btn-soft" @click="openNewGroup"><Icon name="plus" :size="14" /> 新建模型组</button>
           </EmptyState>
 
-          <div v-else class="card-grid" style="grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))">
+          <div v-else class="group-grid">
             <article v-for="group in filteredGroups" :key="group.name" class="group-card">
-              <div class="row">
-                <div class="flex-1">
-                  <div class="row" style="gap: 7px">
-                    <span class="model-name mono" style="font-size: 14px">{{ group.name }}</span>
+              <header class="group-card-head">
+                <div class="group-heading">
+                  <div class="group-name">
+                    <span class="mono">{{ group.name }}</span>
                     <span class="badge badge-info">{{ groupStrategyLabel(group.strategy) }}</span>
                   </div>
-                  <div class="field-hint" style="margin-top: 3px">{{ groupStrategyDescription(group.strategy) }}</div>
+                  <p class="group-description">{{ groupStrategyDescription(group.strategy) }}</p>
                 </div>
-                <div class="model-card-actions" style="opacity: 1">
+                <div class="model-card-actions group-actions">
                   <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="`编辑模型组 ${group.name}`" @click="openEditGroup(group.name)">
                     <Icon name="edit" :size="14" />
                   </button>
@@ -650,29 +646,28 @@ function asRecord(value: unknown): Record<string, unknown> {
                     <Icon name="trash" :size="14" />
                   </button>
                 </div>
-              </div>
+              </header>
 
-              <div class="group-members">
-                <div v-for="(member, index) in groupMembers(group)" :key="member.reference" class="member-row">
+              <ol class="group-members">
+                <li v-for="(member, index) in groupMembers(group)" :key="member.reference" class="member-row">
                   <span class="member-index">{{ index + 1 }}</span>
-                  <span class="flex-1 member-reference">
-                    {{ member.label }}
-                    <span v-if="member.level !== undefined" class="badge badge-outline">{{ levelLabel(member.level) }}</span>
-                    <ExpandableText :value="member.reference" mode="ends" mono :head="20" :tail="10" copy-label="候选引用" />
-                  </span>
-                </div>
-                <div v-if="group.models.length === 0" class="field-hint">还没有候选成员。</div>
-              </div>
+                  <span class="member-reference" :title="member.reference">{{ member.label }}</span>
+                  <span v-if="member.level !== undefined" class="badge badge-outline">{{ levelLabel(member.level) }}</span>
+                  <CopyButton :value="member.reference" label="候选引用" />
+                </li>
+                <li v-if="group.models.length === 0" class="group-empty">还没有候选成员。</li>
+              </ol>
 
-              <div class="row muted small" style="padding-top: 2px">
-                <Icon name="pulse" :size="13" />
-                <span v-if="group.circuitBreaker?.failureThreshold !== undefined || group.circuitBreaker?.cooldownSeconds !== undefined">
-                  熔断 {{ group.circuitBreaker?.failureThreshold ?? 3 }} 次 / {{ group.circuitBreaker?.cooldownSeconds ?? 60 }} 秒
+              <footer class="group-foot">
+                <span class="group-foot-item">
+                  <Icon name="pulse" :size="13" />
+                  <span v-if="group.circuitBreaker?.failureThreshold !== undefined || group.circuitBreaker?.cooldownSeconds !== undefined">
+                    熔断 {{ group.circuitBreaker?.failureThreshold ?? 3 }} 次 / {{ group.circuitBreaker?.cooldownSeconds ?? 60 }} 秒
+                  </span>
+                  <span v-else>熔断使用默认值（3 次 / 60 秒）</span>
                 </span>
-                <span v-else>熔断使用默认值（3 次 / 60 秒）</span>
-                <span class="spacer"></span>
-                <span class="mono">{{ group.models.length }} 候选</span>
-              </div>
+                <span class="group-foot-count">{{ group.models.length }} 个候选模型</span>
+              </footer>
             </article>
           </div>
         </template>
@@ -721,7 +716,7 @@ function asRecord(value: unknown): Record<string, unknown> {
     <BaseModal
       :open="deleteTarget !== undefined"
       :title="deleteTitle"
-      :desc="deleteBlocked ? '先调整引用，再删除这项配置。' : '删除后会重建 gateway 模型目录。'"
+      :desc="deleteBlocked ? '先调整引用，再删除这项配置。' : '删除后会重建模型网关目录。'"
       @close="closeDelete"
     >
       <div v-if="deleteImpact !== undefined">
@@ -732,7 +727,7 @@ function asRecord(value: unknown): Record<string, unknown> {
               ><strong>模型组 {{ name }}</strong> 的候选列表包含该引用。</span
             >
             <span v-for="id in deleteImpact.profiles" :key="`profile:${id}`"
-              ><strong>Profile {{ id }}</strong> 的 model 指向该引用。</span
+              ><strong>人格配置 {{ id }}</strong> 的模型字段指向该引用。</span
             >
           </div>
         </template>
@@ -742,9 +737,9 @@ function asRecord(value: unknown): Record<string, unknown> {
             >？
           </p>
           <div class="impact-list">
-            <span v-if="deleteTarget?.kind === 'model'">从对应供应商的 models 列表中移除该声明。</span>
+            <span v-if="deleteTarget?.kind === 'model'">从对应供应商的模型列表中移除该声明。</span>
             <span v-else>删除整条组配置；组内模型声明保持不变。</span>
-            <span>保存后会重新构建 gateway 目录，并校验全部 Profile 与模型组引用。</span>
+            <span>保存后会重新构建模型网关目录，并检查全部人格配置与模型组引用。</span>
           </div>
         </template>
         <div v-if="deleteError.length > 0" class="field-error" style="margin-top: 8px">{{ deleteError }}</div>

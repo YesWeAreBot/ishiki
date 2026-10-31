@@ -57,11 +57,11 @@ function resetFilters(): void {
       <div class="stack-sm">
         <div class="search-box">
           <Icon name="search" :size="15" />
-          <input v-model="keyword" class="input" type="search" placeholder="搜索会话 id、profile 或文件" aria-label="搜索会话" />
+          <input v-model="keyword" class="input" type="search" placeholder="搜索会话编号、人格配置或文件" aria-label="搜索会话" />
         </div>
         <div class="row">
-          <select v-model="profile" class="select" aria-label="按 profile 筛选">
-            <option value="all">全部 profile</option>
+          <select v-model="profile" class="select" aria-label="按人格配置筛选">
+            <option value="all">全部人格配置</option>
             <option v-for="profileId in profileIds" :key="profileId" :value="profileId">{{ profileId }}</option>
           </select>
           <button v-if="hasFilters" type="button" class="btn btn-ghost btn-sm" @click="resetFilters">清除</button>
@@ -92,7 +92,7 @@ function resetFilters(): void {
       <EmptyState
         v-else-if="filteredSessions.length === 0"
         :title="sessions.length === 0 ? '暂无会话' : '没有匹配的会话'"
-        :desc="sessions.length === 0 ? '运行时产生消息后会在这里出现。' : '调整关键词、profile 或时间范围。'"
+        :desc="sessions.length === 0 ? '运行实例产生消息后会在这里出现。' : '调整关键词、人格配置或时间范围。'"
         icon="sessions"
       >
         <button v-if="hasFilters" type="button" class="btn btn-ghost btn-sm" @click="resetFilters">清除筛选</button>
@@ -107,21 +107,17 @@ function resetFilters(): void {
           :aria-current="selectedId === session.id ? 'true' : undefined"
           @click="emit('select', session)"
         >
-          <span class="list-item-main">
-            <span class="list-item-title">
-              <Icon name="sessions" :size="14" />
-              <span class="mono">{{ session.id }}</span>
-            </span>
-            <span class="list-item-meta">
-              <span>{{ session.profileId }}</span>
-              <span>{{ session.domainLabel }}</span>
-              <span>{{ formatNumber(session.entries) }} 条</span>
-              <span v-if="session.corrupt > 0" class="badge badge-danger">{{ session.corrupt }} 行损坏</span>
-            </span>
+          <span class="session-item-top">
+            <Icon class="session-item-icon" name="sessions" :size="14" />
+            <span class="session-item-id mono" :title="session.id">{{ session.id }}</span>
+            <time class="session-item-time" :title="formatDateTime(session.lastActivity)">{{ relativeTime(session.lastActivity) }}</time>
           </span>
-          <span class="list-item-side">
+          <span class="session-item-meta">
+            <span class="session-item-profile" :title="session.profileId">{{ session.profileId }}</span>
             <StatusBadge :state="session.state" />
-            <time :title="formatDateTime(session.lastActivity)">{{ relativeTime(session.lastActivity) }}</time>
+            <span class="session-item-domain">{{ session.domainLabel }}</span>
+            <span class="session-item-count">{{ formatNumber(session.entries) }} 条</span>
+            <span v-if="session.corrupt > 0" class="badge badge-danger">{{ session.corrupt }} 行损坏</span>
           </span>
         </button>
       </div>
@@ -129,7 +125,7 @@ function resetFilters(): void {
 
     <div class="panel-foot">
       <span class="small muted">显示 {{ filteredSessions.length }} / {{ sessions.length }} 个会话</span>
-      <span v-if="profileIds.length === 0" class="small faint">尚未加载 profile 快照</span>
+      <span v-if="profileIds.length === 0" class="small faint">尚未加载人格配置快照</span>
     </div>
   </section>
 </template>
@@ -214,22 +210,77 @@ function resetFilters(): void {
 }
 
 .session-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
   border-bottom: 0;
-  border-radius: 9px;
-  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  min-height: 66px;
+  padding: 10px 11px;
 }
 
-.session-list-item .list-item-meta {
-  gap: 3px 8px;
-  font-size: 10.5px;
+.session-item-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  width: 100%;
 }
 
-.session-list-item .list-item-title {
+.session-item-icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.session-item-id {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--ink);
   font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.session-list-item .list-item-side {
-  gap: 4px;
+.session-item-time {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.session-item-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 21px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.session-item-profile {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item-domain {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item-count {
+  flex: none;
+  white-space: nowrap;
 }
 
 .session-skeleton {

@@ -38,7 +38,7 @@ const statusMeta = computed(() => {
   return { tone: "badge-neutral", label: "未知" };
 });
 
-const promptEmptyTitle = computed(() => (status.value === "empty" ? "尚未采集" : "没有 prompt 缓存数据"));
+const promptEmptyTitle = computed(() => (status.value === "empty" ? "尚未采集" : "没有提示词缓存数据"));
 const resourceEmptyTitle = computed(() => (status.value === "empty" ? "尚未采集" : "没有资源缓存数据"));
 
 function describe(error: unknown): string {
@@ -52,7 +52,7 @@ function resourceStatus(row: ResourceCacheRow): { tone: string; label: string } 
   return { tone: "badge-danger", label: "读取失败" };
 }
 
-/** prompt 缓存行的引用与用量页同一套实体分类，模型组不会混进模型。 */
+/** 提示词缓存行沿用用量页的实体分类，模型组不会混进模型。 */
 function referenceBadge(reference: string): { tone: string; label: string } {
   return entityBadge(classifyReference(reference, store.providers, store.groups));
 }
@@ -65,7 +65,7 @@ async function refresh(silent = false): Promise<void> {
     snapshot.value = result;
     errorText.value = "";
     if (!silent) {
-      toast("success", "缓存快照已更新", `${formatNumber(result.prompt.length)} 行 prompt，${formatNumber(result.resources.length)} 行资源。`);
+      toast("success", "缓存快照已更新", `${formatNumber(result.prompt.length)} 行提示词数据，${formatNumber(result.resources.length)} 行资源数据。`);
     }
   } catch (error) {
     errorText.value = describe(error);
@@ -84,9 +84,9 @@ onMounted(() => {
 <template>
   <PageShell>
     <PageHeader
-      title="缓存观测"
-      desc="缓存快照汇总会话中的 prompt 缓存与运行时资源目录。服务端没有采集或读取失败的字段会直接标记，页面不会补 0 或估算。"
-      eyebrow="观测 / 缓存"
+      title="缓存状态"
+      desc="查看会话的提示词缓存与运行实例资源目录。没有采集或读取失败的字段会明确标记，统计值直接取自服务端快照。"
+      eyebrow="观测 / 缓存状态"
     >
       <template #actions>
         <span v-if="snapshot !== undefined" class="badge" :class="statusMeta.tone">{{ statusMeta.label }}</span>
@@ -117,7 +117,7 @@ onMounted(() => {
       </div>
 
       <div v-else-if="snapshot === undefined" class="panel">
-        <EmptyState title="缓存数据尚不可用" desc="服务端还没有返回缓存快照。确认控制台连接正常后重试，页面不会用示例数值填充。" icon="cache">
+        <EmptyState title="缓存数据尚不可用" desc="服务端还没有返回缓存快照。确认控制台连接正常后重试。" icon="cache">
           <button type="button" class="btn btn-sm btn-primary" :disabled="loading" @click="refresh(false)">重新读取</button>
         </EmptyState>
       </div>
@@ -141,7 +141,7 @@ onMounted(() => {
                 <span>{{ formatDateTime(collectedAt) }}</span>
                 <span class="muted small" style="margin-left: 8px">{{ relativeTime(collectedAt) }}</span>
               </dd>
-              <dt>Prompt 数据</dt>
+              <dt>提示词数据</dt>
               <dd>{{ formatNumber(promptRows.length) }} 行</dd>
               <dt>资源数据</dt>
               <dd>{{ formatNumber(resourceRows.length) }} 行</dd>
@@ -164,8 +164,8 @@ onMounted(() => {
           <div class="panel">
             <div class="panel-head">
               <div>
-                <div class="panel-title">Prompt 缓存</div>
-                <div class="panel-sub">按模型引用汇总的调用次数、缓存读取与写入。未上报的响应不提供缓存字段。</div>
+                <div class="panel-title">提示词缓存</div>
+                <div class="panel-sub">按模型引用汇总的调用次数、缓存读取与写入。</div>
               </div>
               <div class="panel-actions">
                 <span class="badge badge-outline">{{ promptRows.length }} 行</span>
@@ -173,7 +173,7 @@ onMounted(() => {
             </div>
             <div v-if="promptRows.length === 0" class="empty" style="padding: 28px 24px">
               <div class="empty-title">{{ promptEmptyTitle }}</div>
-              <p class="empty-desc">这里只展示服务端实际采集到的缓存行，不会用 0 值代替缺失数据。</p>
+              <p class="empty-desc">这里只展示服务端实际采集到的缓存记录。</p>
             </div>
             <div v-else class="table-wrap">
               <table class="table table-compact">
@@ -185,7 +185,7 @@ onMounted(() => {
                     <th class="num">调用</th>
                     <th class="num">缓存读取</th>
                     <th class="num">缓存写入</th>
-                    <th>是否上报</th>
+                    <th>缓存上报</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -211,12 +211,6 @@ onMounted(() => {
                 </tbody>
               </table>
             </div>
-            <div class="panel-body" style="padding-top: 0">
-              <div class="notice">
-                <Icon name="info" :size="14" />
-                <span>未上报的响应不会携带缓存字段，读取与写入按服务端记录的原值展示，无法据此判断缓存是否命中。</span>
-              </div>
-            </div>
           </div>
 
           <div class="panel">
@@ -231,14 +225,14 @@ onMounted(() => {
             </div>
             <div v-if="resourceRows.length === 0" class="empty" style="padding: 28px 24px">
               <div class="empty-title">{{ resourceEmptyTitle }}</div>
-              <p class="empty-desc">服务端还没有可统计的资源目录，页面不会用示例资产数填充。</p>
+              <p class="empty-desc">服务端还没有可统计的资源目录。</p>
             </div>
             <div v-else class="table-wrap">
               <table class="table table-compact">
                 <thead>
                   <tr>
                     <th>运行实例</th>
-                    <th>Profile</th>
+                    <th>人格配置</th>
                     <th>状态</th>
                     <th class="num">资产数</th>
                     <th class="num">工件数</th>
@@ -267,9 +261,7 @@ onMounted(() => {
 
           <div v-if="status === 'empty'" class="notice notice-warning">
             <Icon name="warningCircle" :size="15" />
-            <span>
-              <strong>尚未采集</strong> 服务端已建立缓存观测，但还没有采集到 prompt 或资源数据。缺失状态会单独标记，页面不会把缺失数据当作空缓存展示。
-            </span>
+            <span> <strong>尚未采集</strong> 缓存状态服务已经就绪，但还没有采集到提示词或资源数据。 </span>
           </div>
         </template>
       </template>

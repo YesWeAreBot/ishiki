@@ -128,12 +128,12 @@ function stringRecord(value: unknown): Record<string, string> {
   <BaseModal
     :open="open"
     :title="title"
-    :desc="editing ? '保存后立即重建 gateway 目录；模型列表保持不变。' : '供应商是模型的来源；先创建供应商，再为它添加模型。'"
+    :desc="editing ? '保存后立即重建模型网关目录；模型列表保持不变。' : '供应商是模型的来源；先创建供应商，再为它添加模型。'"
     width="640px"
     @close="emit('close')"
   >
     <form class="stack" @submit.prevent="submit">
-      <FormField label="供应商 ID" hint="用于组成 model 引用，例如 provider:model。创建后不能再修改。" :required="!editing">
+      <FormField label="供应商标识" hint="用于组成模型引用，例如 provider:model。创建后不能再修改。" :required="!editing">
         <input v-model="providerId" class="input mono" :disabled="editing" autocomplete="off" :placeholder="editing ? '' : '例如 openai'" />
       </FormField>
       <SchemaForm v-model="draft" :schema="fields" :disabled="busy" />

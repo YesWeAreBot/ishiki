@@ -429,7 +429,7 @@ function recordOfStrings(value: unknown): Record<string, string> {
   <BaseModal
     :open="open"
     :title="editing ? '编辑模型' : '新增模型'"
-    desc="模型声明写入供应商配置；保存后网关目录重建，Profile 的 model 选择器自动同步。"
+    desc="模型声明写入供应商配置；保存后重建模型网关目录，人格配置的模型选择器自动同步。"
     width="min(860px, 100%)"
     @close="requestClose"
   >
@@ -444,9 +444,9 @@ function recordOfStrings(value: unknown): Record<string, string> {
     <div class="row editor-mode-switch" role="group" aria-label="编辑模式">
       <div class="segmented">
         <button type="button" :aria-pressed="mode === 'form'" @click="switchMode('form')">表单</button>
-        <button type="button" :aria-pressed="mode === 'raw'" @click="switchMode('raw')">RAW</button>
+        <button type="button" :aria-pressed="mode === 'raw'" @click="switchMode('raw')">原始配置</button>
       </div>
-      <span v-if="mode === 'raw' && rawReport.issues.length > 0" class="field-error">RAW 内容有问题，修正后才能切回表单或保存。</span>
+      <span v-if="mode === 'raw' && rawReport.issues.length > 0" class="field-error">原始配置有问题，修正后才能切回表单或保存。</span>
     </div>
 
     <template v-if="mode === 'form'">
@@ -454,7 +454,7 @@ function recordOfStrings(value: unknown): Record<string, string> {
         <div class="form-section-head">
           <div>
             <div class="form-section-title">基础信息</div>
-            <div class="form-section-desc">模型归属与引用地址；这些字段属于 provider，修改会作用于该供应商下的全部模型。</div>
+            <div class="form-section-desc">模型归属与引用地址；这些字段属于供应商，修改会作用于该供应商下的全部模型。</div>
           </div>
         </div>
 
@@ -466,10 +466,10 @@ function recordOfStrings(value: unknown): Record<string, string> {
             </select>
           </FormField>
 
-          <FormField v-if="isNewProvider" label="供应商 ID" required hint="例如 deepseek、relay、local；保存后不可改名。">
+          <FormField v-if="isNewProvider" label="供应商标识" required hint="例如 deepseek、relay、local；保存后不可改名。">
             <input v-model="newProviderId" class="input input-mono" placeholder="relay" autocomplete="off" />
           </FormField>
-          <FormField v-else label="模型引用" hint="Profile 里填写 provider:model。">
+          <FormField v-else label="模型引用" hint="人格配置里填写 provider:model。">
             <input :value="referencePreview" class="input input-mono" readonly />
           </FormField>
         </div>
@@ -512,13 +512,13 @@ function recordOfStrings(value: unknown): Record<string, string> {
 
     <template v-else>
       <p class="field-hint" style="margin-bottom: 8px">
-        直接编辑 YAML。provider.apiKey 留空表示沿用已保存密钥；model 只保留当前类型适用的字段，切换类型请回到表单模式。
+        直接编辑 YAML。供应商的 apiKey 留空表示沿用已保存密钥；模型声明只保留当前类型适用的字段，切换类型请回到表单模式。
       </p>
-      <RawEditor :model-value="rawText" :error-line="rawReport.line" :aria-label="`RAW 模型配置 ${referencePreview}`" @update:model-value="rawText = $event" />
+      <RawEditor :model-value="rawText" :error-line="rawReport.line" :aria-label="`原始模型配置 ${referencePreview}`" @update:model-value="rawText = $event" />
       <div v-if="rawReport.issues.length > 0" class="error-panel" role="alert" style="margin-top: 10px">
         <Icon name="alert" :size="15" />
         <div class="flex-1">
-          <strong>RAW 内容校验未通过</strong>
+          <strong>原始配置校验未通过</strong>
           <ul class="raw-issue-list">
             <li v-for="issue in rawReport.issues" :key="issue">{{ issue }}</li>
           </ul>

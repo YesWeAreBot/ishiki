@@ -193,7 +193,7 @@ async function run(kind: "apply" | "reload"): Promise<void> {
     const view = await call<ProfileView>(`ishiki/profiles/${kind}`, profile.id);
     if (profileId.value === profile.id) detail.value = view;
     const moment = view.appliedAt === undefined ? "" : `（${formatDateTime(view.appliedAt)}）`;
-    toast("success", kind === "apply" ? "Profile 已应用" : "Profile 已重新加载", `${view.id} 的配置已装载${moment}。`);
+    toast("success", kind === "apply" ? "人格配置已应用" : "人格配置已重新加载", `${view.id} 的配置已装载${moment}。`);
   } catch (error) {
     const message = describeError(error);
     toast("error", kind === "apply" ? "应用失败" : "重新加载失败", message);
@@ -235,19 +235,19 @@ async function runAction(): Promise<void> {
   try {
     if (kind === "stop") {
       await call<ProfileStatus>("ishiki/profiles/stop", target.id);
-      toast("success", "Profile 已停止", `${target.id} 的运行实例已移除，配置与会话保留。`);
+      toast("success", "人格配置已停止", `${target.id} 的运行实例已移除，配置与会话保留。`);
       resetAction();
       if (profileId.value === target.id) await load(target.id);
       return;
     }
     await call<null>("ishiki/profiles/remove", target.id);
-    toast("success", "Profile 已删除", `${target.id} 的目录已移除。`);
+    toast("success", "人格配置已删除", `${target.id} 的目录已移除。`);
     resetAction();
     if (profileId.value === target.id) {
       await router.push("/ishiki/profiles");
       if (profileId.value === target.id) {
         detail.value = null;
-        detailError.value = "Profile 已删除，但页面未能跳转回列表，请刷新。";
+        detailError.value = "人格配置已删除，但页面未能跳转回列表，请刷新。";
       }
     }
   } catch (error) {
@@ -278,13 +278,9 @@ function clearFilters(): void {
 
 <template>
   <PageShell>
-    <PageHeader
-      title="Profile"
-      desc="管理人格、频道认领、引擎与扩展配置，并应用或停止 Profile。保存配置与运行状态分开处理，保存后的配置需要应用才会生效。"
-      eyebrow="运行 / Profile"
-    >
+    <PageHeader title="人格配置" desc="管理人格、频道认领、引擎与扩展配置，并应用或停止配置。保存后的配置需要应用才会生效。" eyebrow="配置 / 人格配置">
       <template #actions>
-        <button type="button" class="btn btn-primary" @click="wizardOpen = true"><Icon name="plus" :size="15" /> 新建 Profile</button>
+        <button type="button" class="btn btn-primary" @click="wizardOpen = true"><Icon name="plus" :size="15" /> 新建人格配置</button>
         <button v-if="!editing && profileId !== ''" type="button" class="btn" :disabled="detailLoading" @click="load(profileId)">
           <span v-if="detailLoading" class="spinner" aria-hidden="true"></span>
           <Icon v-else name="refresh" :size="15" /> 刷新详情
@@ -304,7 +300,7 @@ function clearFilters(): void {
     <div v-else class="split split-wide">
       <div class="panel detail-sticky">
         <div class="panel-head" style="padding-bottom: 12px">
-          <div class="panel-title">Profile 列表</div>
+          <div class="panel-title">人格配置列表</div>
           <div class="panel-actions">
             <span class="badge badge-outline">{{ store.profiles.length }}</span>
           </div>
@@ -312,7 +308,7 @@ function clearFilters(): void {
         <div class="list-search">
           <div class="search-box">
             <Icon name="search" :size="15" />
-            <input v-model="query" class="input" aria-label="搜索 Profile" placeholder="搜索目录、模型或账号" />
+            <input v-model="query" class="input" aria-label="搜索人格配置" placeholder="搜索目录、模型或账号" />
           </div>
           <select v-model="statusFilter" class="select" aria-label="按状态筛选" style="margin-top: 8px">
             <option v-for="option in stateFilters" :key="option.value" :value="option.value">{{ option.label }}</option>
@@ -328,9 +324,9 @@ function clearFilters(): void {
         </div>
         <div v-else-if="filtered.length === 0" class="empty">
           <div class="empty-mark"><Icon name="profile" :size="20" /></div>
-          <div class="empty-title">{{ store.profiles.length === 0 ? "还没有 Profile" : "没有匹配的 Profile" }}</div>
+          <div class="empty-title">{{ store.profiles.length === 0 ? "还没有人格配置" : "没有匹配的人格配置" }}</div>
           <p class="empty-desc">
-            {{ store.profiles.length === 0 ? "点击「新建 Profile」通过配置向导创建第一个 Profile。" : "清除搜索或切换状态筛选后再试。" }}
+            {{ store.profiles.length === 0 ? "点击「新建人格配置」通过配置向导创建第一份配置。" : "清除搜索或切换状态筛选后再试。" }}
           </p>
           <button v-if="store.profiles.length > 0" type="button" class="btn btn-soft" @click="clearFilters">清除筛选</button>
         </div>
@@ -383,7 +379,7 @@ function clearFilters(): void {
 
         <div v-else-if="detailError !== '' && detail === null" class="panel">
           <div class="panel-head">
-            <div class="panel-title">无法读取 Profile</div>
+            <div class="panel-title">无法读取人格配置</div>
           </div>
           <div class="panel-body">
             <div class="error-panel" role="alert"><Icon name="alert" :size="15" /> {{ detailError }}</div>
@@ -395,7 +391,7 @@ function clearFilters(): void {
         </div>
 
         <div v-else-if="detail === null" class="panel">
-          <EmptyState title="选择一个 Profile" desc="列表中的 Profile 会在这里显示运行状态、配置版本、实例、会话与人格。" icon="profile">
+          <EmptyState title="选择一份人格配置" desc="列表中的配置会在这里显示运行状态、配置版本、实例、会话与人格。" icon="profile">
             <button v-if="summary !== undefined" type="button" class="btn btn-soft" @click="select(summary)">打开 {{ summary.id }}</button>
           </EmptyState>
         </div>
@@ -418,7 +414,7 @@ function clearFilters(): void {
 
     <BaseModal
       :open="action.kind !== null"
-      :title="action.kind === 'delete' ? '删除 Profile' : '停止 Profile'"
+      :title="action.kind === 'delete' ? '删除人格配置' : '停止人格配置'"
       :desc="action.target === null ? '' : action.target.id"
       :closable="!action.busy"
       :close-on-backdrop="!action.busy"
@@ -432,15 +428,15 @@ function clearFilters(): void {
               ><strong>{{ targetRuntimes.length }} 个运行实例</strong>会停止并从运行时列表移除。</span
             >
             <span>会话日志与资源目录保留；不会删除历史。</span>
-            <span>配置保持不变；再次应用后，runtime 在收到下一条认领消息时重建。</span>
+            <span>配置保持不变；再次应用后，运行实例在收到下一条认领消息时重建。</span>
           </div>
         </template>
 
         <template v-else>
-          <p>确认永久删除「{{ action.target.id }}」？此操作会移除 profile 目录与其运行数据。</p>
+          <p>确认永久删除「{{ action.target.id }}」？此操作会移除人格配置目录与其运行数据。</p>
           <div class="impact-list">
             <span
-              >删除 <span class="mono">profiles/{{ action.target.id }}/</span> 下的配置、人格、记忆、runtime 与资源。</span
+              >删除 <span class="mono">profiles/{{ action.target.id }}/</span> 下的配置、人格、记忆、运行数据与资源。</span
             >
             <span
               ><strong>{{ targetSessionCount }} 个会话日志</strong>会一并移除。</span
@@ -448,12 +444,12 @@ function clearFilters(): void {
             <span>历史用量记录保留，用于追踪已发生的调用。</span>
           </div>
           <div class="field" style="margin-top: 12px">
-            <span class="field-label">输入 Profile 目录名以确认</span>
+            <span class="field-label">输入人格配置目录名以确认</span>
             <input
               v-model="action.deleteInput"
               class="input input-mono"
               :placeholder="action.target.id"
-              aria-label="确认 Profile 目录名"
+              aria-label="确认人格配置目录名"
               :disabled="action.busy"
             />
           </div>
@@ -466,7 +462,7 @@ function clearFilters(): void {
         <button type="button" class="btn" :disabled="action.busy" @click="closeAction">取消</button>
         <button v-if="action.kind === 'stop'" type="button" class="btn btn-danger" :disabled="action.busy" @click="runAction">
           <span v-if="action.busy" class="spinner" aria-hidden="true"></span>
-          {{ action.busy ? "停止中…" : "停止 Profile" }}
+          {{ action.busy ? "停止中…" : "停止人格配置" }}
         </button>
         <button v-else type="button" class="btn btn-danger" :disabled="action.busy || !deleteReady" @click="runAction">
           <span v-if="action.busy" class="spinner" aria-hidden="true"></span>

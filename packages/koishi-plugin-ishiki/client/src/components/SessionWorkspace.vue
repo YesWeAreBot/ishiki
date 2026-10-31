@@ -12,6 +12,15 @@ import Icon from "./Icon.vue";
 import StatusBadge from "./StatusBadge.vue";
 
 const ROLE_OPTIONS = ["user", "assistant", "tool", "system", "custom", "event", "state"] as const;
+const ROLE_LABELS: Record<(typeof ROLE_OPTIONS)[number], string> = {
+  user: "用户",
+  assistant: "助手",
+  tool: "工具",
+  system: "系统",
+  custom: "自定义",
+  event: "事件",
+  state: "状态",
+};
 
 const props = defineProps<{
   selectedId: string;
@@ -96,7 +105,7 @@ watch(
       </div>
       <div class="chat-actions">
         <StatusBadge v-if="summary !== undefined" :state="summary.state" />
-        <CopyButton :value="selectedId" label="会话 id" />
+        <CopyButton :value="selectedId" label="会话编号" />
         <button
           type="button"
           class="btn btn-ghost btn-sm chat-tool"
@@ -145,7 +154,7 @@ watch(
         ><strong>{{ formatNumber(turnCount) }}</strong> 轮次</span
       >
       <span
-        ><strong>{{ formatCompact(tokenCount) }}</strong> tokens</span
+        ><strong>{{ formatCompact(tokenCount) }}</strong> Token</span
       >
       <span :class="{ 'metric-warning': corruptTotal > 0 }"
         ><strong>{{ formatNumber(corruptTotal) }}</strong> 损坏行</span
@@ -169,12 +178,12 @@ watch(
           <span class="field-label">角色</span>
           <select v-model="roleFilter" class="select" @change="applyFilters">
             <option value="all">全部</option>
-            <option v-for="role in ROLE_OPTIONS" :key="role" :value="role">{{ role }}</option>
+            <option v-for="role in ROLE_OPTIONS" :key="role" :value="role">{{ ROLE_LABELS[role] }}</option>
           </select>
         </label>
         <label class="field field-keyword">
           <span class="field-label">关键词</span>
-          <input v-model="keywordDraft" class="input" type="search" placeholder="匹配条目内容的 JSON 文本" />
+          <input v-model="keywordDraft" class="input" type="search" placeholder="搜索条目内容" />
         </label>
         <label class="field">
           <span class="field-label">起始时间</span>
@@ -194,11 +203,11 @@ watch(
         <div class="chat-detail-actions">
           <button v-if="summary !== undefined" type="button" class="btn btn-sm btn-ghost" @click="openProfile">
             <Icon name="profile" :size="13" />
-            打开 Profile
+            打开人格配置
           </button>
           <button v-if="summary !== undefined" type="button" class="btn btn-sm btn-ghost" @click="openRuntime">
             <Icon name="runtimes" :size="13" />
-            打开运行时
+            打开运行实例
           </button>
         </div>
         <div v-if="summary !== undefined" class="chat-file">
@@ -208,7 +217,7 @@ watch(
         </div>
         <div v-else class="notice notice-info">
           <Icon name="info" :size="14" />
-          <span>该会话不在当前列表快照中，条目仍会按 id 直接读取。</span>
+          <span>该会话不在当前列表快照中，条目仍会按会话编号直接读取。</span>
         </div>
       </div>
 
@@ -246,7 +255,7 @@ watch(
 
     <div class="chat-stage">
       <div v-if="selectedId.length === 0" class="chat-empty">
-        <EmptyState title="选择一个会话" desc="从左侧会话列表进入，或直接打开 /ishiki/sessions/&lt;id&gt;。" icon="sessions" />
+        <EmptyState title="选择一个会话" desc="从左侧会话列表选择，或使用会话编号直接打开。" icon="sessions" />
       </div>
 
       <div v-else-if="loading" class="chat-loading" aria-busy="true">
@@ -302,7 +311,7 @@ watch(
   gap: 14px;
   padding: 11px 14px;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(110deg, color-mix(in srgb, var(--accent-soft) 54%, transparent), transparent 46%), var(--surface-head);
+  background: var(--surface-head);
 }
 
 .chat-identity {
@@ -320,8 +329,8 @@ watch(
   width: 38px;
   height: 38px;
   border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
   color: var(--accent-ink);
 }
 
@@ -376,7 +385,6 @@ watch(
   height: 5px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 2px var(--surface);
 }
 
 .chat-metrics {
@@ -432,7 +440,6 @@ watch(
   height: 5px;
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 14%, transparent);
 }
 
 .metric-live.is-syncing .metric-live-dot {
@@ -446,7 +453,7 @@ watch(
   overscroll-behavior: contain;
   padding: 11px 13px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-muted) 48%, var(--surface));
+  background: var(--surface-muted);
 }
 
 .entry-filters {
@@ -590,9 +597,7 @@ watch(
   min-height: 0;
   padding: 22px;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--line-strong) 46%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
-    var(--surface-inset);
+  background: var(--surface-inset);
 }
 
 .chat-loading-note {
@@ -657,7 +662,7 @@ watch(
   .chat-avatar {
     width: 32px;
     height: 32px;
-    border-radius: 10px;
+    border-radius: var(--radius-sm);
   }
 
   .chat-actions {

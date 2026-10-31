@@ -181,15 +181,15 @@ const rawIssue = computed(() => {
 
 const validationIssue = computed(() => {
   if (mode.value === "raw") {
-    return rawReport.value.issues.length > 0 ? `RAW 配置校验未通过：${rawReport.value.issues[0]}` : "";
+    return rawReport.value.issues.length > 0 ? `原始配置校验未通过：${rawReport.value.issues[0]}` : "";
   }
   if (rawIssue.value !== "") return rawIssue.value;
   const model = draft.value.model;
-  if (typeof model !== "string" || model.trim() === "") return "基础配置中的 model 不能为空。";
+  if (typeof model !== "string" || model.trim() === "") return "基础配置中的模型不能为空。";
   return "";
 });
 
-/* RAW 模式：与表单共用 draft 这一份状态；校验失败时禁止回切与保存，原文保留。 */
+/* 原始配置模式与表单共用 draft；校验失败时禁止切换与保存。 */
 
 const knownConfigKeys = computed<string[]>(() => {
   const keys = new Set<string>(Object.keys(store.extensions?.schemas.base.dict ?? {}));
@@ -465,7 +465,7 @@ async function save(): Promise<void> {
       props.profile.revision,
     );
     dirty.value = false;
-    toast("success", "Profile 已保存", `${view.id} 的配置已保存，应用后才会生效。`);
+    toast("success", "人格配置已保存", `${view.id} 的配置已保存，应用后才会生效。`);
     emit("saved", view);
   } catch (error_) {
     const message = describeError(error_);
@@ -514,7 +514,7 @@ const personaPath = computed(() => {
           <span v-if="dirty" class="badge badge-warning">未保存</span>
           <div class="segmented" role="group" aria-label="编辑模式">
             <button type="button" :aria-pressed="mode === 'form'" @click="switchMode('form')">表单</button>
-            <button type="button" :aria-pressed="mode === 'raw'" @click="switchMode('raw')">RAW</button>
+            <button type="button" :aria-pressed="mode === 'raw'" @click="switchMode('raw')">原始配置</button>
           </div>
         </div>
       </div>
@@ -522,7 +522,7 @@ const personaPath = computed(() => {
       <div class="panel-body stack-sm">
         <div v-if="profile.state === 'active'" class="notice notice-info">
           <Icon name="info" :size="14" />
-          <span>该 Profile 正在运行。保存不会替换当前实例，需要重新加载或应用后才会生效。</span>
+          <span>这份人格配置正在运行。保存不会替换当前实例，需要重新加载或应用后才会生效。</span>
         </div>
 
         <div v-if="error !== ''" class="error-panel" role="alert">
@@ -532,12 +532,12 @@ const personaPath = computed(() => {
         </div>
 
         <div v-if="mode === 'raw'" class="stack-sm">
-          <p class="field-hint">直接编辑 profile 配置（YAML）。人格文本仍在表单模式的「人格与指令」分区维护；校验失败时无法切回表单或保存，原文会保留。</p>
-          <RawEditor :model-value="rawDoc" :error-line="rawReport.line" :aria-label="`RAW Profile 配置 ${profile.id}`" @update:model-value="rawDoc = $event" />
+          <p class="field-hint">直接编辑 YAML 配置。人格文本仍在表单模式的「人格与指令」分区维护；校验失败时无法切回表单或保存，原文会保留。</p>
+          <RawEditor :model-value="rawDoc" :error-line="rawReport.line" :aria-label="`原始配置 ${profile.id}`" @update:model-value="rawDoc = $event" />
           <div v-if="rawReport.issues.length > 0" class="error-panel" role="alert">
             <Icon name="alert" :size="15" />
             <div class="flex-1">
-              <strong>RAW 配置校验未通过</strong>
+              <strong>原始配置校验未通过</strong>
               <ul class="raw-issue-list">
                 <li v-for="issue in rawReport.issues" :key="issue">{{ issue }}</li>
               </ul>
@@ -546,7 +546,7 @@ const personaPath = computed(() => {
         </div>
 
         <template v-else>
-          <div class="tabs" role="tablist" aria-label="Profile 编辑分区">
+          <div class="tabs" role="tablist" aria-label="人格配置编辑分区">
             <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'base'" @click="activeTab = 'base'">基础配置</button>
             <button type="button" class="tab" role="tab" :aria-selected="activeTab === 'engines'" @click="activeTab = 'engines'">
               引擎<span class="tab-count">3</span>
@@ -561,10 +561,10 @@ const personaPath = computed(() => {
             <div class="form-section">
               <div class="form-section-head">
                 <div class="form-section-title">基础配置</div>
-                <div class="form-section-desc">模型、频道认领与运行策略，字段由服务端 Schema 驱动。</div>
+                <div class="form-section-desc">模型、频道认领与运行策略，字段由服务端定义生成。</div>
               </div>
               <SchemaForm v-if="baseSchema !== undefined" :schema="baseSchema" :model-value="baseValue" @update:model-value="updateBase" />
-              <FormField v-else label="基础配置（JSON）" hint="服务端尚未提供基础 Schema，直接编辑原始 JSON。" :error="rawError('base')">
+              <FormField v-else label="基础配置（JSON）" hint="服务端尚未提供基础字段定义，直接编辑原始 JSON。" :error="rawError('base')">
                 <textarea
                   class="textarea input-mono"
                   rows="14"
@@ -585,7 +585,7 @@ const personaPath = computed(() => {
                 <div class="form-section-desc">{{ section.hint }}</div>
               </div>
 
-              <FormField label="引擎" hint="选择后配置会写入该 Profile 的对应引擎键。">
+              <FormField label="引擎" hint="选择后配置会写入这份人格配置的对应引擎键。">
                 <select class="select" :value="section.current" @change="selectEngine(section.kind, ($event.target as HTMLSelectElement).value)">
                   <option value="">未配置</option>
                   <option v-for="option in section.options" :key="option.name" :value="option.name">
@@ -604,7 +604,7 @@ const personaPath = computed(() => {
                 <FormField
                   v-else
                   label="引擎配置（JSON）"
-                  hint="该引擎没有可用 Schema，直接编辑原始 JSON；配置会原样保存。"
+                  hint="该引擎没有可用字段定义，直接编辑原始 JSON；配置会原样保存。"
                   :error="rawError(`engine:${section.kind}`)"
                 >
                   <textarea
@@ -625,7 +625,7 @@ const personaPath = computed(() => {
               <div class="empty">
                 <div class="empty-mark"><Icon name="settings" :size="20" /></div>
                 <div class="empty-title">没有可配置的扩展</div>
-                <p class="empty-desc">服务端尚未注册扩展，或该 Profile 的配置中没有扩展条目。</p>
+                <p class="empty-desc">服务端尚未注册扩展，或这份人格配置中没有扩展条目。</p>
               </div>
             </template>
 
@@ -651,7 +651,7 @@ const personaPath = computed(() => {
                   <FormField
                     v-else
                     label="扩展配置（JSON）"
-                    hint="该扩展没有可用的 Schema，直接编辑原始 JSON；内容会原样保存。"
+                    hint="该扩展没有可用的字段定义，直接编辑原始 JSON；内容会原样保存。"
                     :error="rawError(`ext:${row.name}`)"
                   >
                     <textarea
@@ -676,21 +676,21 @@ const personaPath = computed(() => {
               </div>
               <textarea class="textarea profile-persona-editor" rows="16" spellcheck="false" :value="personaText" @input="onPersonaInput"></textarea>
               <p class="field-hint">
-                当前人格文件：<span class="mono">{{ personaPath ?? "未找到可用文件" }}</span>
+                当前人设文件：<span class="mono">{{ personaPath ?? "未找到可用文件" }}</span>
               </p>
             </div>
 
             <div class="form-section">
               <div class="form-section-head">
                 <div class="form-section-title">指令文件</div>
-                <div class="form-section-desc">路径来自 Profile 配置，绝对路径只读展示。</div>
+                <div class="form-section-desc">路径来自人格配置，绝对路径只读展示。</div>
               </div>
-              <div class="kv-list">
-                <div v-for="file in profile.instructions" :key="file.path" class="kv">
-                  <span class="mono">{{ file.path }}</span>
-                  <span class="row">
+              <div class="profile-file-list">
+                <div v-for="file in profile.instructions" :key="file.path" class="profile-file-row">
+                  <span class="profile-file-path mono">{{ file.path }}</span>
+                  <span class="profile-file-tags">
                     <span v-if="file.missing" class="badge badge-danger">缺失</span>
-                    <span v-if="file.path === personaPath" class="badge badge-info">人格文件</span>
+                    <span v-if="file.path === personaPath" class="badge badge-info">人设文件</span>
                   </span>
                 </div>
                 <p v-if="profile.instructions.length === 0" class="field-hint">未配置指令文件，保存人格时默认写入 PERSONA.md。</p>
@@ -711,7 +711,7 @@ const personaPath = computed(() => {
         <button type="button" class="btn" :disabled="saving" @click="requestCancel">取消</button>
         <button type="button" class="btn btn-primary" :disabled="saving || validationIssue !== ''" @click="save">
           <span v-if="saving" class="spinner" aria-hidden="true"></span>
-          {{ saving ? "保存中…" : "保存 Profile" }}
+          {{ saving ? "保存中…" : "保存人格配置" }}
         </button>
       </div>
     </section>
@@ -742,5 +742,52 @@ const personaPath = computed(() => {
 
 .raw-issue-list li {
   overflow-wrap: anywhere;
+}
+
+.profile-file-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.profile-file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  padding: 9px 11px;
+  background: var(--surface-inset);
+}
+
+.profile-file-row + .profile-file-row {
+  border-top: 1px solid var(--line);
+}
+
+.profile-file-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.profile-file-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+@media (max-width: 620px) {
+  .profile-file-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-file-tags {
+    justify-content: flex-start;
+  }
 }
 </style>

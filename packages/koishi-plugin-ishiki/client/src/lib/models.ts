@@ -74,13 +74,13 @@ export function apiLabel(api: string): string {
 }
 
 export const THINK_LEVEL_LABELS: Record<ThinkLevel, string> = {
-  none: "none",
-  minimal: "minimal",
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "xhigh",
-  max: "max",
+  none: "关闭",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  max: "最高",
 };
 
 export function groupStrategyLabel(strategy: string | undefined): string {

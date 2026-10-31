@@ -10,12 +10,12 @@ export interface UsageMetric {
 
 export const USAGE_METRICS: readonly UsageMetric[] = [
   { key: "calls", label: "调用次数", unit: "次" },
-  { key: "input", label: "输入 token", unit: "token" },
-  { key: "output", label: "输出 token", unit: "token" },
-  { key: "total", label: "合计 token", unit: "token" },
-  { key: "cacheRead", label: "缓存读取", unit: "token" },
-  { key: "cacheWrite", label: "缓存写入", unit: "token" },
-  { key: "reasoning", label: "推理 token", unit: "token" },
+  { key: "input", label: "输入", unit: "Token" },
+  { key: "output", label: "输出", unit: "Token" },
+  { key: "total", label: "合计", unit: "Token" },
+  { key: "cacheRead", label: "缓存读取", unit: "Token" },
+  { key: "cacheWrite", label: "缓存写入", unit: "Token" },
+  { key: "reasoning", label: "推理", unit: "Token" },
 ];
 
 export interface SeriesPoint {

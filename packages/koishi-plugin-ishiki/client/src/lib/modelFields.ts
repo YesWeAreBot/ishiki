@@ -1,5 +1,5 @@
 import type { ModelDecl, RemoteModelInfo } from "../types";
-import { MODEL_TYPE_OPTIONS, THINK_LEVELS } from "./models";
+import { MODEL_TYPE_OPTIONS, THINK_LEVEL_LABELS, THINK_LEVELS } from "./models";
 
 export type ModelType = (typeof MODEL_TYPE_OPTIONS)[number]["value"];
 export type ModelTypeLabel = { value: ModelType; label: string };
@@ -15,7 +15,7 @@ export const MODALITY_OPTIONS: ReadonlyArray<{ value: string; label: string }> =
   { value: "pdf", label: "pdf · 文档" },
 ];
 
-export const THINK_LEVEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = THINK_LEVELS.map((level) => ({ value: level, label: level }));
+export const THINK_LEVEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = THINK_LEVELS.map((level) => ({ value: level, label: THINK_LEVEL_LABELS[level] }));
 
 export type FieldSection = "basic" | "capability" | "generation" | "advanced";
 

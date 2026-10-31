@@ -197,8 +197,8 @@ onMounted(() => {
   <PageShell>
     <PageHeader
       title="唤醒判定"
-      eyebrow="JEV"
-      desc="判定记录保留模型给出的语义证据与本地规则的最终结论。证据各自独立，不相乘也不平均；阈值只作用于对应的那一条规则。"
+      eyebrow="观测 / 唤醒判定"
+      desc="每条记录保留模型给出的语义证据与本地规则的最终结论。各项证据独立计算，每条规则只与自己的阈值比较。"
     >
       <template #actions>
         <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="refresh(false)">
@@ -261,12 +261,12 @@ onMounted(() => {
             </div>
             <div class="panel-sub">
               {{ formatDateTime(item.at) }} · {{ relativeTime(item.at) }} · {{ item.context?.scene ?? "频道" }} {{ item.channelId }} ·
-              {{ formatNumber(item.pendingCount) }} 条合批 · {{ item.durationMs }} ms
+              {{ formatNumber(item.pendingCount) }} 条合批 · {{ item.durationMs }} 毫秒
             </div>
           </div>
           <div class="panel-actions">
             <span class="badge" :class="modeMeta(item).tone">{{ modeMeta(item).label }}</span>
-            <span class="badge badge-outline mono">p={{ item.probability.toFixed(2) }}</span>
+            <span class="badge badge-outline mono">概率 {{ item.probability.toFixed(2) }}</span>
             <span class="badge badge-outline mono">门槛 {{ item.threshold.toFixed(2) }}</span>
           </div>
         </div>
@@ -282,7 +282,7 @@ onMounted(() => {
               <span class="jev-flow-node" :class="step.stop ? 'is-stop' : step.ok ? 'is-pass' : 'is-neutral'" :title="formatStep(step)">{{
                 stepLabel(step.key)
               }}</span>
-              <span v-if="index < item.steps.length - 1" class="jev-flow-arrow">›</span>
+              <Icon v-if="index < item.steps.length - 1" class="jev-flow-arrow" name="chevron" :size="12" />
             </template>
           </div>
           <div v-else-if="item.prefiltered" class="jev-flow">
@@ -334,7 +334,7 @@ onMounted(() => {
               </div>
               <div class="jev-context">
                 <div v-for="(line, index) in item.context.recent" :key="index" class="jev-context-line">
-                  <span class="jev-context-time mono">{{ line.secondsAgo }}s</span>
+                  <span class="jev-context-time mono">{{ line.secondsAgo }} 秒前</span>
                   <span class="jev-context-author">{{ line.author }}</span>
                   <span v-if="line.isBot" class="jev-context-tag">机器人</span>
                   <span v-if="line.mentionsBot" class="jev-context-tag">@</span>
@@ -384,50 +384,58 @@ onMounted(() => {
 .jev-flow {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
   align-items: center;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  border-radius: 8px;
-  background: var(--k-color-bg-2, rgba(127, 127, 127, 0.08));
+  padding: 11px 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
 }
 
 .jev-flow-node {
-  padding: 2px 8px;
-  border: 1px solid var(--k-color-border, rgba(127, 127, 127, 0.28));
-  border-radius: 999px;
+  padding: 2px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--ink-soft);
   font-size: 12px;
   line-height: 1.6;
   white-space: nowrap;
 }
 
 .jev-flow-node.is-pass {
-  border-color: var(--k-color-success, #3ba55c);
-  color: var(--k-color-success, #3ba55c);
+  border-color: color-mix(in srgb, var(--success) 42%, var(--line));
+  background: var(--success-soft);
+  color: var(--success-ink);
 }
 
 .jev-flow-node.is-stop {
-  border-color: var(--k-color-warning, #d97706);
-  color: var(--k-color-warning, #d97706);
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--line));
+  background: var(--warning-soft);
+  color: var(--warning-ink);
 }
 
 .jev-flow-node.is-neutral {
-  opacity: 0.62;
+  color: var(--muted);
 }
 
 .jev-flow-arrow {
-  color: var(--k-color-fg-3, #8a8a8a);
-  font-size: 12px;
+  display: inline-flex;
+  flex: none;
+  color: var(--faint);
 }
 
 .jev-details {
-  margin-bottom: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
 .jev-details > summary {
   cursor: pointer;
-  color: var(--k-color-fg-3, #8a8a8a);
+  color: var(--accent-ink);
   font-size: 12px;
+  font-weight: 500;
   line-height: 2;
 }
 
@@ -448,8 +456,8 @@ onMounted(() => {
 
 .jev-context-time {
   flex: none;
-  width: 44px;
-  color: var(--k-color-fg-3, #8a8a8a);
+  width: 54px;
+  color: var(--faint);
   text-align: right;
 }
 
@@ -457,7 +465,7 @@ onMounted(() => {
   flex: none;
   max-width: 110px;
   overflow: hidden;
-  color: var(--k-color-fg-3, #8a8a8a);
+  color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -465,15 +473,16 @@ onMounted(() => {
 .jev-context-tag {
   flex: none;
   padding: 0 5px;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: var(--k-color-bg-3, rgba(127, 127, 127, 0.16));
-  color: var(--k-color-fg-3, #8a8a8a);
+  background: var(--surface-raised);
+  color: var(--muted);
   font-size: 11px;
 }
 
 .jev-context-text {
   flex: 1;
-  color: var(--k-color-fg-1, #222);
+  color: var(--ink-soft);
 }
 
 .jev-messages {
@@ -495,14 +504,14 @@ onMounted(() => {
   flex: none;
   max-width: 120px;
   overflow: hidden;
-  color: var(--k-color-fg-3, #8a8a8a);
+  color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .jev-message-text {
   flex: 1;
-  color: var(--k-color-fg-1, #222);
+  color: var(--ink);
 }
 
 .jev-steps {
@@ -517,24 +526,24 @@ onMounted(() => {
   grid-template-columns: 16px 1fr auto;
   gap: 8px;
   align-items: baseline;
-  color: var(--k-color-fg-2, #555);
+  color: var(--ink-soft);
 }
 
 .jev-step-mark {
-  color: var(--k-color-success, #3ba55c);
+  color: var(--success);
   text-align: center;
 }
 
 .jev-step-value {
-  color: var(--k-color-fg-3, #8a8a8a);
+  color: var(--muted);
 }
 
 .jev-step.is-stop {
-  color: var(--k-color-warning, #d97706);
+  color: var(--warning-ink);
 }
 
 .jev-step.is-stop .jev-step-mark {
-  color: var(--k-color-warning, #d97706);
+  color: var(--warning);
 }
 
 .jev-focus {
@@ -543,8 +552,9 @@ onMounted(() => {
   align-items: baseline;
   padding: 8px 10px;
   margin-bottom: 12px;
-  border-radius: 8px;
-  background: var(--k-color-bg-2, rgba(127, 127, 127, 0.08));
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--accent-soft);
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;
@@ -552,15 +562,16 @@ onMounted(() => {
 
 .jev-focus-label {
   flex: none;
-  color: var(--k-color-fg-3, #8a8a8a);
+  color: var(--accent-ink);
   font-size: 12px;
 }
 
 .jev-section-title {
   margin: 4px 0 8px;
-  color: var(--k-color-fg-3, #8a8a8a);
-  font-size: 12px;
-  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .jev-rows {
@@ -578,31 +589,31 @@ onMounted(() => {
 }
 
 .jev-row-label {
-  color: var(--k-color-fg-2, #555);
+  color: var(--ink-soft);
 }
 
 .jev-track {
   display: block;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--k-color-bg-3, rgba(127, 127, 127, 0.16));
+  height: 5px;
+  border-radius: 2px;
+  background: var(--surface-head);
   overflow: hidden;
 }
 
 .jev-fill {
   display: block;
   height: 100%;
-  border-radius: 999px;
-  background: var(--k-color-primary, #4f7cff);
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .jev-fill-relation {
-  background: var(--k-color-primary, #4f7cff);
+  background: var(--accent);
 }
 
 .jev-row-value {
   text-align: right;
-  color: var(--k-color-fg-3, #8a8a8a);
+  color: var(--muted);
 }
 
 .jev-chips {
@@ -613,15 +624,17 @@ onMounted(() => {
 
 .jev-chip {
   padding: 3px 9px;
-  border: 1px solid var(--k-color-border, rgba(127, 127, 127, 0.28));
-  border-radius: 999px;
-  color: var(--k-color-fg-3, #8a8a8a);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .jev-chip.is-on {
-  border-color: var(--k-color-primary, #4f7cff);
-  color: var(--k-color-primary, #4f7cff);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 </style>

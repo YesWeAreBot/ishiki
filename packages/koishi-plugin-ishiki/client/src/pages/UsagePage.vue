@@ -155,7 +155,7 @@ async function run(filters: UsageFilters, silent: boolean): Promise<void> {
         "用量已更新",
         result.records.length === 0
           ? "所选范围内没有记录。"
-          : `${formatNumber(result.records.length)} 条记录，合计 ${formatNumber(result.totals.total)} token。`,
+          : `${formatNumber(result.records.length)} 条记录，合计 ${formatNumber(result.totals.total)} Token。`,
       );
     }
   } catch (error) {
@@ -197,7 +197,7 @@ onMounted(() => {
   <PageShell>
     <PageHeader
       title="用量统计"
-      desc="用量账本记录每次模型调用的输入、输出、缓存与推理 token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。"
+      desc="用量账本记录每次模型调用的输入、输出、缓存与推理 Token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。"
       eyebrow="观测 / 用量"
     >
       <template #actions>
@@ -222,12 +222,12 @@ onMounted(() => {
               </select>
             </label>
             <label class="field">
-              <span class="field-label">Profile</span>
+              <span class="field-label">人格配置</span>
               <select v-model="profileFilter" class="select" :disabled="loading || profileIds.length === 0">
-                <option value="all">全部 Profile</option>
+                <option value="all">全部人格配置</option>
                 <option v-for="id in profileIds" :key="id" :value="id">{{ id }}</option>
               </select>
-              <span v-if="profileIds.length === 0" class="field-hint">还没有可用的 Profile。</span>
+              <span v-if="profileIds.length === 0" class="field-hint">还没有可用的人格配置。</span>
             </label>
             <label class="field">
               <span class="field-label">统计对象</span>
@@ -277,7 +277,7 @@ onMounted(() => {
 
       <template v-else>
         <div v-if="snapshot === undefined" class="panel">
-          <EmptyState title="用量数据尚不可用" desc="服务端还没有返回用量快照。确认控制台连接正常后重试，页面不会用示例数字填充。" icon="usage">
+          <EmptyState title="用量数据尚不可用" desc="服务端还没有返回用量快照。确认控制台连接正常后重试。" icon="usage">
             <button type="button" class="btn btn-sm btn-primary" :disabled="loading" @click="refresh">重新读取</button>
           </EmptyState>
         </div>
@@ -286,14 +286,14 @@ onMounted(() => {
           <div v-if="totals !== undefined">
             <div class="metric-grid">
               <div class="metric">
-                <div class="metric-label"><Icon name="arrowDown" :size="13" /> 输入 token</div>
+                <div class="metric-label"><Icon name="arrowDown" :size="13" /> 输入 Token</div>
                 <div class="metric-value">{{ formatNumber(totals.input) }}</div>
-                <div class="metric-note">prompt 侧用量</div>
+                <div class="metric-note">提示词侧用量</div>
               </div>
               <div class="metric">
-                <div class="metric-label"><Icon name="arrowUp" :size="13" /> 输出 token</div>
+                <div class="metric-label"><Icon name="arrowUp" :size="13" /> 输出 Token</div>
                 <div class="metric-value">{{ formatNumber(totals.output) }}</div>
-                <div class="metric-note">completion 侧用量</div>
+                <div class="metric-note">回复侧用量</div>
               </div>
               <div class="metric">
                 <div class="metric-label"><Icon name="memory" :size="13" /> 缓存读取</div>
@@ -309,12 +309,12 @@ onMounted(() => {
 
             <div class="metric-grid three usage-metric-second" style="margin-top: 10px">
               <div class="metric">
-                <div class="metric-label"><Icon name="pulse" :size="13" /> 推理 token</div>
+                <div class="metric-label"><Icon name="pulse" :size="13" /> 推理 Token</div>
                 <div class="metric-value">{{ formatNumber(totals.reasoning) }}</div>
-                <div class="metric-note">reasoning 用量</div>
+                <div class="metric-note">推理过程用量</div>
               </div>
               <div class="metric">
-                <div class="metric-label"><Icon name="usage" :size="13" /> 合计 token</div>
+                <div class="metric-label"><Icon name="usage" :size="13" /> 合计 Token</div>
                 <div class="metric-value">{{ formatNumber(totals.total) }}</div>
                 <div class="metric-note">服务端记录的总量</div>
               </div>
@@ -330,7 +330,7 @@ onMounted(() => {
             <div class="panel-head">
               <div>
                 <div class="panel-title">时间序列</div>
-                <div class="panel-sub">按天汇总原始用量记录；点击指标增减曲线，悬停或用方向键查看具体数据点。</div>
+                <div class="panel-sub">按天汇总原始用量记录；调用次数与 Token 分别使用独立数轴。点击指标增减曲线，悬停指标或图表可查看对应数据。</div>
               </div>
               <div class="panel-actions">
                 <span class="badge badge-outline">{{ records.length }} 条记录</span>
@@ -377,10 +377,10 @@ onMounted(() => {
                     <th>类型</th>
                     <th>对象</th>
                     <th class="num">调用</th>
-                    <th class="num">输入</th>
-                    <th class="num">输出</th>
-                    <th class="num">缓存读取</th>
-                    <th class="num">缓存写入</th>
+                    <th class="num">输入 Token</th>
+                    <th class="num">输出 Token</th>
+                    <th class="num">缓存读取 Token</th>
+                    <th class="num">缓存写入 Token</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -421,9 +421,9 @@ onMounted(() => {
                   <tr>
                     <th>日期</th>
                     <th class="num">调用</th>
-                    <th class="num">输入</th>
-                    <th class="num">输出</th>
-                    <th class="num">合计</th>
+                    <th class="num">输入 Token</th>
+                    <th class="num">输出 Token</th>
+                    <th class="num">合计 Token</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -446,7 +446,7 @@ onMounted(() => {
             <div class="panel-head">
               <div>
                 <div class="panel-title">数据质量</div>
-                <div class="panel-sub">缺失或推导的原因原样展示，页面不会补齐缓存字段，也不会估算金额。</div>
+                <div class="panel-sub">服务端标记的缺失字段与推导原因原样展示，不补充缓存数据，也不估算金额。</div>
               </div>
               <div class="panel-actions">
                 <span class="badge" :class="quality.length > 0 ? 'badge-warning' : 'badge-outline'"> {{ quality.length }} 类标记 </span>
@@ -455,7 +455,7 @@ onMounted(() => {
             <div class="panel-body">
               <div v-if="recordCount === 0" class="empty" style="padding: 24px 12px">
                 <div class="empty-title">所选范围内没有用量记录</div>
-                <p class="empty-desc">可以放宽时间范围或清除 Profile / 统计对象筛选后再试。</p>
+                <p class="empty-desc">可以放宽时间范围，或清除人格配置与统计对象筛选后再试。</p>
                 <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="reset">重置筛选</button>
               </div>
               <div v-else-if="quality.length === 0" class="muted small">所选范围内没有触发数据质量标记。</div>

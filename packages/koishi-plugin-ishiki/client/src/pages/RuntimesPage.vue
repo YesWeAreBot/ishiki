@@ -159,8 +159,8 @@ async function confirmAction(): Promise<void> {
   <PageShell>
     <PageHeader
       title="运行实例"
-      desc="运行实例由 Profile 按需创建，承载独立的会话日志与资源目录。这里的唤醒、重启、停止与中断直接调用服务端接口，状态随控制台推送更新。"
-      eyebrow="运行 / 实例"
+      desc="运行实例由人格配置按需创建，承载独立的会话日志与资源目录。唤醒、重启、停止与中断会立即生效，状态随控制台推送更新。"
+      eyebrow="运行 / 运行实例"
     >
       <template #actions>
         <span class="badge badge-outline">{{ store.runtimes.length }} 个实例</span>
@@ -178,7 +178,7 @@ async function confirmAction(): Promise<void> {
       <div v-else-if="store.runtimes.length === 0" class="panel">
         <EmptyState
           title="还没有运行实例"
-          desc="运行实例不能单独创建。认领频道的第一条输入会派生实例，Profile 启动后这里会显示它承载的实例。"
+          desc="运行实例不能单独创建。认领频道的第一条输入会派生实例，人格配置启动后这里会显示它承载的实例。"
           icon="runtimes"
         />
       </div>
@@ -197,8 +197,8 @@ async function confirmAction(): Promise<void> {
               <input v-model="query" class="input" aria-label="搜索运行实例" placeholder="搜索实例、频道、模型或目录" />
             </div>
             <div class="row" style="margin-top: 8px">
-              <select v-model="profileFilter" class="select" aria-label="按 Profile 筛选">
-                <option value="all">全部 Profile</option>
+              <select v-model="profileFilter" class="select" aria-label="按人格配置筛选">
+                <option value="all">全部人格配置</option>
                 <option v-for="id in profileIds" :key="id" :value="id">{{ id }}</option>
               </select>
               <select v-model="stateFilter" class="select" aria-label="按状态筛选" style="width: 120px">
@@ -210,7 +210,7 @@ async function confirmAction(): Promise<void> {
 
           <div v-if="filtered.length === 0" class="empty">
             <div class="empty-title">没有匹配的实例</div>
-            <p class="empty-desc">调整 Profile、状态或搜索词后再试。</p>
+            <p class="empty-desc">调整人格配置、状态或搜索词后再试。</p>
             <button
               type="button"
               class="btn btn-soft btn-sm"
@@ -301,7 +301,7 @@ async function confirmAction(): Promise<void> {
                   <span class="muted small" style="margin-left: 8px">{{ stateLabel(selected.state) }}</span>
                 </dd>
 
-                <dt>Profile</dt>
+                <dt>人格配置</dt>
                 <dd>
                   <RouterLink class="link mono" :to="`/ishiki/profiles/${encodeURIComponent(selected.profileId)}`">
                     {{ selected.profileId }}
@@ -378,7 +378,7 @@ async function confirmAction(): Promise<void> {
         </label>
         <div class="notice">
           <Icon name="info" :size="14" />
-          <span>唤醒调用 <span class="mono">ishiki/runtimes/wake</span>，成功后会返回是否合并以及新的轮次 ID。</span>
+          <span>唤醒请求成功后会返回是否合并，以及新的轮次编号。</span>
         </div>
       </div>
       <template #footer>

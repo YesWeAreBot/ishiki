@@ -32,7 +32,7 @@ function selectSession(session: SessionSummary): void {
 
 <template>
   <PageShell class="sessions-page">
-    <PageHeader title="会话日志" desc="以最新消息为起点，向上浏览历史；会话列表与消息窗口各自滚动。" eyebrow="执行">
+    <PageHeader title="会话日志" desc="按时间浏览会话中的消息记录。会话列表与消息窗口分别滚动，选择一项即可查看完整上下文。" eyebrow="运行 / 会话日志">
       <template #actions>
         <button type="button" class="btn btn-soft btn-sm" :disabled="listBusy" @click="refreshList">
           <span v-if="listBusy" class="spinner" aria-hidden="true"></span>

@@ -94,9 +94,9 @@ export function validateProfileDraft(draft: ProfileDraft, context: ProfileValida
   const errors: ProfileFieldErrors = {};
   const id = draft.id.trim();
 
-  if (id.length === 0) errors.id = "Profile 标识必填。";
+  if (id.length === 0) errors.id = "人格配置标识必填。";
   else if (!ID_PATTERN.test(id) || id.includes("..")) errors.id = "标识只能包含字母、数字、点、下划线与连字符，并以字母或数字开头。";
-  else if (context.idTaken(id)) errors.id = `Profile ${id} 已存在。`;
+  else if (context.idTaken(id)) errors.id = `人格配置 ${id} 已存在。`;
 
   const model = draft.model.trim();
   if (model.length === 0) errors.model = "需要选择一个模型或模型组。";

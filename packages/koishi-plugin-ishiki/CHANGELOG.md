@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added keyboard navigation, focus outlines and a skip link across the console for better accessibility
+- Added hover and focus highlighting to usage chart legends
+
+### Changed
+- Reworked the console client visual design with a muted slate palette, flat surfaces, tighter radius scale and unified design tokens
+- Split usage charts by unit so call counts and token usage render on independent axes
+- Updated console copy for sessions, profiles and groups to use consistent terminology
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes

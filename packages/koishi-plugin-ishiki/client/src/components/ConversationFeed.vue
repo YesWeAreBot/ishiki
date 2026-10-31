@@ -287,9 +287,7 @@ defineExpose({ scrollToLatest });
   min-height: 0;
   overflow: hidden;
   border-top: 1px solid var(--line);
-  background:
-    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--line-strong) 52%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
-    linear-gradient(180deg, var(--surface-inset), color-mix(in srgb, var(--surface-muted) 64%, var(--surface)) 68%, var(--surface));
+  background: var(--surface-inset);
 }
 
 .conversation-viewport {
@@ -318,11 +316,10 @@ defineExpose({ scrollToLatest });
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 6px 11px;
+  padding: 6px 10px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
-  box-shadow: var(--shadow);
   color: var(--muted);
   font-size: 11px;
   transform: translateX(-50%);
@@ -339,9 +336,8 @@ defineExpose({ scrollToLatest });
   min-height: 36px;
   padding: 0 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface) 95%, transparent);
-  box-shadow: var(--shadow-overlay);
   color: var(--accent-ink);
   font-size: 11.5px;
   font-weight: 600;
@@ -354,11 +350,11 @@ defineExpose({ scrollToLatest });
 
 .conversation-new-count {
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--on-ink);
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 500;
 }
 

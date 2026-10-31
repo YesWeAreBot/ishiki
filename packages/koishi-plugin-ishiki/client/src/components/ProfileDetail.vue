@@ -53,9 +53,9 @@ function engineName(kind: "context" | "wakeup" | "toolcall"): string {
 }
 
 const engineSummary = computed(() => [
-  { label: "context", value: engineName("context") },
-  { label: "wakeup", value: engineName("wakeup") },
-  { label: "toolcall", value: engineName("toolcall") },
+  { label: "上下文", value: engineName("context") },
+  { label: "唤醒", value: engineName("wakeup") },
+  { label: "工具调用", value: engineName("toolcall") },
 ]);
 
 interface ChannelRow {
@@ -120,13 +120,6 @@ function openRuntimeSession(sessionId: string): void {
             <span class="badge badge-outline">{{ modeLabel(profile.mode) }}</span>
             <span v-if="pending" class="badge badge-warning">{{ profile.appliedAt === undefined ? "未应用" : "有未应用更改" }}</span>
           </div>
-          <div class="panel-sub" style="margin-top: 5px">
-            model <span class="mono">{{ modelLabel }}</span> ·
-            <template v-for="(entry, index) in engineSummary" :key="entry.label">
-              {{ entry.label }}:<span class="mono">{{ entry.value }}</span>
-              <template v-if="index < engineSummary.length - 1"> · </template>
-            </template>
-          </div>
         </div>
         <div class="panel-actions profile-actions">
           <button type="button" class="btn btn-sm" :disabled="busy !== null" @click="emit('edit')"><Icon name="edit" :size="14" /> 编辑</button>
@@ -137,7 +130,7 @@ function openRuntimeSession(sessionId: string): void {
             type="button"
             class="btn btn-sm btn-primary"
             :disabled="busy !== null || profile.state === 'loading'"
-            :title="profile.state === 'loading' ? 'Profile 正在激活，等待完成后再试' : '应用已保存的配置并启动 Profile'"
+            :title="profile.state === 'loading' ? '人格配置正在激活，等待完成后再试' : '应用已保存的配置并启动人格配置'"
             @click="emit('apply')"
           >
             <span v-if="busy === 'apply'" class="spinner" aria-hidden="true"></span>
@@ -169,7 +162,7 @@ function openRuntimeSession(sessionId: string): void {
             type="button"
             class="btn btn-sm btn-danger"
             :disabled="busy !== null || profile.state === 'active' || profile.state === 'loading'"
-            :title="profile.state === 'active' || profile.state === 'loading' ? '运行中的 Profile 不能删除，先停止' : '删除 Profile'"
+            :title="profile.state === 'active' || profile.state === 'loading' ? '运行中的人格配置不能删除，先停止' : '删除人格配置'"
             @click="emit('delete')"
           >
             <Icon name="trash" :size="13" /> 删除
@@ -178,12 +171,25 @@ function openRuntimeSession(sessionId: string): void {
       </div>
 
       <div class="panel-body">
+        <div class="profile-specs">
+          <div class="profile-spec profile-model-spec">
+            <span class="profile-spec-label">模型</span>
+            <span class="profile-spec-value mono">{{ modelLabel }}</span>
+          </div>
+          <div class="profile-spec-grid">
+            <div v-for="entry in engineSummary" :key="entry.label" class="profile-spec">
+              <span class="profile-spec-label">{{ entry.label }}</span>
+              <span class="profile-spec-value mono">{{ entry.value }}</span>
+            </div>
+          </div>
+        </div>
+
         <div v-if="profile.lastError !== undefined" class="error-panel" role="alert" style="margin-bottom: 14px">
           <Icon name="alert" :size="16" />
           <div>
             <strong>{{ errorTitle }}</strong>
             <div>{{ profile.lastError }}</div>
-            <div class="small" style="margin-top: 5px">配置仍然保存在磁盘上。修正后重新应用即可；停止 Profile 会清除这条错误。</div>
+            <div class="small" style="margin-top: 5px">配置仍然保存在磁盘上。修正后重新应用即可；停止人格配置会清除这条错误。</div>
           </div>
         </div>
         <div v-if="pending && profile.state === 'active'" class="notice notice-warning" style="margin-bottom: 14px">
@@ -248,7 +254,7 @@ function openRuntimeSession(sessionId: string): void {
           </div>
         </div>
         <div class="panel-body">
-          <div v-if="channelRows.length === 0" class="field-hint">没有声明频道。该 Profile 不会被消息唤醒。</div>
+          <div v-if="channelRows.length === 0" class="field-hint">没有声明频道。这份人格配置不会被消息唤醒。</div>
           <div v-else class="stack-sm">
             <div v-for="row in channelRows" :key="row.account">
               <div class="mono small" style="margin-bottom: 4px">{{ row.account }}</div>
@@ -286,16 +292,16 @@ function openRuntimeSession(sessionId: string): void {
       <div class="panel-head">
         <div class="panel-title">指令文件</div>
         <div class="panel-actions">
-          <span class="panel-sub">路径相对于 Profile 目录</span>
+          <span class="panel-sub">路径相对于人格配置目录</span>
         </div>
       </div>
       <div class="panel-body">
-        <div v-if="instructionRows.length === 0" class="field-hint">配置没有声明 instructions，保存人格时会写入默认的 PERSONA.md。</div>
+        <div v-if="instructionRows.length === 0" class="field-hint">配置没有声明指令文件，保存人格时会写入默认的 PERSONA.md。</div>
         <div v-else class="stack-sm">
           <div v-for="file in instructionRows" :key="file.path" class="row row-wrap">
             <Icon :name="file.missing ? 'warningCircle' : 'file'" :size="14" />
             <span class="mono small">{{ file.path }}</span>
-            <span v-if="file.path === personaPath" class="badge badge-info">人格文件</span>
+            <span v-if="file.path === personaPath" class="badge badge-info">人设文件</span>
             <span v-if="file.missing" class="badge badge-warning">缺失</span>
             <span v-else class="badge badge-success">存在</span>
           </div>
@@ -313,7 +319,7 @@ function openRuntimeSession(sessionId: string): void {
       <div v-if="runtimes.length === 0" class="empty" style="padding: 26px">
         <div class="empty-mark"><Icon name="runtimes" :size="20" /></div>
         <div class="empty-title">没有活跃实例</div>
-        <p class="empty-desc">Profile 应用后，认领频道的第一条输入会创建 runtime。旧会话日志仍可在「会话日志」中查看。</p>
+        <p class="empty-desc">人格配置应用后，认领频道的第一条输入会创建运行实例。旧会话日志仍可在「会话日志」中查看。</p>
       </div>
       <div v-else class="list">
         <button
@@ -353,7 +359,7 @@ function openRuntimeSession(sessionId: string): void {
       </div>
       <div class="panel-body">
         <pre v-if="profile.persona.length > 0" class="json-block profile-persona">{{ profile.persona }}</pre>
-        <div v-else class="field-hint">人格文件为空{{ personaPath === undefined ? "或全部缺失" : "" }}。点击「编辑」可以在人格分区写入内容。</div>
+        <div v-else class="field-hint">人设文件为空{{ personaPath === undefined ? "或全部缺失" : "" }}。点击「编辑」可以在人格分区写入内容。</div>
       </div>
     </div>
   </div>
@@ -373,6 +379,50 @@ function openRuntimeSession(sessionId: string): void {
   justify-content: flex-end;
 }
 
+.profile-specs {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.7fr) minmax(0, 3fr);
+  gap: 1px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--line);
+}
+
+.profile-spec-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.profile-spec {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--surface-inset);
+}
+
+.profile-model-spec {
+  background: var(--surface-raised);
+}
+
+.profile-spec-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.profile-spec-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
 @media (max-width: 900px) {
   .profile-head {
     flex-wrap: wrap;
@@ -382,6 +432,16 @@ function openRuntimeSession(sessionId: string): void {
     width: 100%;
     margin-left: 0;
     justify-content: flex-start;
+  }
+
+  .profile-specs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .profile-spec-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>
