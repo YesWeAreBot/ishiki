@@ -64,19 +64,19 @@ export class ChannelsManager {
     return result.sort((left, right) => left.address.localeCompare(right.address));
   }
 
-  async claim(profileId: string, address: ChannelAddress, operator: string): Promise<ChannelClaimView> {
+  async claim(profileId: string, address: ChannelAddress): Promise<ChannelClaimView> {
     return this.changes.run(async () => {
       const sid = sidOf(address);
       await this.profiles.status(profileId);
       const candidate = await this.candidateFilter(profileId, sid, address.channelId, true);
       this.assertMutex(sid, candidate, new Set([profileId]));
-      await this.profiles.addChannels(profileId, sid, [address.channelId], operator);
-      await this.reapplyOrStop(profileId, operator);
+      await this.profiles.addChannels(profileId, sid, [address.channelId]);
+      await this.reapplyOrStop(profileId);
       return this.lookup(address);
     });
   }
 
-  async release(address: ChannelAddress, operator: string): Promise<ChannelClaimView> {
+  async release(address: ChannelAddress): Promise<ChannelClaimView> {
     return this.changes.run(async () => {
       const sid = sidOf(address);
       const claim = this.host.findClaim(address);
@@ -85,13 +85,13 @@ export class ChannelsManager {
         throw new ManagementError("rejected", `该频道由模式 ${claim.matchedPattern} 通配认领，请使用 ishiki.profile.channel.remove 调整模式`);
       }
       const owner = claim.profile.id;
-      await this.profiles.removeChannels(owner, sid, [address.channelId], operator);
-      await this.reapplyOrStop(owner, operator);
+      await this.profiles.removeChannels(owner, sid, [address.channelId]);
+      await this.reapplyOrStop(owner);
       return this.lookup(address);
     });
   }
 
-  async move(toProfileId: string, address: ChannelAddress, operator: string): Promise<ChannelClaimView> {
+  async move(toProfileId: string, address: ChannelAddress): Promise<ChannelClaimView> {
     return this.changes.run(async () => {
       const sid = sidOf(address);
       const claim = this.host.findClaim(address);
@@ -104,14 +104,14 @@ export class ChannelsManager {
       await this.profiles.status(toProfileId);
       const candidate = await this.candidateFilter(toProfileId, sid, address.channelId, true);
       this.assertMutex(sid, candidate, new Set([toProfileId, fromId]));
-      await this.profiles.addChannels(toProfileId, sid, [address.channelId], operator);
-      await this.profiles.removeChannels(fromId, sid, [address.channelId], operator);
+      await this.profiles.addChannels(toProfileId, sid, [address.channelId]);
+      await this.profiles.removeChannels(fromId, sid, [address.channelId]);
       // 先停来源再重应用，目标应用时来源的旧认领表已不在激活集合里；
       // 来源的认领表被清空时保持停用（空表无法激活）。
       const fromWasActive = this.host.profiles.has(fromId);
       if (fromWasActive) await this.host.deactivate(fromId);
-      await this.reapplyOrStop(toProfileId, operator);
-      if (fromWasActive && (await this.hasClaims(fromId))) await this.profiles.apply(fromId, operator);
+      await this.reapplyOrStop(toProfileId);
+      if (fromWasActive && (await this.hasClaims(fromId))) await this.profiles.apply(fromId);
       return this.lookup(address);
     });
   }
@@ -143,13 +143,13 @@ export class ChannelsManager {
   }
 
   /** 重应用受影响的激活 Profile；认领表被清空时无法再激活，停用并把 Profile 留在磁盘草稿态。 */
-  private async reapplyOrStop(profileId: string, operator: string): Promise<"applied" | "stopped" | "untouched"> {
+  private async reapplyOrStop(profileId: string): Promise<"applied" | "stopped" | "untouched"> {
     if (!this.host.profiles.has(profileId)) return "untouched";
     if (!(await this.hasClaims(profileId))) {
       await this.host.deactivate(profileId);
       return "stopped";
     }
-    await this.profiles.apply(profileId, operator);
+    await this.profiles.apply(profileId);
     return "applied";
   }
 

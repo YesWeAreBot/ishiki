@@ -12,7 +12,6 @@ import { ChangeQueue, digest, writeAtomic } from "./atomic.js";
 import { modelsSchemas } from "./catalog.js";
 import { collectSecrets, describeError, ManagementError, redact } from "./errors.js";
 import type { ManagementEventBus } from "./events.js";
-import type { AuditLog } from "./observability.js";
 import type { RuntimesManager } from "./runtimes.js";
 import type {
   GroupView,
@@ -254,7 +253,6 @@ export class ModelsManager {
   constructor(
     private readonly host: Ishiki,
     private readonly events: ManagementEventBus,
-    private readonly audit: AuditLog,
     private readonly logger: Logger,
     private readonly runtimes: RuntimesManager,
   ) {
@@ -274,8 +272,8 @@ export class ModelsManager {
     return { config: input, options: optionsOf(config) };
   }
 
-  async save(input: ModelsConfigInput, revision: string, operator: string): Promise<ModelsDocument> {
-    return this.changes.run(() => this.saveNow(input, revision, operator));
+  async save(input: ModelsConfigInput, revision: string): Promise<ModelsDocument> {
+    return this.changes.run(() => this.saveNow(input, revision));
   }
 
   async references(ref: string): Promise<{ profiles: string[]; runtimes: string[] }> {
@@ -299,13 +297,13 @@ export class ModelsManager {
     return { profiles, runtimes };
   }
 
-  async addProvider(id: string, input: ProviderInput, operator: string): Promise<ModelsDocument> {
+  async addProvider(id: string, input: ProviderInput): Promise<ModelsDocument> {
     if (!ID_PATTERN.test(id)) throw new ManagementError("invalid", `供应商标识无效: ${id}`);
     if (input.api.length === 0) throw new ManagementError("invalid", `供应商 ${id} 缺少 api 类型`);
     if (typeof input.apiKey !== "string" || input.apiKey.length === 0) {
       throw new ManagementError("invalid", `供应商 ${id} 缺少密钥，提供明文或 \${ENV} 引用后再添加`);
     }
-    return this.commit(`添加供应商 ${id}`, operator, (config) => {
+    return this.commit(`添加供应商 ${id}`, (config) => {
       if (config.providers?.[id] !== undefined) throw new ManagementError("invalid", `供应商 ${id} 已存在`);
       (config.providers ??= {})[id] = {
         api: input.api,
@@ -318,8 +316,8 @@ export class ModelsManager {
     });
   }
 
-  async setProviderField(id: string, field: "api" | "baseUrl" | "apiKey" | "headers" | "settings", value: unknown, operator: string): Promise<ModelsDocument> {
-    return this.commit(`修改供应商 ${id}`, operator, (config) => {
+  async setProviderField(id: string, field: "api" | "baseUrl" | "apiKey" | "headers" | "settings", value: unknown): Promise<ModelsDocument> {
+    return this.commit(`修改供应商 ${id}`, (config) => {
       const provider = this.providerOf(config, id);
       if (field === "api" && (typeof value !== "string" || value.length === 0)) throw new ManagementError("invalid", "api 必须是非空字符串");
       if (field === "baseUrl" && value !== undefined && typeof value !== "string") throw new ManagementError("invalid", "baseUrl 必须是字符串");
@@ -351,36 +349,36 @@ export class ModelsManager {
     });
   }
 
-  async removeProvider(id: string, operator: string): Promise<ModelsDocument> {
+  async removeProvider(id: string): Promise<ModelsDocument> {
     await this.assertNotReferenced(id, `供应商 ${id}`);
-    return this.commit(`删除供应商 ${id}`, operator, (config) => {
+    return this.commit(`删除供应商 ${id}`, (config) => {
       this.providerOf(config, id);
       this.assertGroupFree(config, `供应商 ${id}`, (member) => member.startsWith(`${id}:`));
       delete config.providers?.[id];
     });
   }
 
-  async addDecl(provider: string, decl: ModelDecl, operator: string): Promise<ModelsDocument> {
+  async addDecl(provider: string, decl: ModelDecl): Promise<ModelsDocument> {
     if (decl.id.length === 0) throw new ManagementError("invalid", "模型标识不能为空");
-    return this.commit(`添加模型 ${provider}:${decl.id}`, operator, (config) => {
+    return this.commit(`添加模型 ${provider}:${decl.id}`, (config) => {
       const target = this.providerOf(config, provider);
       if ((target.models ?? []).some((model) => model.id === decl.id)) throw new ManagementError("invalid", `模型 ${provider}:${decl.id} 已存在`);
       (target.models ??= []).push({ ...decl, type: decl.type ?? "language" });
     });
   }
 
-  async setDeclField(provider: string, modelId: string, field: string, value: unknown, operator: string): Promise<ModelsDocument> {
+  async setDeclField(provider: string, modelId: string, field: string, value: unknown): Promise<ModelsDocument> {
     if (!DECL_FIELDS.has(field)) throw new ManagementError("invalid", `不支持的字段: ${field}`);
-    return this.commit(`修改模型 ${provider}:${modelId}`, operator, (config) => {
+    return this.commit(`修改模型 ${provider}:${modelId}`, (config) => {
       const decl = this.declOf(config, provider, modelId);
       (decl as unknown as Record<string, unknown>)[field] = value;
     });
   }
 
-  async removeDecl(provider: string, modelId: string, operator: string): Promise<ModelsDocument> {
+  async removeDecl(provider: string, modelId: string): Promise<ModelsDocument> {
     const reference = `${provider}:${modelId}`;
     await this.assertNotReferenced(reference, `模型 ${reference}`);
-    return this.commit(`删除模型 ${reference}`, operator, (config) => {
+    return this.commit(`删除模型 ${reference}`, (config) => {
       this.declOf(config, provider, modelId);
       this.assertGroupFree(config, `模型 ${reference}`, (member) => member === reference);
       const target = this.providerOf(config, provider);
@@ -388,9 +386,9 @@ export class ModelsManager {
     });
   }
 
-  async addGroup(name: string, group: GroupView, operator: string): Promise<ModelsDocument> {
+  async addGroup(name: string, group: GroupView): Promise<ModelsDocument> {
     if (!ID_PATTERN.test(name)) throw new ManagementError("invalid", `模型组名称无效: ${name}`);
-    return this.commit(`添加模型组 ${name}`, operator, (config) => {
+    return this.commit(`添加模型组 ${name}`, (config) => {
       if (config.groups?.[name] !== undefined) throw new ManagementError("invalid", `模型组 ${name} 已存在`);
       if (group.strategy !== undefined && !GROUP_STRATEGIES.includes(group.strategy as (typeof GROUP_STRATEGIES)[number])) {
         throw new ManagementError("invalid", `策略无效: ${group.strategy}`);
@@ -399,8 +397,8 @@ export class ModelsManager {
     });
   }
 
-  async setGroupField(name: string, field: "strategy" | "models", value: unknown, operator: string): Promise<ModelsDocument> {
-    return this.commit(`修改模型组 ${name}`, operator, (config) => {
+  async setGroupField(name: string, field: "strategy" | "models", value: unknown): Promise<ModelsDocument> {
+    return this.commit(`修改模型组 ${name}`, (config) => {
       const group = this.groupOf(config, name);
       if (field === "strategy") {
         if (typeof value !== "string" || !GROUP_STRATEGIES.includes(value as (typeof GROUP_STRATEGIES)[number])) {
@@ -414,15 +412,15 @@ export class ModelsManager {
     });
   }
 
-  async removeGroup(name: string, operator: string): Promise<ModelsDocument> {
+  async removeGroup(name: string): Promise<ModelsDocument> {
     await this.assertNotReferenced(name, `模型组 ${name}`);
-    return this.commit(`删除模型组 ${name}`, operator, (config) => {
+    return this.commit(`删除模型组 ${name}`, (config) => {
       this.groupOf(config, name);
       delete config.groups?.[name];
     });
   }
 
-  async probe(ref: string, operator: string): Promise<{ ok: boolean; latencyMs: number; detail?: string }> {
+  async probe(ref: string): Promise<{ ok: boolean; latencyMs: number; detail?: string }> {
     let model: LanguageModelV4;
     try {
       model = this.host.gateway.languageModel(ref);
@@ -437,14 +435,6 @@ export class ModelsManager {
     } catch (error) {
       result = { ok: false, latencyMs: Date.now() - started, detail: describeError(error).message };
     }
-    await this.audit.append({
-      kind: "models.probe",
-      operator,
-      summary: `连接测试 ${ref}`,
-      result: result.ok ? "ok" : "failed",
-      target: ref,
-      detail: { latencyMs: result.latencyMs },
-    });
     return result;
   }
 
@@ -512,14 +502,43 @@ export class ModelsManager {
     return { provider, models };
   }
 
-  private async saveNow(input: ModelsConfigInput, revision: string, operator: string): Promise<ModelsDocument> {
+  private async saveNow(input: ModelsConfigInput, revision: string): Promise<ModelsDocument> {
+    const text = await this.readText();
+    if (digest(text) !== revision) {
+      throw new ManagementError("conflict", "模型配置已被其他操作者修改，请刷新后重试");
+    }
+    const previous = this.parse(text);
+    const config = normalize(input, previous);
+    this.build(config);
+    const next = stringify(config, { lineWidth: 0 });
+    await writeAtomic(this.file, next);
+
     try {
+      this.host.gateway.reconfigure(config);
+    } catch (error) {
+      await writeAtomic(this.file, text);
+      throw new ManagementError("failed", redact(`网关重新配置失败: ${describeError(error).message}`, collectSecrets(config)));
+    }
+
+    const document = this.document(next, config);
+    this.logger.info("models configuration saved");
+    this.events.emit("models.changed", {
+      revision: document.revision,
+      providers: document.providers.map((provider) => provider.id),
+      groups: document.groups.map((group) => group.name),
+      models: document.options.map((option) => option.reference),
+    });
+    return document;
+  }
+
+  /** 窄修改统一入口：队列内读最新文本、改副本、干跑校验、落盘、重配网关、事件。 */
+  private commit(summary: string, mutate: (config: MutableConfig) => void): Promise<ModelsDocument> {
+    return this.changes.run(async () => {
       const text = await this.readText();
-      if (digest(text) !== revision) {
-        throw new ManagementError("conflict", "模型配置已被其他操作者修改，请刷新后重试");
-      }
       const previous = this.parse(text);
-      const config = normalize(input, previous);
+      const draft = structuredClone(previous) as unknown as MutableConfig;
+      mutate(draft);
+      const config = normalize({ providers: draft.providers ?? {}, groups: draft.groups ?? {} } as unknown as ModelsConfigInput, previous);
       this.build(config);
       const next = stringify(config, { lineWidth: 0 });
       await writeAtomic(this.file, next);
@@ -532,19 +551,7 @@ export class ModelsManager {
       }
 
       const document = this.document(next, config);
-      this.logger.info("models configuration saved");
-      await this.audit.append({
-        kind: "models.save",
-        operator,
-        summary: "保存模型配置",
-        result: "ok",
-        target: this.file,
-        revision: document.revision,
-        detail: {
-          providers: document.providers.map((provider) => provider.id),
-          groups: document.groups.map((group) => group.name),
-        },
-      });
+      this.logger.info(`models configuration updated: ${summary}`);
       this.events.emit("models.changed", {
         revision: document.revision,
         providers: document.providers.map((provider) => provider.id),
@@ -552,69 +559,6 @@ export class ModelsManager {
         models: document.options.map((option) => option.reference),
       });
       return document;
-    } catch (error) {
-      await this.audit.append({
-        kind: "models.save",
-        operator,
-        summary: "保存模型配置",
-        result: "failed",
-        target: this.file,
-        revision,
-        error: redact(describeError(error).message, collectSecrets(input)),
-      });
-      throw error;
-    }
-  }
-
-  /** 窄修改统一入口：队列内读最新文本、改副本、干跑校验、落盘、重配网关、审计、事件。 */
-  private commit(summary: string, operator: string, mutate: (config: MutableConfig) => void): Promise<ModelsDocument> {
-    return this.changes.run(async () => {
-      let text = "";
-      try {
-        text = await this.readText();
-        const previous = this.parse(text);
-        const draft = structuredClone(previous) as unknown as MutableConfig;
-        mutate(draft);
-        const config = normalize({ providers: draft.providers ?? {}, groups: draft.groups ?? {} } as unknown as ModelsConfigInput, previous);
-        this.build(config);
-        const next = stringify(config, { lineWidth: 0 });
-        await writeAtomic(this.file, next);
-
-        try {
-          this.host.gateway.reconfigure(config);
-        } catch (error) {
-          await writeAtomic(this.file, text);
-          throw new ManagementError("failed", redact(`网关重新配置失败: ${describeError(error).message}`, collectSecrets(config)));
-        }
-
-        const document = this.document(next, config);
-        this.logger.info(`models configuration updated: ${summary}`);
-        await this.audit.append({
-          kind: "models.save",
-          operator,
-          summary,
-          result: "ok",
-          target: this.file,
-          revision: document.revision,
-        });
-        this.events.emit("models.changed", {
-          revision: document.revision,
-          providers: document.providers.map((provider) => provider.id),
-          groups: document.groups.map((group) => group.name),
-          models: document.options.map((option) => option.reference),
-        });
-        return document;
-      } catch (error) {
-        await this.audit.append({
-          kind: "models.save",
-          operator,
-          summary,
-          result: "failed",
-          target: this.file,
-          error: redact(describeError(error).message, []),
-        });
-        throw error;
-      }
     });
   }
 

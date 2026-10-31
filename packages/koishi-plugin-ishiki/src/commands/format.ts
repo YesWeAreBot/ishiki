@@ -144,23 +144,13 @@ export function formatChannelList(views: ChannelClaimView[]): string {
     .join("\n");
 }
 
-export function formatStatusOverview(input: {
-  activeProfiles: string[];
-  runtimeCounts: Record<RuntimeState, number>;
-  providers: number;
-  lastFailed?: { summary: string; error?: string; timestamp: number };
-}): string {
+export function formatStatusOverview(input: { activeProfiles: string[]; runtimeCounts: Record<RuntimeState, number>; providers: number }): string {
   const counts = (Object.keys(input.runtimeCounts) as RuntimeState[]).map((state) => `${RUNTIME_STATES[state]} ${input.runtimeCounts[state]}`).join(" · ");
   const lines = [
     `激活 Profile：${input.activeProfiles.length}${input.activeProfiles.length > 0 ? `（${input.activeProfiles.join("、")}）` : ""}`,
     `Runtime：${counts}`,
     `网关供应商：${input.providers} 个`,
   ];
-  if (input.lastFailed !== undefined) {
-    lines.push(
-      `最近失败记录：${input.lastFailed.summary}${input.lastFailed.error === undefined ? "" : `：${input.lastFailed.error}`}（${when(input.lastFailed.timestamp)}）`,
-    );
-  }
   return lines.join("\n");
 }
 

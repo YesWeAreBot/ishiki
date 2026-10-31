@@ -165,12 +165,12 @@ Developers have three extension points:
 
 ## Management console
 
-The published plugin package already includes the console assets. With `@koishijs/plugin-console` enabled alongside this plugin, the console registers a single Ishiki entry. Models, profiles, sessions, runtimes, usage, audit and cache pages switch through the in-page sidebar. Pages read snapshots from `src/management/` and write through authority-checked console listeners.
+The published plugin package already includes the console assets. With `@koishijs/plugin-console` enabled alongside this plugin, the console registers a single Ishiki entry. Models, profiles, sessions, runtimes, usage and cache pages switch through the in-page sidebar. Pages read snapshots from `src/management/` and write through authority-checked console listeners.
 
-- Model saves compare a revision digest and replace `models.yaml` atomically. Secrets report configuration state only; plaintext never reaches pages, logs or audit records.
+- Model saves compare a revision digest and replace `models.yaml` atomically. Secrets report configuration state only; plaintext never reaches pages or logs.
 - Profile save and apply are separate: save writes files, apply re-resolves the config and rebuilds the runtime. Removal requires typing the full profile id.
 - Sessions page through `events.jsonl` with byte cursors; corrupt lines are reported individually while the remaining entries stay readable.
-- Usage and audit come from real messages and lifecycle events; missing cache data produces an explicit status.
+- Usage comes from real messages and lifecycle events; missing cache data produces an explicit status.
 
 Only rebuild the console bundle in a development environment after changing files under `client/`:
 

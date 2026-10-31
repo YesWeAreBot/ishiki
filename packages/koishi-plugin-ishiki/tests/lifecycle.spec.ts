@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import Ishiki from "../src/index.js";
 import { resolveProfile } from "../src/profile/config.js";
+import { JEV_TRACE_SERVICE } from "../src/wakeup/jev.engine.js";
 
 describe("Ishiki profile and runtime lifecycle", () => {
   let app: App | undefined;
@@ -43,6 +44,8 @@ describe("Ishiki profile and runtime lifecycle", () => {
     app.plugin(Ishiki, { dataPath, dumpRequests: false, debugStream: false, logLevel: 0 });
     await app.start();
     const service = app.get("ishiki");
+    expect(app.get("ishiki.engine.wakeup.jev")).toBeDefined();
+    expect(app.get(JEV_TRACE_SERVICE)).toBeDefined();
     const profileRoot = path.join(dataPath, "profiles", "test-profile");
     await mkdir(profileRoot, { recursive: true });
     const profile = resolveProfile({ model: "mock:vision", mode: "channel", channels: { "test:bot": ["*"] } }, "test-profile", profileRoot);

@@ -3,7 +3,7 @@ import type { Command, Context } from "koishi";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import type { RuntimeState } from "../management/types.js";
-import { CONFIRM_OPTION, confirm, operatorOf, optionNumber, optionText, positional } from "./context.js";
+import { CONFIRM_OPTION, confirm, optionNumber, optionText, positional } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatEnginesDirectory, formatExtensionsDirectory, formatSessionList, formatStatusOverview } from "./format.js";
 import { sessionAddress } from "./targets.js";
@@ -18,13 +18,11 @@ export function registerEngineCommands(_ctx: Context, host: Ishiki, root: Comman
       const views = host.management.runtimes.list();
       const counts: Record<RuntimeState, number> = { idle: 0, running: 0, stopped: 0, failed: 0 };
       for (const view of views) counts[view.state] += 1;
-      const lastFailed = (await host.management.audit.query({ limit: 100 })).records.find((record) => record.result === "failed");
       const providers = (await host.management.models.read()).providers.length;
       return formatStatusOverview({
         activeProfiles: [...host.profiles.keys()],
         runtimeCounts: counts,
         providers,
-        lastFailed: lastFailed === undefined ? undefined : { summary: lastFailed.summary, error: lastFailed.error, timestamp: lastFailed.timestamp },
       });
     }),
   );
@@ -59,7 +57,7 @@ export function registerEngineCommands(_ctx: Context, host: Ishiki, root: Comman
         const plan = await host.management.sessions.planArchive(id);
         const proceed = await confirm(argv, `将把会话 ${id} 的 ${plan.files.join("、")} 移到实例 archives 目录，归档后该会话不再出现在会话列表`);
         if (proceed !== true) return proceed;
-        const result = await host.management.sessions.archive(plan, operatorOf(argv.session));
+        const result = await host.management.sessions.archive(plan);
         return `已归档会话 ${id}（${result.files.join("、")}）到 ${result.path}`;
       }),
     );

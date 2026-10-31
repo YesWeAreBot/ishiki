@@ -18,8 +18,8 @@ async function executeWithReply(setup: TestSetup, userId: string, command: strin
   return lastOutput(setup);
 }
 
-async function applyProfile(setup: TestSetup, id: string, operator = "alice"): Promise<void> {
-  await setup.host.management.profiles.apply(id, `command:test:${operator}`);
+async function applyProfile(setup: TestSetup, id: string): Promise<void> {
+  await setup.host.management.profiles.apply(id);
 }
 
 describe("ishiki commands", () => {
@@ -96,7 +96,7 @@ describe("ishiki commands", () => {
       expect(lastOutput(setup)).toContain("被引用");
       expect((await setup.host.management.models.read()).providers.map((provider) => provider.id)).toContain("mock");
 
-      await setup.host.management.profiles.setField("demo", "model", "", "command:test:carol");
+      await setup.host.management.profiles.setField("demo", "model", "");
       const output = await executeWithReply(setup, "carol", "ishiki.model.provider.remove mock", "确认");
       expect(output).toContain("已删除供应商 mock");
       expect((await setup.host.management.models.read()).providers).toHaveLength(0);
@@ -269,8 +269,6 @@ describe("ishiki commands", () => {
       const output = await executeWithReply(setup, "carol", "ishiki.profile.remove demo", "不");
       expect(output).toContain("操作已取消");
       expect(existsSync(path.join(setup.dataPath, "profiles", "demo", "profile.yml"))).toBe(true);
-      const audit = await setup.host.management.audit.query({ kind: "profile.remove" });
-      expect(audit.records).toHaveLength(0);
     } finally {
       await setup.stop();
     }
@@ -320,7 +318,6 @@ describe("ishiki commands", () => {
       expect(readdirSync(archived).sort()).toEqual(["events.jsonl", "resources"]);
       expect(existsSync(path.join(archived, "resources", "assets", "note.json"))).toBe(true);
       expect((await setup.host.management.sessions.list()).some((session) => session.id === sessionId)).toBe(false);
-      expect((await setup.host.management.audit.query({ kind: "session.archive" })).records).toHaveLength(1);
     } finally {
       await setup.stop();
     }
@@ -359,7 +356,7 @@ describe("ishiki commands", () => {
     }
   });
 
-  it("never prints plaintext secrets in command output or audit logs", async () => {
+  it("never prints plaintext secrets in command output", async () => {
     const setup = await startApp({
       users: [
         { id: "alice", authority: 2 },
@@ -374,10 +371,8 @@ describe("ishiki commands", () => {
       await setup.session("alice").execute("ishiki.status");
       await setup.session("carol").execute("ishiki.model.provider.remove mock");
       expect(lastOutput(setup)).toContain("被引用");
-      const audit = await setup.host.management.audit.query({});
       const outputs = setup.outputs().join("\n");
       expect(outputs).not.toContain(SECRET);
-      expect(JSON.stringify(audit)).not.toContain(SECRET);
       expect(readFileSync(path.join(setup.dataPath, "models.yaml"), "utf8")).toContain(SECRET);
     } finally {
       await setup.stop();

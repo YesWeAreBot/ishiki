@@ -5,7 +5,7 @@ import type { Command, Context } from "koishi";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import { overlaps, readProfileRaw, resolveProfile, type ChannelFilter } from "../profile/index.js";
-import { CONFIRM_OPTION, confirm, hasAuthority, operatorOf, optionText, positional } from "./context.js";
+import { CONFIRM_OPTION, confirm, hasAuthority, optionText, positional } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatChannelClaim, formatChannelList } from "./format.js";
 import { resolveChannelAddress } from "./targets.js";
@@ -83,7 +83,7 @@ export function registerChannelCommands(_ctx: Context, host: Ishiki, root: Comma
       const explicit = positional(argv, 1);
       if (profileId === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
       const address = resolveChannelAddress(explicit, argv.session);
-      const view = await channels.claim(profileId, address, operatorOf(argv.session));
+      const view = await channels.claim(profileId, address);
       return `${formatChannelClaim(view)}\n归属变更完成，受影响的激活 Profile 已重应用。`;
     }),
   );
@@ -98,7 +98,7 @@ export function registerChannelCommands(_ctx: Context, host: Ishiki, root: Comma
         const current = await channels.lookup(address);
         const proceed = await confirm(argv, `将把 ${current.address} 从 Profile ${current.profileId ?? "（无归属）"} 的认领表移除，其 Runtime 将停止并重应用`);
         if (proceed !== true) return proceed;
-        const view = await channels.release(address, operatorOf(argv.session));
+        const view = await channels.release(address);
         return `${formatChannelClaim(view)}\n释放完成。`;
       }),
     );
@@ -120,7 +120,7 @@ export function registerChannelCommands(_ctx: Context, host: Ishiki, root: Comma
           `频道 ${current.address}：Profile ${current.profileId} → Profile ${profileId}，${current.profileId} 的 ${affected} 个 Runtime 将停止重建`,
         );
         if (proceed !== true) return proceed;
-        const view = await channels.move(profileId, address, operatorOf(argv.session));
+        const view = await channels.move(profileId, address);
         return `${formatChannelClaim(view)}\n迁移完成。`;
       }),
     );

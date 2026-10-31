@@ -71,7 +71,7 @@ describe("contributed standard context commands", () => {
         channels: { "test:10001": ["*"] },
         context: { engine: "standard", standard: { maxTokens: 1000, refillRatio: 0.8 } },
       });
-      await setup.host.management.profiles.apply("tiny", "command:test:alice");
+      await setup.host.management.profiles.apply("tiny");
       const runtime = crossRuntime(setup, "tiny");
       const throughEntryId = await seedOversizedSummary(setup, runtime);
 
@@ -108,7 +108,7 @@ describe("contributed standard context commands", () => {
         channels: { "test:10001": ["*"] },
         context: { engine: "probe" },
       });
-      await setup.host.management.profiles.apply("probed", "command:test:alice");
+      await setup.host.management.profiles.apply("probed");
       crossRuntime(setup, "probed");
 
       for (const command of ["usage", "summary", "compact"]) {
@@ -143,7 +143,7 @@ describe("contributed standard context commands", () => {
     }
   });
 
-  it("rejects read commands on offline runtimes and audits every contributed execution", async () => {
+  it("rejects read commands on offline runtimes", async () => {
     const setup = await startApp({ users: [{ id: "alice", authority: 2 }] });
     try {
       await writeProfile(setup.dataPath, "tiny", {
@@ -152,14 +152,12 @@ describe("contributed standard context commands", () => {
         channels: { "test:10001": ["*"] },
         context: { engine: "standard", standard: { maxTokens: 1000 } },
       });
-      await setup.host.management.profiles.apply("tiny", "command:test:alice");
+      await setup.host.management.profiles.apply("tiny");
       const runtime = crossRuntime(setup, "tiny");
       await seedOversizedSummary(setup, runtime);
 
       await setup.session("alice").execute("ishiki.standard.usage tiny/main");
       expect(lastOutput(setup)).toContain("tiny/main");
-      const audit = await setup.host.management.audit.query({ kind: "command.ishiki.standard.usage" });
-      expect(audit.records.filter((record) => record.result === "ok").length).toBeGreaterThan(0);
 
       await setup.host.deactivateRuntime("tiny/main");
       await setup.session("alice").execute("ishiki.standard.usage tiny/main");
@@ -167,8 +165,6 @@ describe("contributed standard context commands", () => {
 
       const outputs = setup.outputs().join("\n");
       expect(outputs).not.toContain(SECRET);
-      const all = await setup.host.management.audit.query({});
-      expect(JSON.stringify(all)).not.toContain(SECRET);
     } finally {
       await setup.stop();
     }

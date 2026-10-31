@@ -3,7 +3,6 @@ import { Service, type Context } from "koishi";
 import Schema from "schemastery";
 
 import type { ExtensionHost } from "../extension.js";
-import { JevTraceStore } from "../management/jev-trace.js";
 import type { EngineConfig } from "../profile/index.js";
 import type { IshikiMessageCreated, IshikiMessageDeleted } from "../types/messages.js";
 import { WakeupEngine, atSelf, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
@@ -680,8 +679,8 @@ export class JevWakeupInstance implements WakeupEngineInstance {
   private readonly rules: JevRules;
   private readonly channels = new Map<string, Channel>();
   private readonly frequency: ReturnType<typeof getJevFrequencyLedger>;
-  private readonly traceStore: JevTraceStore;
-  constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionHost, traceStore = new JevTraceStore()) {
+  private readonly traceStore: JevTrace;
+  constructor(config: Partial<JevWakeupConfig> = {}, context: ExtensionHost, traceStore: JevTrace) {
     this.config = {
       ...DEFAULT,
       ...config,
@@ -1380,17 +1379,162 @@ declare module "./engine.js" {
 }
 export class JevWakeupEngine extends WakeupEngine<"jev"> {
   readonly Schema = JevWakeupConfig;
-  readonly trace = new JevTraceStore();
+  private readonly trace = new JevTraceStore();
   constructor(ctx: Context) {
     super(ctx, "jev");
+    ctx.set(JEV_TRACE_SERVICE, this.trace);
   }
   public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, "jev">>): WakeupEngineInstance {
     return new JevWakeupInstance(config.jev ?? {}, host, this.trace);
   }
 }
 
-export function getJevTrace(ctx: Context): JevTraceStore {
-  const engine = WakeupEngine.GetService(ctx, "jev");
-  if (!(engine instanceof JevWakeupEngine)) throw new Error("JEV wakeup engine is not available");
-  return engine.trace;
+/** jev 引擎自注册的轨迹服务键；消费方经 ctx.get 依赖此抽象，而非具体实现。 */
+export const JEV_TRACE_SERVICE = "ishiki.jevTrace" as const;
+
+export const JEV_TRACE_CAPACITY = 200;
+
+export type JevMode = "reply" | "join" | "wait";
+
+/** 一次 JEV 判定的语义证据：relation 是五选一的概率分布，其余是各自独立的布尔概率。 */
+export interface JevEvidenceView {
+  relation: Record<string, number>;
+  ready: number;
+  receptive: number;
+  worthwhile: number;
+  social: number;
+  withdrawn: number;
+  closed: number;
+  interested: number;
+}
+
+/** 参与判定的一条待判消息，保留原始作者与内容，便于对照。 */
+export interface JevMessageView {
+  author: string;
+  text: string;
+  at: number;
+  self: boolean;
+  mentionsBot: boolean;
+}
+
+/** 判定链上的一条规则；ok=false 表示就是它拦下了这次发言。 */
+export interface JevStepView {
+  key: string;
+  ok: boolean;
+  stop?: boolean;
+  value?: number;
+  line?: number;
+}
+
+/** 判定时的关键配置，用来解释门槛从哪来。 */
+export interface JevConfigView {
+  style: string;
+  threshold: number;
+  addressedThreshold: number;
+  cooldownMs: number;
+  globalCooldownMs: number;
+  minIntervalMs: number;
+  maxParticipation: number;
+  maxConsecutiveReplies: number;
+  prefilter: string;
+}
+
+/** 一行模型可见的消息，用于展示判定时到底喂了什么。 */
+export interface JevLineView {
+  author: string;
+  text: string;
+  isBot: boolean;
+  mentionsBot: boolean;
+  secondsAgo: number;
+}
+
+/** 一次判定时交给模型的上下文快照。 */
+export interface JevContextView {
+  scene: string;
+  secondsSinceBotLastSpoke?: number;
+  focus?: JevLineView;
+  pending: JevLineView[];
+  recent: JevLineView[];
+  focusAuthor: string[];
+}
+
+/** 一次判定记录：模型证据与本地规则的结论放在一起，便于对照门槛看为什么没说话。 */
+export interface JevDecisionView {
+  id: string;
+  at: number;
+  runtimeId: string;
+  channelId: string;
+  mode: JevMode;
+  reason: string;
+  relation: string;
+  probability: number;
+  threshold: number;
+  focused: string;
+  pendingCount: number;
+  durationMs: number;
+  evidence?: JevEvidenceView;
+  /** 本批实际待判的消息（有上限，避免观测占用过多内存）。 */
+  messages?: JevMessageView[];
+  /** 逐条规则链，按执行顺序。 */
+  steps?: JevStepView[];
+  /** 判定当时的档位与关键限制。 */
+  config?: JevConfigView;
+  /** 模型实际拿到的上下文（有上限）。 */
+  context?: JevContextView;
+  /** 未调用模型、由本地预筛直接跳过时为 true。 */
+  prefiltered?: boolean;
+  error?: string;
+}
+
+export interface JevSnapshot {
+  decisions: JevDecisionView[];
+  collectedAt: number;
+}
+
+export interface JevTrace {
+  record(record: JevDecisionView): void;
+  snapshot(): JevSnapshot;
+  subscribe(listener: (record: JevDecisionView) => void): () => void;
+}
+
+export function requireJevTrace(ctx: Context): JevTrace {
+  const trace = ctx.get(JEV_TRACE_SERVICE);
+  if (trace === undefined) throw new Error(`service "${JEV_TRACE_SERVICE}" is not available`);
+  return trace;
+}
+
+declare module "koishi" {
+  interface Context {
+    "ishiki.jevTrace": JevTrace | undefined;
+  }
+}
+
+/** JEV 决策环形缓冲：只保留最近若干次判定供控制台读取。 */
+export class JevTraceStore implements JevTrace {
+  private readonly records: JevDecisionView[] = [];
+  private readonly listeners = new Set<(record: JevDecisionView) => void>();
+
+  public record(record: JevDecisionView): void {
+    this.records.push(record);
+    if (this.records.length > JEV_TRACE_CAPACITY) this.records.splice(0, this.records.length - JEV_TRACE_CAPACITY);
+    for (const listener of this.listeners) {
+      try {
+        listener(record);
+      } catch {
+        // 观测端异常不影响判定链路。
+      }
+    }
+  }
+
+  /** 最新在前，控制台按时间倒序展示。 */
+  public snapshot(): JevSnapshot {
+    return { decisions: [...this.records].reverse(), collectedAt: Date.now() };
+  }
+
+  public subscribe(listener: (record: JevDecisionView) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
 }

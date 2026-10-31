@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type Ishiki from "../index.js";
@@ -7,74 +7,12 @@ import { ResourceStore } from "../resource/store.js";
 import { writeAtomic } from "./atomic.js";
 import { baseReference } from "./reference.js";
 import type { SessionsManager } from "./sessions.js";
-import type {
-  AuditFilters,
-  AuditRecord,
-  AuditSnapshot,
-  CacheSnapshot,
-  PromptCacheRow,
-  ResourceCacheRow,
-  UsageFilters,
-  UsageRecord,
-  UsageSnapshot,
-  UsageTotals,
-} from "./types.js";
-
-type AuditInput = Omit<AuditRecord, "id" | "timestamp">;
+import type { CacheSnapshot, PromptCacheRow, ResourceCacheRow, UsageFilters, UsageRecord, UsageSnapshot, UsageTotals } from "./types.js";
 
 /** 会话标识可能来自目录名或运行时标识，用条目本身的主键去重。 */
 function usageKey(record: UsageRecord): string {
   const tail = record.id.slice(record.id.lastIndexOf(":") + 1);
   return `${record.source}:${tail}`;
-}
-
-export class AuditLog {
-  private readonly file: string;
-  private cache: { size: number; mtimeMs: number; records: AuditRecord[] } | undefined;
-
-  constructor(dataPath: string) {
-    this.file = path.join(dataPath, "audit.jsonl");
-  }
-
-  public async append(input: AuditInput): Promise<AuditRecord> {
-    const record: AuditRecord = { ...input, id: crypto.randomUUID(), timestamp: Date.now() };
-    await mkdir(path.dirname(this.file), { recursive: true });
-    await appendFile(this.file, `${JSON.stringify(record)}\n`, "utf8");
-    this.cache = undefined;
-    return record;
-  }
-
-  public async query(filters: AuditFilters = {}): Promise<AuditSnapshot> {
-    const records = await this.load();
-    const limit = filters.limit ?? 200;
-    const matched = records.filter((record) => {
-      if (filters.kind !== undefined && record.kind !== filters.kind) return false;
-      if (filters.profileId !== undefined && record.profileId !== filters.profileId) return false;
-      if (filters.operator !== undefined && record.operator !== filters.operator) return false;
-      if (filters.from !== undefined && record.timestamp < filters.from) return false;
-      if (filters.to !== undefined && record.timestamp > filters.to) return false;
-      return true;
-    });
-    return { records: matched.sort((left, right) => right.timestamp - left.timestamp).slice(0, limit), capacity: records.length };
-  }
-
-  private async load(): Promise<AuditRecord[]> {
-    if (!existsSync(this.file)) return [];
-    const info = await stat(this.file);
-    if (this.cache !== undefined && this.cache.size === info.size && this.cache.mtimeMs === info.mtimeMs) return this.cache.records;
-    const text = await readFile(this.file, "utf8");
-    const records: AuditRecord[] = [];
-    for (const line of text.split("\n")) {
-      if (line.length === 0) continue;
-      try {
-        records.push(JSON.parse(line) as AuditRecord);
-      } catch {
-        // 审计日志损坏的一行不能阻断其余记录。
-      }
-    }
-    this.cache = { size: info.size, mtimeMs: info.mtimeMs, records };
-    return records;
-  }
 }
 
 export class UsageLedger {

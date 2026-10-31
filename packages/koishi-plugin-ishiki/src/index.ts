@@ -146,6 +146,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
 
     this.management = new Management(this, ctx, this.logger);
     this.commands = new IshikiCommands(this, ctx);
+    // 轨迹服务由 JevWakeupEngine 自注册；控制台只在面板内部等待它，装载顺序互不牵制。
     ctx.inject(["console"], (ctx) => installConsole(ctx, this));
     if (config.commands.enable) ctx.inject(["ishiki"], (ctx) => installCommands(ctx, this, config.commands));
 

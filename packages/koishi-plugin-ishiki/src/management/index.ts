@@ -6,7 +6,7 @@ import { enginesDirectory, extensionsDirectory } from "./catalog.js";
 import { ChannelsManager } from "./channels.js";
 import { ManagementEventBus } from "./events.js";
 import { ModelsManager } from "./models.js";
-import { AuditLog, CacheReporter, UsageLedger } from "./observability.js";
+import { CacheReporter, UsageLedger } from "./observability.js";
 import { ProfilesManager } from "./profiles.js";
 import { RuntimesManager } from "./runtimes.js";
 import { SessionsManager } from "./sessions.js";
@@ -18,7 +18,6 @@ export type { ManagementEvents } from "./events.js";
 /** 核心运行时对外管理能力的入口；控制台与指令层只通过这里读取和修改状态。 */
 export class Management {
   public readonly events = new ManagementEventBus();
-  public readonly audit: AuditLog;
   public readonly sessions: SessionsManager;
   public readonly runtimes: RuntimesManager;
   public readonly profiles: ProfilesManager;
@@ -32,12 +31,11 @@ export class Management {
     private readonly ctx: Context,
     private readonly logger: Logger,
   ) {
-    this.audit = new AuditLog(host.dataPath);
     this.sessions = new SessionsManager(host, this.events);
-    this.runtimes = new RuntimesManager(host, this.events, this.audit, this.sessions, logger);
+    this.runtimes = new RuntimesManager(host, this.events, this.sessions);
     this.usage = new UsageLedger(host.dataPath, this.sessions);
-    this.models = new ModelsManager(host, this.events, this.audit, logger, this.runtimes);
-    this.profiles = new ProfilesManager(host, ctx, this.events, this.audit, this.sessions, this.usage, this.runtimes, this.models, logger);
+    this.models = new ModelsManager(host, this.events, logger, this.runtimes);
+    this.profiles = new ProfilesManager(host, ctx, this.events, this.sessions, this.usage, this.runtimes, this.models, logger);
     this.channels = new ChannelsManager(host, this.profiles, this.runtimes);
     this.cache = new CacheReporter(host, this.sessions, this.usage);
   }

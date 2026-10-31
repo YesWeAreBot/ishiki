@@ -13,7 +13,7 @@ import { describeError, ManagementError, redact } from "./errors.js";
 import type { ManagementEventBus } from "./events.js";
 import { isRecord } from "./guards.js";
 import type { ModelsManager } from "./models.js";
-import type { AuditLog, UsageLedger } from "./observability.js";
+import type { UsageLedger } from "./observability.js";
 import type { RuntimesManager } from "./runtimes.js";
 import type { SessionsManager } from "./sessions.js";
 import type { ProfileCheckReport, ProfileSaveInput, ProfileState, ProfileStatus, ProfileSummary, ProfileView } from "./types.js";
@@ -69,7 +69,6 @@ export class ProfilesManager {
     private readonly host: Ishiki,
     private readonly ctx: Context,
     private readonly events: ManagementEventBus,
-    private readonly audit: AuditLog,
     private readonly sessions: SessionsManager,
     private readonly usage: UsageLedger,
     private readonly runtimes: RuntimesManager,
@@ -123,7 +122,7 @@ export class ProfilesManager {
     };
   }
 
-  async save(id: string, input: ProfileSaveInput, revision: string, operator: string): Promise<ProfileView> {
+  async save(id: string, input: ProfileSaveInput, revision: string): Promise<ProfileView> {
     assertId(id);
     return this.changes.run(async () => {
       const loaded = await this.load(id);
@@ -144,29 +143,20 @@ export class ProfilesManager {
       if (target !== undefined && input.persona !== undefined) await writeAtomic(target, input.persona);
 
       const next = await this.read(id);
-      await this.audit.append({
-        kind: "profile.save",
-        operator,
-        summary: `保存 Profile ${id}`,
-        result: "ok",
-        profileId: id,
-        target: id,
-        revision: next.revision,
-      });
       this.events.emit("profiles.changed", { profileId: id, revision: next.revision });
       return next;
     });
   }
 
-  async apply(id: string, operator: string): Promise<ProfileView> {
-    return this.changes.run(() => this.activate(id, operator, "profile.apply", "应用 Profile"));
+  async apply(id: string): Promise<ProfileView> {
+    return this.changes.run(() => this.activate(id));
   }
 
-  async reload(id: string, operator: string): Promise<ProfileView> {
-    return this.changes.run(() => this.activate(id, operator, "profile.reload", "重新加载 Profile"));
+  async reload(id: string): Promise<ProfileView> {
+    return this.changes.run(() => this.activate(id));
   }
 
-  async stop(id: string, operator: string): Promise<ProfileStatus> {
+  async stop(id: string): Promise<ProfileStatus> {
     assertId(id);
     return this.changes.run(async () => {
       try {
@@ -174,71 +164,36 @@ export class ProfilesManager {
       } catch (error) {
         const message = this.describe(error);
         this.errors.set(id, message);
-        await this.audit.append({
-          kind: "profile.stop",
-          operator,
-          summary: `停止 Profile ${id}`,
-          result: "failed",
-          profileId: id,
-          target: id,
-          error: message,
-        });
         throw new ManagementError("failed", message);
       }
       this.errors.delete(id);
-      await this.audit.append({
-        kind: "profile.stop",
-        operator,
-        summary: `停止 Profile ${id}`,
-        result: "ok",
-        profileId: id,
-        target: id,
-      });
       this.events.emit("profiles.changed", { profileId: id });
       return this.status(id);
     });
   }
 
-  async remove(id: string, operator: string): Promise<void> {
+  async remove(id: string): Promise<void> {
     assertId(id);
     return this.changes.run(async () => {
       if (this.host.profiles.has(id)) {
         throw new ManagementError("rejected", "Profile 正在运行，先停止再删除");
       }
-      const loaded = await this.load(id);
+      await this.load(id);
       await this.usage.sync();
       try {
         await rm(path.join(this.root, id), { recursive: true, force: true });
       } catch (error) {
         const message = `删除 Profile 失败: ${this.describe(error)}`;
-        await this.audit.append({
-          kind: "profile.remove",
-          operator,
-          summary: `删除 Profile ${id}`,
-          result: "failed",
-          profileId: id,
-          target: id,
-          error: message,
-        });
         throw new ManagementError("failed", message);
       }
       this.appliedAt.delete(id);
       this.errors.delete(id);
-      await this.audit.append({
-        kind: "profile.remove",
-        operator,
-        summary: `删除 Profile ${id}`,
-        result: "ok",
-        profileId: id,
-        target: id,
-        revision: digest(loaded.text),
-      });
       this.events.emit("profiles.changed", { profileId: id });
     });
   }
 
   /** 控制台创建入口：接收完整配置与人格文本，目录已存在即拒绝，不会留下半成品。 */
-  async createFromInput(id: string, input: ProfileSaveInput, operator: string): Promise<ProfileView> {
+  async createFromInput(id: string, input: ProfileSaveInput): Promise<ProfileView> {
     assertId(id);
     return this.changes.run(async () => {
       const directory = path.join(this.root, id);
@@ -257,29 +212,18 @@ export class ProfilesManager {
       await writeAtomic(path.join(directory, "profile.yml"), stringify(config, { lineWidth: 0 }));
       if (target !== undefined) await writeAtomic(target, input.persona as string);
       const view = await this.read(id);
-      await this.audit.append({
-        kind: "profile.save",
-        operator,
-        summary: `创建 Profile ${id}`,
-        result: "ok",
-        profileId: id,
-        target: id,
-        revision: view.revision,
-      });
       this.events.emit("profiles.changed", { profileId: id, revision: view.revision });
       return view;
     });
   }
 
-  async create(id: string, draft: { model?: string; mode?: "channel" | "cross" }, operator: string): Promise<ProfileView> {
-    return this.createFromInput(
-      id,
-      { config: { model: draft.model ?? "", mode: draft.mode ?? "channel", channels: {} } as unknown as Record<string, unknown> },
-      operator,
-    );
+  async create(id: string, draft: { model?: string; mode?: "channel" | "cross" }): Promise<ProfileView> {
+    return this.createFromInput(id, {
+      config: { model: draft.model ?? "", mode: draft.mode ?? "channel", channels: {} } as unknown as Record<string, unknown>,
+    });
   }
 
-  async setField(id: string, field: "model" | "mode" | "instructions", value: string, operator: string): Promise<ProfileView> {
+  async setField(id: string, field: "model" | "mode" | "instructions", value: string): Promise<ProfileView> {
     if (field === "mode" && value !== "channel" && value !== "cross") {
       throw new ManagementError("invalid", "mode 只能是 channel 或 cross");
     }
@@ -289,90 +233,65 @@ export class ProfilesManager {
         .map((item) => item.trim())
         .filter((item) => item.length > 0);
       if (files.length === 0) throw new ManagementError("invalid", "instructions 至少包含一个文件");
-      return this.mutate(
-        id,
-        `修改 instructions`,
-        (raw) => {
-          raw.instructions = files;
-        },
-        operator,
-      );
+      return this.mutate(id, `修改 instructions`, (raw) => {
+        raw.instructions = files;
+      });
     }
-    return this.mutate(
-      id,
-      `修改 ${field}`,
-      (raw) => {
-        raw[field] = value;
-      },
-      operator,
-    );
+    return this.mutate(id, `修改 ${field}`, (raw) => {
+      raw[field] = value;
+    });
   }
 
-  async addChannels(id: string, account: string, patterns: string[], operator: string): Promise<ProfileView> {
+  async addChannels(id: string, account: string, patterns: string[]): Promise<ProfileView> {
     assertId(id);
     assertAccount(account);
     assertPatterns(patterns);
-    return this.mutate(
-      id,
-      `认领 ${account}`,
-      (raw) => {
-        const channels = isRecord(raw.channels) ? (raw.channels as Record<string, string[]>) : {};
-        const list = [...(channels[account] ?? [])];
-        for (const pattern of patterns) {
-          if (!list.includes(pattern)) list.push(pattern);
-        }
-        channels[account] = list;
-        raw.channels = channels;
-      },
-      operator,
-    );
+    return this.mutate(id, `认领 ${account}`, (raw) => {
+      const channels = isRecord(raw.channels) ? (raw.channels as Record<string, string[]>) : {};
+      const list = [...(channels[account] ?? [])];
+      for (const pattern of patterns) {
+        if (!list.includes(pattern)) list.push(pattern);
+      }
+      channels[account] = list;
+      raw.channels = channels;
+    });
   }
 
-  async removeChannels(id: string, account: string, patterns: string[], operator: string): Promise<ProfileView> {
+  async removeChannels(id: string, account: string, patterns: string[]): Promise<ProfileView> {
     assertId(id);
     assertAccount(account);
     assertPatterns(patterns);
-    return this.mutate(
-      id,
-      `取消认领 ${account}`,
-      (raw) => {
-        const channels = isRecord(raw.channels) ? (raw.channels as Record<string, string[]>) : {};
-        const list = channels[account];
-        if (list === undefined) throw new ManagementError("not-found", `Profile ${id} 未认领账号 ${account}`);
-        const next = list.filter((pattern) => !patterns.includes(pattern));
-        if (next.length === list.length) {
-          throw new ManagementError("not-found", `Profile ${id} 的 ${account} 下不存在模式 ${patterns.join("、")}`);
-        }
-        // 正项清空后整条移除，避免留下编译会失败的认领。
-        if (next.some((pattern) => !pattern.startsWith("!"))) channels[account] = next;
-        else delete channels[account];
-        raw.channels = channels;
-      },
-      operator,
-    );
+    return this.mutate(id, `取消认领 ${account}`, (raw) => {
+      const channels = isRecord(raw.channels) ? (raw.channels as Record<string, string[]>) : {};
+      const list = channels[account];
+      if (list === undefined) throw new ManagementError("not-found", `Profile ${id} 未认领账号 ${account}`);
+      const next = list.filter((pattern) => !patterns.includes(pattern));
+      if (next.length === list.length) {
+        throw new ManagementError("not-found", `Profile ${id} 的 ${account} 下不存在模式 ${patterns.join("、")}`);
+      }
+      // 正项清空后整条移除，避免留下编译会失败的认领。
+      if (next.some((pattern) => !pattern.startsWith("!"))) channels[account] = next;
+      else delete channels[account];
+      raw.channels = channels;
+    });
   }
 
-  async setExtension(id: string, name: string, input: { enable?: boolean; config?: unknown }, operator: string): Promise<ProfileView> {
+  async setExtension(id: string, name: string, input: { enable?: boolean; config?: unknown }): Promise<ProfileView> {
     assertId(id);
     if (!ID_PATTERN.test(name)) throw new ManagementError("invalid", `扩展名称无效: ${name}`);
-    return this.mutate(
-      id,
-      `更新扩展 ${name}`,
-      (raw) => {
-        const extensions = isRecord(raw.extends) ? (raw.extends as Record<string, { enable?: boolean; config?: unknown }>) : {};
-        const entry = extensions[name] ?? {};
-        extensions[name] = {
-          ...entry,
-          ...(input.enable === undefined ? {} : { enable: input.enable }),
-          ...(input.config === undefined ? {} : { config: input.config }),
-        };
-        raw.extends = extensions;
-      },
-      operator,
-    );
+    return this.mutate(id, `更新扩展 ${name}`, (raw) => {
+      const extensions = isRecord(raw.extends) ? (raw.extends as Record<string, { enable?: boolean; config?: unknown }>) : {};
+      const entry = extensions[name] ?? {};
+      extensions[name] = {
+        ...entry,
+        ...(input.enable === undefined ? {} : { enable: input.enable }),
+        ...(input.config === undefined ? {} : { config: input.config }),
+      };
+      raw.extends = extensions;
+    });
   }
 
-  async setPersona(id: string, text: string, operator: string): Promise<ProfileView> {
+  async setPersona(id: string, text: string): Promise<ProfileView> {
     assertId(id);
     return this.changes.run(async () => {
       const loaded = await this.load(id);
@@ -381,15 +300,6 @@ export class ProfilesManager {
       await mkdir(path.resolve(target, ".."), { recursive: true });
       await writeAtomic(target, text);
       const view = await this.read(id);
-      await this.audit.append({
-        kind: "profile.save",
-        operator,
-        summary: `更新人格（Profile ${id}）`,
-        result: "ok",
-        profileId: id,
-        target: id,
-        revision: view.revision,
-      });
       this.events.emit("profiles.changed", { profileId: id, revision: view.revision });
       return view;
     });
@@ -454,7 +364,7 @@ export class ProfilesManager {
     this.errors.delete(id);
   }
 
-  private async activate(id: string, operator: string, kind: string, label: string): Promise<ProfileView> {
+  private async activate(id: string): Promise<ProfileView> {
     assertId(id);
     const loaded = await this.load(id);
     let profile;
@@ -463,15 +373,6 @@ export class ProfilesManager {
     } catch (error) {
       const message = this.describe(error);
       this.errors.set(id, message);
-      await this.audit.append({
-        kind,
-        operator,
-        summary: `${label} ${id}`,
-        result: "failed",
-        profileId: id,
-        target: id,
-        error: message,
-      });
       throw new ManagementError("invalid", message);
     }
 
@@ -479,15 +380,6 @@ export class ProfilesManager {
     if (conflicts.length > 0) {
       const message = `认领冲突: ${conflicts.join("；")}`;
       this.errors.set(id, message);
-      await this.audit.append({
-        kind,
-        operator,
-        summary: `${label} ${id}`,
-        result: "failed",
-        profileId: id,
-        target: id,
-        error: message,
-      });
       throw new ManagementError("conflict", message);
     }
 
@@ -497,29 +389,11 @@ export class ProfilesManager {
     } catch (error) {
       const message = this.describe(error);
       this.errors.set(id, message);
-      await this.audit.append({
-        kind,
-        operator,
-        summary: `${label} ${id}`,
-        result: "failed",
-        profileId: id,
-        target: id,
-        error: message,
-      });
       throw new ManagementError("failed", message);
     }
 
     this.appliedAt.set(id, Date.now());
     this.errors.delete(id);
-    await this.audit.append({
-      kind,
-      operator,
-      summary: `${label} ${id}`,
-      result: "ok",
-      profileId: id,
-      target: id,
-      revision: digest(loaded.text),
-    });
     this.events.emit("profiles.changed", { profileId: id, revision: digest(loaded.text) });
     return this.read(id);
   }
@@ -537,8 +411,8 @@ export class ProfilesManager {
     return conflicts;
   }
 
-  /** 窄修改统一入口：读 → fn → 校验 → 落盘 → 审计 → 事件，全程持队列。 */
-  private mutate(id: string, label: string, fn: (raw: Record<string, unknown>) => void, operator: string): Promise<ProfileView> {
+  /** 窄修改统一入口：读 → fn → 校验 → 落盘 → 事件，全程持队列。 */
+  private mutate(id: string, label: string, fn: (raw: Record<string, unknown>) => void): Promise<ProfileView> {
     assertId(id);
     return this.changes.run(async () => {
       const loaded = await this.load(id);
@@ -552,15 +426,6 @@ export class ProfilesManager {
       }
       await writeAtomic(loaded.file, stringify(config, { lineWidth: 0 }));
       const view = await this.read(id);
-      await this.audit.append({
-        kind: "profile.save",
-        operator,
-        summary: `${label}（Profile ${id}）`,
-        result: "ok",
-        profileId: id,
-        target: id,
-        revision: view.revision,
-      });
       this.events.emit("profiles.changed", { profileId: id, revision: view.revision });
       return view;
     });

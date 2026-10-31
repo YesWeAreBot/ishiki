@@ -445,7 +445,7 @@ function clearFilters(): void {
             <span
               ><strong>{{ targetSessionCount }} 个会话日志</strong>会一并移除。</span
             >
-            <span>历史用量与审计记录保留，用于追踪已发生的调用。</span>
+            <span>历史用量记录保留，用于追踪已发生的调用。</span>
           </div>
           <div class="field" style="margin-top: 12px">
             <span class="field-label">输入 Profile 目录名以确认</span>

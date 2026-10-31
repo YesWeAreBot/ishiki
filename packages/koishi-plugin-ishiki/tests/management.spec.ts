@@ -101,7 +101,6 @@ describe("Ishiki management interfaces", () => {
         groups: {},
       },
       first.revision,
-      "tester",
     );
     expect(saved.revision).not.toBe(first.revision);
     expect(JSON.stringify(saved)).not.toContain("test-only-secret");
@@ -114,14 +113,8 @@ describe("Ishiki management interfaces", () => {
           groups: {},
         },
         first.revision,
-        "tester",
       ),
     ).rejects.toMatchObject({ code: "conflict" });
-
-    const audit = await management.audit.query({ kind: "models.save" });
-    expect(audit.records.map((record) => record.result)).toEqual(["failed", "ok"]);
-    expect(JSON.stringify(audit)).not.toContain("test-only-secret");
-    expect(JSON.stringify(audit)).not.toContain("other-secret");
   });
 
   it("pages session logs by byte cursor and reports corrupt lines", async () => {
@@ -322,7 +315,7 @@ describe("Ishiki management interfaces", () => {
     expect(usage.records.every((record) => record.source === "maintenance" && record.provider === "mock" && record.modelId === "vision")).toBe(true);
   });
 
-  it("saves profile files with revisions and preserves audit history after deletion", async () => {
+  it("saves profile files with revisions, rejects stale writes, and supports deletion", async () => {
     const instance = await start();
     const management = instance.get("ishiki")!.management;
     const root = path.join(dataPath!, "profiles", "demo");
@@ -336,18 +329,14 @@ describe("Ishiki management interfaces", () => {
       "demo",
       { config: { model: "mock:vision", mode: "cross", channels: {}, instructions: ["PERSONA.md"] }, persona: "冷静的人格" },
       before.revision,
-      "tester",
     );
     expect(saved.persona).toBe("冷静的人格");
     expect(saved.savedAt).toBeGreaterThanOrEqual(before.savedAt);
 
-    await expect(management.profiles.save("demo", { config: { model: "mock:vision" } }, before.revision, "tester")).rejects.toMatchObject({ code: "conflict" });
+    await expect(management.profiles.save("demo", { config: { model: "mock:vision" } }, before.revision)).rejects.toMatchObject({ code: "conflict" });
 
-    await management.profiles.remove("demo", "tester");
+    await management.profiles.remove("demo");
     await expect(management.profiles.read("demo")).rejects.toMatchObject({ code: "not-found" });
-    const audit = await management.audit.query({ profileId: "demo" });
-    expect(audit.records.map((record) => record.kind)).toContain("profile.remove");
-    expect(audit.records.some((record) => record.kind === "profile.save" && record.result === "ok")).toBe(true);
   });
 
   it("reports cache statistics from real resource stores", async () => {

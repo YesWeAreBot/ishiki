@@ -413,7 +413,7 @@ export class SessionsManager {
   }
 
   /** 归档会话：把 events.jsonl 与 resources 移到实例目录下的 archives/<时间>_<uuid>。 */
-  public async archive(plan: SessionArchivePlan, operator: string): Promise<SessionArchiveResult> {
+  public async archive(plan: SessionArchivePlan): Promise<SessionArchiveResult> {
     const record = await this.recordOf(plan.sessionId);
     if (record.active) {
       throw new ManagementError("conflict", `会话 ${plan.sessionId} 仍在运行，请先执行 ishiki.runtime.stop ${plan.sessionId}`);
@@ -432,16 +432,6 @@ export class SessionsManager {
       path: destination,
       files: targets.map((target) => path.basename(target)),
     };
-    await this.host.management.audit.append({
-      kind: "session.archive",
-      operator,
-      summary: `归档会话 ${plan.sessionId}`,
-      result: "ok",
-      profileId: record.profileId,
-      runtimeId: record.id,
-      sessionId: record.id,
-      detail: { path: destination, files: result.files },
-    });
     return result;
   }
 

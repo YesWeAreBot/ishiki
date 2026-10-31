@@ -2,7 +2,7 @@ import type { Command, Context } from "koishi";
 
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
-import { CONFIRM_OPTION, confirm, operatorOf, optionText, positional, restArguments } from "./context.js";
+import { CONFIRM_OPTION, confirm, optionText, positional, restArguments } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatRuntimeList, formatRuntimeView } from "./format.js";
 import { resolveRuntime, sessionAddress } from "./targets.js";
@@ -61,23 +61,22 @@ export function registerRuntimeCommands(_ctx: Context, host: Ishiki, root: Comma
     wrapAction(logger, async (argv) => {
       const id = positional(argv, 0);
       const prompt = restArguments(argv, 1).join(" ");
-      const operator = operatorOf(argv.session);
       if (id !== undefined) {
-        const result = await runtimes.wake(id, prompt.length === 0 ? undefined : prompt, operator);
+        const result = await runtimes.wake(id, prompt.length === 0 ? undefined : prompt);
         return result.queued ? `Runtime ${id} 正忙，唤醒已合并进当前轮次` : `已唤醒 Runtime ${id}（轮次 ${result.turnId ?? "-"}）`;
       }
       const address = sessionAddress(argv.session);
       if (address === undefined) throw new ManagementError("invalid", "请提供 Runtime 标识，或在频道会话内执行");
       const existing = host.findRuntimeByAddress(address);
       if (existing !== undefined) {
-        const result = await runtimes.wake(existing.id, prompt.length === 0 ? undefined : prompt, operator);
+        const result = await runtimes.wake(existing.id, prompt.length === 0 ? undefined : prompt);
         return result.queued ? `Runtime ${existing.id} 正忙，唤醒已合并进当前轮次` : `已唤醒 Runtime ${existing.id}（轮次 ${result.turnId ?? "-"}）`;
       }
       const claim = host.findClaim(address);
       if (claim === undefined) throw new ManagementError("not-found", "当前频道没有归属的 Profile，无法唤醒");
       const domain = claim.profile.mode === "cross" ? { mode: "cross" as const, channels: claim.profile.channels } : { mode: "channel" as const, ...address };
       const spawned = host.ensureRuntime(claim.profile.id, domain);
-      const result = await runtimes.wake(spawned.id, prompt.length === 0 ? undefined : prompt, operator);
+      const result = await runtimes.wake(spawned.id, prompt.length === 0 ? undefined : prompt);
       return result.queued ? `Runtime ${spawned.id} 正忙，唤醒已合并进当前轮次` : `已创建并唤醒 Runtime ${spawned.id}（轮次 ${result.turnId ?? "-"}）`;
     }),
   );
@@ -85,7 +84,7 @@ export function registerRuntimeCommands(_ctx: Context, host: Ishiki, root: Comma
   runtime.subcommand(".interrupt [runtimeId]", "中断当前轮次", { authority: READ }).action(
     wrapAction(logger, async (argv) => {
       const target = await resolveRuntime(host, positional(argv, 0), {}, argv.session);
-      await runtimes.interrupt(target.view.id, operatorOf(argv.session));
+      await runtimes.interrupt(target.view.id);
       return `已请求中断 Runtime ${target.view.id} 的当前轮次`;
     }),
   );
@@ -99,7 +98,7 @@ export function registerRuntimeCommands(_ctx: Context, host: Ishiki, root: Comma
         if (id === undefined) throw new ManagementError("invalid", "请提供 Runtime 标识");
         const proceed = await confirm(argv, `将重启 Runtime ${id}（会话中断后按原域重建，不读新配置）`);
         if (proceed !== true) return proceed;
-        await runtimes.restart(id, operatorOf(argv.session));
+        await runtimes.restart(id);
         return `已重启 Runtime ${id}`;
       }),
     );
@@ -116,7 +115,7 @@ export function registerRuntimeCommands(_ctx: Context, host: Ishiki, root: Comma
           : `将停止 Runtime ${target.view.id}`;
         const proceed = await confirm(argv, notice);
         if (proceed !== true) return proceed;
-        await runtimes.stop(target.view.id, operatorOf(argv.session));
+        await runtimes.stop(target.view.id);
         return `已停止 Runtime ${target.view.id}`;
       }),
     );
@@ -131,7 +130,7 @@ export function registerRuntimeCommands(_ctx: Context, host: Ishiki, root: Comma
         const view = runtimes.read(id);
         const proceed = await confirm(argv, `Runtime ${id} 属于 Profile ${view.profileId}，重载将重建该 Profile 的全部 Runtime`);
         if (proceed !== true) return proceed;
-        await host.management.profiles.reload(view.profileId, operatorOf(argv.session));
+        await host.management.profiles.reload(view.profileId);
         return `Profile ${view.profileId} 的全部 Runtime 已重建`;
       }),
     );

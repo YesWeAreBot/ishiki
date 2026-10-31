@@ -2,12 +2,6 @@ import type { Argv, Session } from "koishi";
 
 import { ManagementError } from "../management/errors.js";
 
-/** 指令执行者：聊天会话记 platform:userId，无会话上下文时记 console。 */
-export function operatorOf(session: Session | undefined): string {
-  if (session === undefined) return "command:console";
-  return `command:${session.platform}:${session.userId ?? "unknown"}`;
-}
-
 /** 所有二次确认指令共用的跳过选项。 */
 export const CONFIRM_OPTION = { name: "yes", decl: "-y, --yes" } as const;
 

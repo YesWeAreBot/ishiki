@@ -363,9 +363,7 @@ async function confirmAction(): Promise<void> {
 
           <div class="notice notice-info">
             <Icon name="info" :size="15" />
-            <span>
-              唤醒会为实例排队一个轮次；实例正忙时唤醒会合并到当前轮次。停止会终止当前轮次并保留日志与资源目录，中断只取消当前轮次。所有操作会写入审计日志。
-            </span>
+            <span> 唤醒会为实例排队一个轮次；实例正忙时唤醒会合并到当前轮次。停止会终止当前轮次并保留日志与资源目录，中断只取消当前轮次。 </span>
           </div>
         </div>
       </div>

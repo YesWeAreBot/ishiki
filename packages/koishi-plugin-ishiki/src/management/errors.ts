@@ -17,7 +17,7 @@ export function describeError(error: unknown): { name: string; message: string }
   return { name: "Error", message: String(error) };
 }
 
-/** 把 OpenAI 风格密钥从文本里抹掉，配置错误和审计都走这里。 */
+/** 把 OpenAI 风格密钥从文本里抹掉，配置错误和对外错误文本都走这里。 */
 export function redact(text: string, secrets: readonly string[]): string {
   return secrets.filter((secret) => secret.length >= 4).reduce((current, secret) => current.split(secret).join("***"), text);
 }

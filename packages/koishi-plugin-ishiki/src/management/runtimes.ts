@@ -2,13 +2,11 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import type { AgentEvent } from "@yesimagent/core";
-import type Logger from "reggol";
 
 import type Ishiki from "../index.js";
 import type { AgentRuntime } from "../runtime.js";
 import { describeError, ManagementError } from "./errors.js";
 import type { ManagementEventBus } from "./events.js";
-import type { AuditLog } from "./observability.js";
 import { domainLabel } from "./reference.js";
 import type { SessionsManager } from "./sessions.js";
 import type { RuntimeMeta, RuntimeState, RuntimeView, RuntimeWakeResult } from "./types.js";
@@ -45,9 +43,7 @@ export class RuntimesManager {
   constructor(
     private readonly host: Ishiki,
     private readonly events: ManagementEventBus,
-    private readonly audit: AuditLog,
     private readonly sessions: SessionsManager,
-    private readonly logger: Logger,
   ) {}
 
   track(runtime: AgentRuntime): void {
@@ -62,7 +58,7 @@ export class RuntimesManager {
     this.tracked.set(runtime.id, { state: "idle", lastActivity: Date.now() });
     this.unsubscribes.set(
       runtime.id,
-      runtime.agent.channel.subscribe("agent", (event) => void this.observe(runtime, event)),
+      runtime.agent.channel.subscribe("agent", (event) => this.observe(runtime, event)),
     );
   }
 
@@ -87,124 +83,55 @@ export class RuntimesManager {
     return this.offlineView(meta, this.tracked.get(id));
   }
 
-  async wake(id: string, prompt: string | undefined, operator: string): Promise<RuntimeWakeResult> {
+  async wake(id: string, prompt: string | undefined): Promise<RuntimeWakeResult> {
     const runtime = this.ensure(id);
     let turnId: string | undefined;
     try {
       turnId = runtime.wake(prompt);
     } catch (error) {
       const message = describeError(error).message;
-      await this.audit.append({
-        kind: "runtime.wake",
-        operator,
-        summary: `唤醒 Runtime ${id}`,
-        result: "failed",
-        runtimeId: id,
-        profileId: this.metadata.get(id)?.profileId,
-        error: message,
-      });
       throw new ManagementError("failed", message);
     }
     const result: RuntimeWakeResult = { runtimeId: id, queued: turnId === undefined, turnId };
-    await this.audit.append({
-      kind: "runtime.wake",
-      operator,
-      summary: result.queued ? `Runtime ${id} 正忙，唤醒已合并` : `唤醒 Runtime ${id}`,
-      result: "ok",
-      runtimeId: id,
-      profileId: this.metadata.get(id)?.profileId,
-      detail: { queued: result.queued },
-    });
     this.changed(id);
     return result;
   }
 
-  async restart(id: string, operator: string): Promise<RuntimeView> {
+  async restart(id: string): Promise<RuntimeView> {
     try {
       const runtime = this.host.runtimes.has(id) ? await this.host.restartRuntime(id) : this.ensure(id);
       this.track(runtime);
     } catch (error) {
       const message = describeError(error).message;
-      await this.audit.append({
-        kind: "runtime.restart",
-        operator,
-        summary: `重启 Runtime ${id}`,
-        result: "failed",
-        runtimeId: id,
-        profileId: this.metadata.get(id)?.profileId,
-        error: message,
-      });
       throw new ManagementError("failed", message);
     }
-    await this.audit.append({
-      kind: "runtime.restart",
-      operator,
-      summary: `重启 Runtime ${id}`,
-      result: "ok",
-      runtimeId: id,
-      profileId: this.metadata.get(id)?.profileId,
-    });
     this.changed(id);
     return this.read(id);
   }
 
-  async stop(id: string, operator: string): Promise<RuntimeView> {
+  async stop(id: string): Promise<RuntimeView> {
     try {
       await this.host.deactivateRuntime(id);
     } catch (error) {
       const message = describeError(error).message;
-      await this.audit.append({
-        kind: "runtime.stop",
-        operator,
-        summary: `停止 Runtime ${id}`,
-        result: "failed",
-        runtimeId: id,
-        profileId: this.metadata.get(id)?.profileId,
-        error: message,
-      });
       throw new ManagementError("failed", message);
     }
     this.tracked.set(id, { ...this.tracked.get(id), state: "stopped", activeTurnId: undefined });
     this.unsubscribes.get(id)?.();
     this.unsubscribes.delete(id);
-    await this.audit.append({
-      kind: "runtime.stop",
-      operator,
-      summary: `停止 Runtime ${id}`,
-      result: "ok",
-      runtimeId: id,
-      profileId: this.metadata.get(id)?.profileId,
-    });
     this.changed(id);
     return this.read(id);
   }
 
-  async interrupt(id: string, operator: string): Promise<RuntimeView> {
+  async interrupt(id: string): Promise<RuntimeView> {
     const runtime = this.host.runtimes.get(id);
     if (runtime === undefined) throw new ManagementError("not-found", `Runtime ${id} 未在运行`);
     try {
       await runtime.agent.interrupt("console");
     } catch (error) {
       const message = describeError(error).message;
-      await this.audit.append({
-        kind: "runtime.interrupt",
-        operator,
-        summary: `中断 Runtime ${id}`,
-        result: "failed",
-        runtimeId: id,
-        profileId: this.metadata.get(id)?.profileId,
-        error: message,
-      });
       throw new ManagementError("failed", message);
     }
-    await this.audit.append({
-      kind: "runtime.interrupt",
-      operator,
-      summary: `中断 Runtime ${id}`,
-      result: "ok",
-      runtimeId: id,
-      profileId: this.metadata.get(id)?.profileId,
-    });
     this.changed(id);
     return this.read(id);
   }
@@ -299,7 +226,7 @@ export class RuntimesManager {
     };
   }
 
-  private async observe(runtime: AgentRuntime, event: AgentEvent): Promise<void> {
+  private observe(runtime: AgentRuntime, event: AgentEvent): void {
     const meta = this.metadata.get(runtime.id);
     const profileId = meta?.profileId;
     const current = this.tracked.get(runtime.id) ?? { state: "idle" };
@@ -307,13 +234,9 @@ export class RuntimesManager {
     switch (event.type) {
       case "turn.start":
         this.tracked.set(runtime.id, { state: "running", activeTurnId: event.turnId, lastActivity: stamp });
-        await this.record("turn.start", runtime.id, profileId, event.turnId, `轮次 ${event.turnId} 开始`);
         break;
       case "turn.done":
         this.tracked.set(runtime.id, { state: "idle", lastActivity: stamp });
-        await this.record("turn.done", runtime.id, profileId, event.turnId, `轮次 ${event.turnId} 完成`, {
-          usage: event.totalUsage,
-        });
         break;
       case "turn.failed":
         this.tracked.set(runtime.id, {
@@ -321,21 +244,11 @@ export class RuntimesManager {
           lastActivity: stamp,
           error: event.error?.message ?? "轮次失败",
         });
-        await this.record("turn.failed", runtime.id, profileId, event.turnId, `轮次 ${event.turnId} 失败`, {
-          error: event.error?.message,
-        });
         break;
       case "turn.aborted":
         this.tracked.set(runtime.id, { state: "idle", lastActivity: stamp });
-        await this.record("turn.aborted", runtime.id, profileId, event.turnId, `轮次 ${event.turnId} 中断`, {
-          reason: event.reason,
-        });
         break;
       case "tool.failed":
-        await this.record("tool.failed", runtime.id, profileId, event.turnId, `工具 ${event.toolName} 调用失败`, {
-          tool: event.toolName,
-          error: event.error?.message,
-        });
         break;
       case "message.appended":
         this.tracked.set(runtime.id, { ...current, lastActivity: stamp });
@@ -350,30 +263,6 @@ export class RuntimesManager {
         return;
     }
     this.changed(runtime.id);
-  }
-
-  private async record(
-    kind: string,
-    runtimeId: string,
-    profileId: string | undefined,
-    turnId: string | undefined,
-    summary: string,
-    detail?: Record<string, unknown>,
-  ): Promise<void> {
-    try {
-      await this.audit.append({
-        kind,
-        operator: "runtime",
-        summary,
-        result: kind === "turn.failed" || kind === "tool.failed" ? "failed" : "ok",
-        runtimeId,
-        profileId,
-        turnId,
-        detail,
-      });
-    } catch (error) {
-      this.logger.warn(`audit append failed: ${describeError(error).message}`);
-    }
   }
 
   private changed(runtimeId: string): void {

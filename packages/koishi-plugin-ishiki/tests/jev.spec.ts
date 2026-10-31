@@ -1,11 +1,7 @@
 import { createCustomMessage, type Agent, type AgentEvent, type Experimental_DecisionModelV4Result as DecisionModelResult } from "@yesimagent/core";
-import { App, type Context } from "koishi";
 import { describe, expect, it, vi } from "vitest";
 
-import { JevTraceStore } from "../src/management/jev-trace.js";
-import type { JevDecisionView } from "../src/management/types.js";
 import type { IshikiMessageCreated } from "../src/types.js";
-import { WakeupEngine } from "../src/wakeup/engine.js";
 import {
   clipJevText,
   decideJev,
@@ -13,34 +9,20 @@ import {
   jevParticipationThreshold,
   JEV_QUESTIONS,
   JevFrequencyLedger,
+  JevTraceStore,
   JevWakeupConfig,
-  JevWakeupEngine,
   JevWakeupInstance,
-  getJevTrace,
   parseJevChoice,
   parseJevEvidence,
   prefilterJev,
   projectJevLine,
   selectJevContext,
   type JevContextLine,
+  type JevDecisionView,
   type JevEvidence,
   type JevPolicyConfig,
   type Participation,
 } from "../src/wakeup/jev.engine.js";
-
-describe("JEV trace ownership", () => {
-  it("resolves the trace from the JEV engine service", async () => {
-    const app = new App();
-    app.plugin(JevWakeupEngine);
-    await app.start();
-    try {
-      const engine = app.get(WakeupEngine.GetName("jev")) as JevWakeupEngine;
-      expect(getJevTrace(app as Context)).toBe(engine.trace);
-    } finally {
-      await app.stop();
-    }
-  });
-});
 
 const policy: JevPolicyConfig = {
   threshold: 0.7,
@@ -156,6 +138,7 @@ describe("JEV wakeup lifecycle", () => {
         rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
       },
       context as never,
+      new JevTraceStore(),
     );
     const dispose = engine.attach(agent);
     const emit = (id: string, author: string) => {
@@ -341,6 +324,7 @@ describe("JEV wakeup lifecycle", () => {
     const engine = new JevWakeupInstance(
       { model: "decision", debounceMs: 0, maxWaitMs: 0, minIntervalMs: 0, rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } },
       context as never,
+      new JevTraceStore(),
     );
     const dispose = engine.attach(agent);
     const emit = (id: string, content: string) => {
@@ -412,6 +396,7 @@ describe("JEV wakeup lifecycle", () => {
         rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
       },
       context as never,
+      new JevTraceStore(),
     );
     const dispose = engine.attach(agent);
     const message: IshikiMessageCreated = {
@@ -481,6 +466,7 @@ describe("JEV wakeup lifecycle", () => {
         rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] },
       },
       context as never,
+      new JevTraceStore(),
     );
     const dispose = engine.attach(agent);
     const emit = (message: unknown) => {
@@ -579,6 +565,7 @@ describe("JEV wakeup lifecycle", () => {
     const engine = new JevWakeupInstance(
       { model: "decision", debounceMs: 0, maxWaitMs: 0, minIntervalMs: 0, rules: { direct: false, atSelf: false, quoteSelf: false, keywords: [] } },
       context as never,
+      new JevTraceStore(),
     );
     const dispose = engine.attach(agent);
     const message: IshikiMessageCreated = {

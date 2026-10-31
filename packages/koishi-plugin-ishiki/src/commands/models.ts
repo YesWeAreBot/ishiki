@@ -3,18 +3,7 @@ import type { Command, Context } from "koishi";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import type { ModelDecl, ProviderInput } from "../management/types.js";
-import {
-  CONFIRM_OPTION,
-  confirm,
-  hasAuthority,
-  operatorOf,
-  optionFlag,
-  optionNumber,
-  optionText,
-  parseJsonArgument,
-  positional,
-  positionalText,
-} from "./context.js";
+import { CONFIRM_OPTION, confirm, hasAuthority, optionFlag, optionNumber, optionText, parseJsonArgument, positional, positionalText } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatGroupDetail, formatModelsList, formatProviderDetail } from "./format.js";
 
@@ -81,7 +70,7 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
     wrapAction(logger, async (argv) => {
       const ref = positional(argv, 0);
       if (ref === undefined) throw new ManagementError("invalid", "请提供模型引用");
-      const result = await models.probe(ref, operatorOf(argv.session));
+      const result = await models.probe(ref);
       return result.ok
         ? `连接正常，时延 ${result.latencyMs} ms${result.detail === undefined || result.detail.length === 0 ? "" : `，返回：${result.detail}`}`
         : `连接失败（${result.latencyMs} ms）：${result.detail ?? "未知原因"}`;
@@ -101,7 +90,7 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
         if (id === undefined || api === undefined)
           throw new ManagementError("invalid", "用法：ishiki.model.provider.add <id> <api> [--base-url <url>] [--api-key <key>]");
         const input: ProviderInput = { api, baseUrl: optionText(argv, "baseUrl"), apiKey: optionText(argv, "apiKey") };
-        await models.addProvider(id, input, operatorOf(argv.session));
+        await models.addProvider(id, input);
         return `已添加供应商 ${id}（${api}）`;
       }),
     );
@@ -119,7 +108,7 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
       }
       if (field === "apiKey" && !hasAuthority(argv.session, SECRET)) return "权限不足";
       const value = field === "headers" || field === "settings" ? parseJsonArgument(text, field) : text;
-      await models.setProviderField(id, field, value, operatorOf(argv.session));
+      await models.setProviderField(id, field, value);
       return `已修改供应商 ${id} 的 ${field}`;
     }),
   );
@@ -131,16 +120,15 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
       wrapAction(logger, async (argv) => {
         const id = positional(argv, 0);
         if (id === undefined) throw new ManagementError("invalid", "请提供供应商标识");
-        const operator = operatorOf(argv.session);
         const references = await models.references(id);
         if (references.profiles.length > 0 || references.runtimes.length > 0) {
-          await models.removeProvider(id, operator);
+          await models.removeProvider(id);
           return;
         }
         const modelCount = (await models.read()).providers.find((entry) => entry.id === id)?.models.length ?? 0;
         const proceed = await confirm(argv, `将删除供应商 ${id} 及其 ${modelCount} 个模型声明`);
         if (proceed !== true) return proceed;
-        await models.removeProvider(id, operator);
+        await models.removeProvider(id);
         return `已删除供应商 ${id}`;
       }),
     );
@@ -169,7 +157,7 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
           reasoning: optionFlag(argv, "reasoning"),
         });
         input.id = modelId;
-        await models.addDecl(providerId, input, operatorOf(argv.session));
+        await models.addDecl(providerId, input);
         return `已添加模型 ${providerId}:${modelId}`;
       }),
     );
@@ -183,7 +171,7 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
       if (providerId === undefined || modelId === undefined || field === undefined || text === undefined) {
         throw new ManagementError("invalid", "用法：ishiki.model.decl.set <provider> <id> <field> <value>");
       }
-      await models.setDeclField(providerId, modelId, field, coerceDeclValue(field, text), operatorOf(argv.session));
+      await models.setDeclField(providerId, modelId, field, coerceDeclValue(field, text));
       return `已修改模型 ${providerId}:${modelId} 的 ${field}`;
     }),
   );
@@ -196,16 +184,15 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
         const providerId = positional(argv, 0);
         const modelId = positional(argv, 1);
         if (providerId === undefined || modelId === undefined) throw new ManagementError("invalid", "请提供供应商与模型标识");
-        const operator = operatorOf(argv.session);
         const reference = `${providerId}:${modelId}`;
         const references = await models.references(reference);
         if (references.profiles.length > 0 || references.runtimes.length > 0) {
-          await models.removeDecl(providerId, modelId, operator);
+          await models.removeDecl(providerId, modelId);
           return;
         }
         const proceed = await confirm(argv, `将删除模型 ${reference}`);
         if (proceed !== true) return proceed;
-        await models.removeDecl(providerId, modelId, operator);
+        await models.removeDecl(providerId, modelId);
         return `已删除模型 ${reference}`;
       }),
     );
@@ -225,7 +212,7 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
             ?.split(",")
             .map((item) => item.trim())
             .filter((item) => item.length > 0) ?? [];
-        await models.addGroup(name, { name, strategy: optionText(argv, "strategy"), models: members }, operatorOf(argv.session));
+        await models.addGroup(name, { name, strategy: optionText(argv, "strategy"), models: members });
         return `已添加模型组 ${name}${members.length === 0 ? "" : `（${members.join("、")}）`}`;
       }),
     );
@@ -245,7 +232,7 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
               .map((item) => item.trim())
               .filter((item) => item.length > 0)
           : text;
-      await models.setGroupField(name, field, value, operatorOf(argv.session));
+      await models.setGroupField(name, field, value);
       return `已修改模型组 ${name} 的 ${field}`;
     }),
   );
@@ -257,15 +244,14 @@ export function registerModelCommands(_ctx: Context, host: Ishiki, root: Command
       wrapAction(logger, async (argv) => {
         const name = positional(argv, 0);
         if (name === undefined) throw new ManagementError("invalid", "请提供模型组名称");
-        const operator = operatorOf(argv.session);
         const references = await models.references(name);
         if (references.profiles.length > 0 || references.runtimes.length > 0) {
-          await models.removeGroup(name, operator);
+          await models.removeGroup(name);
           return;
         }
         const proceed = await confirm(argv, `将删除模型组 ${name}`);
         if (proceed !== true) return proceed;
-        await models.removeGroup(name, operator);
+        await models.removeGroup(name);
         return `已删除模型组 ${name}`;
       }),
     );

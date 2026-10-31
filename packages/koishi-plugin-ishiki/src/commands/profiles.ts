@@ -4,7 +4,7 @@ import { Extension } from "../extension.js";
 import type Ishiki from "../index.js";
 import { ManagementError } from "../management/errors.js";
 import { serviceName } from "../registry.js";
-import { CONFIRM_OPTION, confirm, hasAuthority, operatorOf, optionText, parseJsonArgument, positional, positionalText, restArguments } from "./context.js";
+import { CONFIRM_OPTION, confirm, hasAuthority, optionText, parseJsonArgument, positional, positionalText, restArguments } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatCheckReport, formatPersona, formatProfileList, formatProfileView } from "./format.js";
 
@@ -37,7 +37,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
         if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
         const mode = optionText(argv, "mode");
         if (mode !== undefined && mode !== "channel" && mode !== "cross") throw new ManagementError("invalid", "mode 只能是 channel 或 cross");
-        await profiles.create(id, { model: optionText(argv, "model"), mode }, operatorOf(argv.session));
+        await profiles.create(id, { model: optionText(argv, "model"), mode });
         return `已创建 Profile ${id}，执行 ishiki.profile.check ${id} 查看补全建议`;
       }),
     );
@@ -59,7 +59,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
       if (field !== "model" && field !== "mode" && field !== "instructions") {
         throw new ManagementError("invalid", "field 只能是 model、mode 或 instructions，嵌套段落请在控制台编辑");
       }
-      await profiles.setField(id, field, text, operatorOf(argv.session));
+      await profiles.setField(id, field, text);
       return `已修改 Profile ${id} 的 ${field}。${savedNotApplied(id).trim()}`;
     }),
   );
@@ -74,7 +74,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
       if (id === undefined || account === undefined || patterns.length === 0) {
         throw new ManagementError("invalid", "用法：ishiki.profile.channel.add <id> <platform:selfId> <pattern...>");
       }
-      await profiles.addChannels(id, account, patterns, operatorOf(argv.session));
+      await profiles.addChannels(id, account, patterns);
       return `Profile ${id} 已认领 ${account} 的 ${patterns.join(" ")}。${savedNotApplied(id).trim()}`;
     }),
   );
@@ -87,7 +87,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
       if (id === undefined || account === undefined || patterns.length === 0) {
         throw new ManagementError("invalid", "用法：ishiki.profile.channel.remove <id> <platform:selfId> <pattern...>");
       }
-      await profiles.removeChannels(id, account, patterns, operatorOf(argv.session));
+      await profiles.removeChannels(id, account, patterns);
       return `Profile ${id} 已移除 ${account} 的 ${patterns.join(" ")}。${savedNotApplied(id).trim()}`;
     }),
   );
@@ -99,7 +99,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
       if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
       if (text === undefined) return formatPersona((await profiles.read(id)).persona);
       if (!hasAuthority(argv.session, write)) return "权限不足";
-      await profiles.setPersona(id, text, operatorOf(argv.session));
+      await profiles.setPersona(id, text);
       return `已更新 Profile ${id} 的人格。${savedNotApplied(id).trim()}`;
     }),
   );
@@ -110,7 +110,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
     wrapAction(logger, async (argv) => {
       const [id, name] = [positional(argv, 0), positional(argv, 1)];
       if (id === undefined || name === undefined) throw new ManagementError("invalid", "用法：ishiki.profile.ext.enable <id> <name>");
-      await profiles.setExtension(id, name, { enable: true }, operatorOf(argv.session));
+      await profiles.setExtension(id, name, { enable: true });
       return `Profile ${id} 已启用扩展 ${name}。${savedNotApplied(id).trim()}`;
     }),
   );
@@ -119,7 +119,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
     wrapAction(logger, async (argv) => {
       const [id, name] = [positional(argv, 0), positional(argv, 1)];
       if (id === undefined || name === undefined) throw new ManagementError("invalid", "用法：ishiki.profile.ext.disable <id> <name>");
-      await profiles.setExtension(id, name, { enable: false }, operatorOf(argv.session));
+      await profiles.setExtension(id, name, { enable: false });
       return `Profile ${id} 已停用扩展 ${name}。${savedNotApplied(id).trim()}`;
     }),
   );
@@ -144,7 +144,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
           throw new ManagementError("invalid", `扩展 ${name} 的配置校验未通过: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
-      await profiles.setExtension(id, name, { config: value }, operatorOf(argv.session));
+      await profiles.setExtension(id, name, { config: value });
       return `Profile ${id} 的扩展 ${name} 配置已写入。${savedNotApplied(id).trim()}`;
     }),
   );
@@ -153,7 +153,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
     wrapAction(logger, async (argv) => {
       const id = positional(argv, 0);
       if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
-      await profiles.apply(id, operatorOf(argv.session));
+      await profiles.apply(id);
       return `已应用 Profile ${id}`;
     }),
   );
@@ -162,7 +162,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
     wrapAction(logger, async (argv) => {
       const id = positional(argv, 0);
       if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
-      await profiles.reload(id, operatorOf(argv.session));
+      await profiles.reload(id);
       return `已重新加载 Profile ${id}，全部 Runtime 将按需重建`;
     }),
   );
@@ -177,7 +177,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
         const runtimes = (await profiles.status(id)).runtimes.length;
         const proceed = await confirm(argv, `将停止 Profile ${id}（当前 ${runtimes} 个 Runtime），磁盘记录保留`);
         if (proceed !== true) return proceed;
-        const status = await profiles.stop(id, operatorOf(argv.session));
+        const status = await profiles.stop(id);
         return `已停用 Profile ${id}（状态 ${status.state}）`;
       }),
     );
@@ -191,7 +191,7 @@ export function registerProfileCommands(ctx: Context, host: Ishiki, root: Comman
         if (id === undefined) throw new ManagementError("invalid", "请提供 Profile 标识");
         const proceed = await confirm(argv, `将删除 Profile ${id} 的全部文件（含 Runtime 记录与会话日志），不可恢复`);
         if (proceed !== true) return proceed;
-        await profiles.remove(id, operatorOf(argv.session));
+        await profiles.remove(id);
         return `已删除 Profile ${id}`;
       }),
     );

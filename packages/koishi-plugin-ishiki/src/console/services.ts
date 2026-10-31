@@ -2,8 +2,8 @@ import { DataService, type Console } from "@koishijs/console";
 import type { Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import type { CacheSnapshot, JevSnapshot, ModelsDocument, UsageSnapshot } from "../management/types.js";
-import { getJevTrace } from "../wakeup/jev.engine.js";
+import type { CacheSnapshot, ModelsDocument, UsageSnapshot } from "../management/types.js";
+import { requireJevTrace, type JevSnapshot, type JevTrace } from "../wakeup/jev.engine.js";
 import type { ProfilesSnapshot, RuntimesSnapshot, SessionsSnapshot } from "./types.js";
 
 abstract class IshikiService<T> extends DataService<T> {
@@ -74,10 +74,11 @@ export class UsageProvider extends IshikiService<UsageSnapshot> {
 }
 
 export class JevProvider extends IshikiService<JevSnapshot> {
-  private readonly trace: ReturnType<typeof getJevTrace>;
+  private readonly trace: JevTrace;
+
   constructor(ctx: Context, host: Ishiki) {
     super(ctx, "ishikiJev", host);
-    this.trace = getJevTrace(ctx);
+    this.trace = requireJevTrace(ctx);
   }
 
   override async get(): Promise<JevSnapshot> {

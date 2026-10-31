@@ -1,10 +1,10 @@
 import type { Argv, Awaitable, Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import { describeError, ManagementError } from "../management/errors.js";
+import { ManagementError } from "../management/errors.js";
 import type { RuntimeView } from "../management/types.js";
 import type { AgentRuntime } from "../runtime.js";
-import { operatorOf, positional } from "./context.js";
+import { positional } from "./context.js";
 import { renderError } from "./errors.js";
 import { resolveRuntime } from "./targets.js";
 
@@ -84,11 +84,9 @@ export class IshikiCommands {
     return [...this.registered.entries()].map(([name, entry]) => ({ name, registrant: entry.registrant }));
   }
 
-  /** 与内置指令共用的执行管线：目标解析 → 能力检查 → 动作 → 审计。 */
+  /** 与内置指令共用的执行管线：目标解析 → 能力检查 → 动作。 */
   private pipeline(decl: ExtensionCommandDecl): (argv: Argv) => Promise<string | void> {
     return async (argv) => {
-      const operator = operatorOf(argv.session);
-      let runtimeId: string | undefined;
       try {
         let runtime: (RuntimeView & { instance: AgentRuntime }) | undefined;
         if (decl.target.kind === "runtime") {
@@ -97,14 +95,11 @@ export class IshikiCommands {
           if (target.instance === undefined) {
             throw new ManagementError("rejected", `Runtime ${target.view.id} 未运行，先执行 ishiki.runtime.wake`);
           }
-          runtimeId = target.view.id;
           runtime = { ...target.view, instance: target.instance };
         }
         const result = await decl.action(argv, runtime);
-        await this.record(decl, operator, runtimeId, "ok");
         return result;
       } catch (error) {
-        await this.record(decl, operator, runtimeId, "failed", error);
         return renderError(error, this.host.logger);
       }
     };
@@ -123,23 +118,6 @@ export class IshikiCommands {
         throw new ManagementError("rejected", `Runtime ${view.id} 未启用扩展 ${name}，先执行 ishiki.profile.ext.enable ${view.profileId} ${name}`);
       }
     }
-  }
-
-  /** 管线级审计：每条贡献指令执行完毕写一条记录，动作自身不重复记审计。 */
-  private async record(decl: ExtensionCommandDecl, operator: string, runtimeId: string | undefined, result: "ok" | "failed", error?: unknown): Promise<void> {
-    await this.host.management.audit.append({
-      kind: `command.${decl.name}`,
-      operator,
-      summary: `执行 ${decl.name}`,
-      result,
-      runtimeId,
-      error:
-        error === undefined
-          ? undefined
-          : error instanceof ManagementError
-            ? describeError(error).message
-            : `内部错误（${describeError(error).name}），详情见日志`,
-    });
   }
 }
 
