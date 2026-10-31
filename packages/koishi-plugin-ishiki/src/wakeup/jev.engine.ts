@@ -9,7 +9,7 @@ import { Service, type Context } from "koishi";
 import Schema from "schemastery";
 
 import { SEND_MESSAGE_TOOL } from "../builtin-tools/send-message.js";
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
 import type { IshikiMessageCreated } from "../types/messages.js";
 import { atSelf, WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
@@ -567,10 +567,10 @@ function successfulTexts(output: unknown, texts: readonly string[]): string[] {
 export class JevWakeupInstance implements WakeupEngineInstance {
   public readonly config: JevWakeupConfig;
 
-  private readonly context: ExtensionContext;
+  private readonly host: ExtensionHost;
   private readonly channels = new Map<string, ChannelState>();
   private readonly calls = new Map<string, PendingSpeech>();
-  private readonly logger: ExtensionContext["logger"];
+  private readonly logger: ExtensionHost["logger"];
   private readonly initialKey?: string;
   private latestKey?: string;
   private attached = false;
@@ -580,13 +580,13 @@ export class JevWakeupInstance implements WakeupEngineInstance {
 
   constructor(
     config: Partial<JevWakeupConfig>,
-    context: ExtensionContext,
+    host: ExtensionHost,
     private readonly model: DecisionModelV4,
   ) {
     this.config = normalizeJevConfig(config);
-    this.context = context;
-    this.logger = context.logger;
-    this.initialKey = context.domain.mode === "channel" ? channelKey(context.domain.platform, context.domain.selfId, context.domain.channelId) : undefined;
+    this.host = host;
+    this.logger = host.logger;
+    this.initialKey = host.domain.mode === "channel" ? channelKey(host.domain.platform, host.domain.selfId, host.domain.channelId) : undefined;
   }
 
   attach(agent: Agent): () => void {
@@ -978,7 +978,7 @@ export class JevWakeupInstance implements WakeupEngineInstance {
     };
     const state = {
       bot: {
-        id: this.context.runtimeId,
+        id: this.host.runtimeId,
         instruction: this.config.instruction,
         interests: this.config.interests,
       },
@@ -1193,11 +1193,11 @@ export class JevWakeupEngine extends WakeupEngine<"jev"> {
     super(ctx, "jev");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "jev">>, context: ExtensionContext): WakeupEngineInstance {
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, "jev">>): WakeupEngineInstance {
     const normalized = { ...DEFAULT_JEV_WAKEUP, ...config.jev };
     const modelId = normalized.model.trim();
     if (modelId.length === 0) throw new Error("JEV decision model reference is required");
     const model = this.ctx.ishiki.gateway.decisionModel(modelId);
-    return new JevWakeupInstance(config.jev ?? {}, context, model);
+    return new JevWakeupInstance(config.jev ?? {}, host, model);
   }
 }

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- Renamed `ExtensionContext` to `ExtensionHost`; `Extension`, context, toolcall, and wakeup invoke hooks now receive the host before the config
+
 ### Added
 - Added an `image` tool that inspects, resizes, crops, rotates, and converts stored PNG/JPEG resources
 - Added a configurable summary model for standard context compaction

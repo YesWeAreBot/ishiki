@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { Logger, Schema, Service, type Context } from "koishi";
-import { Extension, type ExtensionContext } from "koishi-plugin-ishiki";
+import { Extension, type ExtensionHost } from "koishi-plugin-ishiki";
 
 import { ProfilePool } from "./pool.js";
 import { McpResourceHandler } from "./resource-schemes.js";
@@ -20,10 +20,10 @@ class McpClientExtension extends Extension {
     this.logger.info(`mcp-client loaded, fallback config ${this.fallback}`);
   }
 
-  public [Service.invoke](_config: unknown, context: ExtensionContext) {
-    const pool = this.pool(context);
+  public [Service.invoke](host: ExtensionHost, _config: unknown) {
+    const pool = this.pool(host);
     // mcp://<server>/<resource-uri>：包装的 URI 原样交给对应 server，不做任何拆分。
-    const dospose = context.resources?.attach(new McpResourceHandler(pool));
+    const dospose = host.resources?.attach(new McpResourceHandler(pool));
     return {
       name: "ishiki.mcp-client",
       extendTools: async () => {
@@ -41,14 +41,14 @@ class McpClientExtension extends Extension {
   }
 
   /** 同一 profile 的所有 runtime 共享一个连接池，池子随 profile fiber 注销而关闭。 */
-  private pool(context: ExtensionContext): ProfilePool {
-    const existing = this.pools.get(context.root);
+  private pool(host: ExtensionHost): ProfilePool {
+    const existing = this.pools.get(host.root);
     if (existing !== undefined) return existing;
 
-    const pool = new ProfilePool(context.root, this.fallback, this.logger);
-    this.pools.set(context.root, pool);
-    context.fiber.on("dispose", () => {
-      this.pools.delete(context.root);
+    const pool = new ProfilePool(host.root, this.fallback, this.logger);
+    this.pools.set(host.root, pool);
+    host.fiber.on("dispose", () => {
+      this.pools.delete(host.root);
       void pool.close();
     });
     return pool;

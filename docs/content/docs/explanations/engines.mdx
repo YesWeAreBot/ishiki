@@ -27,7 +27,7 @@ Ishiki 的模型侧行为分成三族可替换的引擎。profile 的 `context`�
 
 `native` 不提供 middleware，模型直接输出原生 function call。`v3`、`hermes`、`qwen3coder`、`morph-xml`、`yaml-xml` 在 middleware 里完成文本协议与标准工具调用之间的转换。`narrative` 覆盖 `wrap`：Narrator 推进剧情并选择走向，回话交给 Replyer，行动交给 Action Decoder，每一步只进入其中一个分支，最后由包装器组装成标准的 reasoning 与工具调用。
 
-包装后的模型在 profile 级创建，所有 runtime 共用，因此工具调用实例适合承载与具体会话无关的编排。会话状态放在 Context 或 Wakeup 实例里，它们按 runtime 创建。
+三族引擎实例都按 runtime 创建。工具调用引擎可以读取当前 runtime 的 `ExtensionHost`，并在包装层承载该 runtime 的编排状态；底层模型入口仍由 profile 共享。
 
 ## 唤醒：决定何时运行
 
@@ -50,7 +50,7 @@ Ishiki 的模型侧行为分成三族可替换的引擎。profile 的 `context`�
 
 引擎是 Koishi Service，服务名由基类的 `GetName` 生成，形如 `ishiki.engine.context.standard`、`ishiki.engine.wakeup.jev`。主插件在构造时注册内置变体；第三方变体作为普通 Koishi 插件安装，并由它自己的 `ctx.plugin` 注册。
 
-profile 激活时，内核按三段配置里的名字取服务并调用 `[Service.invoke]`。Context 与 Wakeup 的 `[Service.invoke]` 接收变体配置和该 runtime 的 `ExtensionContext`；Toolcall 只接收变体配置，因为包装后的模型在 profile 级共享。缺少服务时，该 profile 记录一条错误并停在等待状态，服务可用后继续装配。
+profile 激活时，内核按三段配置里的名字取服务并调用 `[Service.invoke]`。三族引擎都先接收该 runtime 的 `ExtensionHost`，再接收变体配置；Context、Wakeup 与 Toolcall 实例都按 runtime 创建。缺少服务时，该 profile 记录一条错误并停在等待状态，服务可用后继续装配。
 
 ## 内置变体
 
@@ -75,7 +75,7 @@ profile 激活时，内核按三段配置里的名字取服务并调用 `[Servic
 import { Schema, Service } from "koishi";
 import type { Context } from "koishi";
 import { WakeupEngine } from "koishi-plugin-ishiki";
-import type { EngineConfig, ExtensionContext, WakeupEngineInstance, WakeupEngines } from "koishi-plugin-ishiki";
+import type { EngineConfig, ExtensionHost, WakeupEngineInstance, WakeupEngines } from "koishi-plugin-ishiki";
 
 interface RhythmConfig {
   everySeconds: number;
@@ -96,7 +96,7 @@ export class RhythmWakeupEngine extends WakeupEngine<"rhythm"> {
     super(ctx, "rhythm");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "rhythm">>, _context: ExtensionContext): WakeupEngineInstance {
+  public [Service.invoke](_host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, "rhythm">>): WakeupEngineInstance {
     const settings = RhythmConfig({ everySeconds: config.rhythm?.everySeconds ?? 60 });
     return {
       attach(agent) {

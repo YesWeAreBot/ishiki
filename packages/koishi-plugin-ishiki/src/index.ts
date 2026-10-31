@@ -19,7 +19,7 @@ import { installCommands } from "./commands/index.js";
 import { installConsole } from "./console/index.js";
 import { ChatContextEngine, ContextEngine, StandardContextEngine } from "./context/index.js";
 import { createDumpFetch } from "./debugger.js";
-import { Extension, type ExtensionContext } from "./extension.js";
+import { Extension, type ExtensionHost } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { loadInstructionFiles, renderInstructions } from "./instructions.js";
 import { Management } from "./management/index.js";
@@ -231,9 +231,9 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
         }
         const toolcall = ToolcallEngine.GetService(fiber, settings.toolcall.engine);
         const failover = this.gateway.groups().includes(settings.model) || (settings.failover.attempts ?? 1) > 1;
-        const model = toolcall(settings.toolcall).wrap(
-          failover ? new FailoverModel(this.gateway, settings.model, settings.failover, this.logger) : this.gateway.languageModel(settings.model),
-        );
+        const baseModel = failover
+          ? new FailoverModel(this.gateway, settings.model, settings.failover, this.logger)
+          : this.gateway.languageModel(settings.model);
         const contextProvider = ContextEngine.GetService(fiber, settings.context.engine);
         const wakeupProvider = WakeupEngine.GetService(fiber, settings.wakeup.engine);
         const instructionFiles = loadInstructionFiles(settings.instructions, profile.root);
@@ -260,7 +260,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
           if (!mounted) throw new Error(`profile "${profile.id}" is disposed`);
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
           const resources = new ResourceCenter(key, home);
-          const context: ExtensionContext = {
+          const host: ExtensionHost = {
             runtimeId: key,
             fiber,
             domain,
@@ -270,6 +270,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
             resources,
             gateway: this.gateway,
           };
+          const model = toolcall(host, settings.toolcall).wrap(baseModel);
           const runtime = new AgentRuntime({
             id: key,
             home,
@@ -285,9 +286,9 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
               send_message: createSendMessage({ ctx: this.ctx, logger: this.logger, domain, typing: settings.typing, resources }),
               finish: createFinish(),
             },
-            extensions: extensions.map(({ extension, config }) => extension(config, context)).filter((ext) => ext !== undefined),
-            context: contextProvider(settings.context, context),
-            wakeup: wakeupProvider(settings.wakeup, context),
+            extensions: extensions.map(({ extension, config }) => extension(host, config)).filter((ext) => ext !== undefined),
+            context: contextProvider(host, settings.context),
+            wakeup: wakeupProvider(host, settings.wakeup),
             codemode: settings.codemode,
             pacing: settings.pacing,
             debugStream: this.config.debugStream,

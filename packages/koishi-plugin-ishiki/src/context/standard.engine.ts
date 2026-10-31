@@ -6,7 +6,7 @@ import Schema from "schemastery";
 
 import { CONFIRM_OPTION, confirm } from "../commands/context.js";
 import { expectRuntime, type ExtensionCommandDecl } from "../commands/contribute.js";
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import { ManagementError } from "../management/errors.js";
 import type { RuntimeView } from "../management/types.js";
 import type { EngineConfig, InstanceDomain } from "../profile/index.js";
@@ -270,13 +270,13 @@ export class StandardContextInstance implements ContextEngineInstance {
   private compacting?: Promise<void>;
   private abort?: AbortController;
 
-  constructor(config: Partial<StandardContextConfig>, context: ExtensionContext) {
+  constructor(config: Partial<StandardContextConfig>, host: ExtensionHost) {
     const maxTokens = config.maxTokens ?? DEFAULT_CONTEXT_TOKENS;
     const refillRatio = config.refillRatio !== undefined && config.refillRatio > 0 && config.refillRatio <= 1 ? config.refillRatio : DEFAULT_REFILL_RATIO;
     this.config = { model: config.model?.trim() || undefined, maxTokens, refillRatio };
-    this.logger = context.logger;
-    this.gateway = context.fiber.get("ishiki")?.gateway;
-    this.domain = context.domain;
+    this.logger = host.logger;
+    this.gateway = host.fiber.get("ishiki")?.gateway;
+    this.domain = host.domain;
     this.refillRatio = refillRatio;
     this.maxTokens = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 0;
     this.ceiling = 0;
@@ -525,7 +525,7 @@ export class StandardContextEngine extends ContextEngine<"standard"> {
     registerStandardCommands(ctx);
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "standard">>, context: ExtensionContext): ContextEngineInstance {
-    return new StandardContextInstance(config.standard ?? {}, context);
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<ContextEngines, "standard">>): ContextEngineInstance {
+    return new StandardContextInstance(config.standard ?? {}, host);
   }
 }

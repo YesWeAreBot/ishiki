@@ -2,7 +2,7 @@ import type { Agent, AgentEvent } from "@yesimagent/core";
 import { h, Service, type Context } from "koishi";
 import Schema from "schemastery";
 
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
 import type { IshikiMessageCreated } from "../types/messages.js";
 import { WakeupEngine, type WakeupEngineInstance, type WakeupEngines } from "./engine.js";
@@ -137,9 +137,9 @@ function addressOf(message: IshikiMessageCreated): WillingnessAddress {
   return { platform: message.platform, selfId: message.selfId, channelId: message.channelId };
 }
 
-function channelDomainAddress(context: ExtensionContext): WillingnessAddress | undefined {
-  if (context.domain.mode !== "channel") return undefined;
-  return { platform: context.domain.platform, selfId: context.domain.selfId, channelId: context.domain.channelId };
+function channelDomainAddress(host: ExtensionHost): WillingnessAddress | undefined {
+  if (host.domain.mode !== "channel") return undefined;
+  return { platform: host.domain.platform, selfId: host.domain.selfId, channelId: host.domain.channelId };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -249,7 +249,7 @@ function inspectContent(content: string, selfId: string): { mentionsSelf: boolea
   return { mentionsSelf, mentionsOther };
 }
 
-function sendTarget(args: unknown, context: ExtensionContext): string | undefined {
+function sendTarget(args: unknown, host: ExtensionHost): string | undefined {
   if (isRecord(args) && isRecord(args.target)) {
     const sid = args.target.sid;
     const channelId = args.target.channelId;
@@ -260,7 +260,7 @@ function sendTarget(args: unknown, context: ExtensionContext): string | undefine
       }
     }
   }
-  const domain = channelDomainAddress(context);
+  const domain = channelDomainAddress(host);
   return domain === undefined ? undefined : addressKey(domain);
 }
 
@@ -282,14 +282,14 @@ function pendingKey(toolCallId: string | undefined): string {
 export class WillingnessWakeupInstance implements WakeupEngineInstance {
   public readonly config: WillingnessWakeupConfig;
 
-  private readonly context: ExtensionContext;
+  private readonly host: ExtensionHost;
   private readonly states = new Map<string, ChannelState>();
   private readonly turns = new Map<string, TurnState>();
   private readonly attachments = new Set<string>();
 
-  constructor(config: Partial<WillingnessWakeupConfig> = {}, context: ExtensionContext) {
+  constructor(config: Partial<WillingnessWakeupConfig> = {}, host: ExtensionHost) {
     this.config = normalize(config);
-    this.context = context;
+    this.host = host;
   }
 
   attach(agent: Agent): () => void {
@@ -396,7 +396,7 @@ export class WillingnessWakeupInstance implements WakeupEngineInstance {
   private observeToolStart(event: Extract<AgentEvent, { type: "tool.start" }>): void {
     if (event.toolName !== SEND_MESSAGE_TOOL) return;
     const turn = this.ensureTurn(event.turnId);
-    turn.pending.set(pendingKey(event.toolCallId), sendTarget(event.args, this.context));
+    turn.pending.set(pendingKey(event.toolCallId), sendTarget(event.args, this.host));
   }
 
   private observeToolDone(event: Extract<AgentEvent, { type: "tool.done" }>): void {
@@ -411,7 +411,7 @@ export class WillingnessWakeupInstance implements WakeupEngineInstance {
 
     if (event.toolName === CODEMODE_TOOL && codemodeSentMessage(event.result)) {
       const turn = this.ensureTurn(event.turnId);
-      const domain = channelDomainAddress(this.context);
+      const domain = channelDomainAddress(this.host);
       const target = turn.source ?? (domain === undefined ? undefined : addressKey(domain));
       if (target !== undefined) turn.sends.add(target);
     }
@@ -508,7 +508,7 @@ export class WillingnessWakeupEngine extends WakeupEngine<"willingness"> {
     super(ctx, "willingness");
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<WakeupEngines, "willingness">>, context: ExtensionContext): WakeupEngineInstance {
-    return new WillingnessWakeupInstance(config.willingness ?? {}, context);
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<WakeupEngines, "willingness">>): WakeupEngineInstance {
+    return new WillingnessWakeupInstance(config.willingness ?? {}, host);
   }
 }

@@ -1,5 +1,6 @@
 import { Service, type Context } from "koishi";
 
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
 import { ToolcallEngine, ToolcallEngineInstance, type ToolcallEngines } from "./engine.js";
 import { parser } from "./parser.js";
@@ -26,7 +27,7 @@ export class HermesToolcallEngine extends ToolcallEngine<"hermes"> {
     super(ctx, "hermes");
   }
 
-  public [Service.invoke](_config: EngineConfig<Pick<ToolcallEngines, "hermes">>): ToolcallEngineInstance {
+  public [Service.invoke](_host: ExtensionHost, _config: EngineConfig<Pick<ToolcallEngines, "hermes">>): ToolcallEngineInstance {
     return new HermesToolcallInstance();
   }
 }

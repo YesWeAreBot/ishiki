@@ -1,5 +1,5 @@
 import type { Bot } from "koishi";
-import { jsonSchema, tool, type ExtensionContext, type ResourceCenter, type ToolSet } from "koishi-plugin-ishiki";
+import { jsonSchema, tool, type ExtensionHost, type ResourceCenter, type ToolSet } from "koishi-plugin-ishiki";
 
 import { actionsFor, categoriesFor, search, type LiteAction } from "./catalog/index.js";
 import { liteOf, renderAction } from "./catalog/render.js";
@@ -14,8 +14,8 @@ interface TargetInput {
 }
 
 export interface ToolOptions {
-  ctx: ExtensionContext["fiber"];
-  domain: ExtensionContext["domain"];
+  ctx: ExtensionHost["fiber"];
+  domain: ExtensionHost["domain"];
   backend: Backend;
   mode: Mode;
   deny: readonly string[];
@@ -23,11 +23,11 @@ export interface ToolOptions {
   publisher: MediaPublisher;
   maxInlineBytes: number;
   baseUrl?: string;
-  logger: ExtensionContext["logger"];
+  logger: ExtensionHost["logger"];
 }
 
 /** 该 profile 里可用的账号：频道模式只有一个，cross 模式是认领名单里的全部。 */
-function accountsOf(domain: ExtensionContext["domain"]): string[] {
+function accountsOf(domain: ExtensionHost["domain"]): string[] {
   return domain.mode === "channel" ? [`${domain.platform}:${domain.selfId}`] : [...domain.channels.keys()];
 }
 

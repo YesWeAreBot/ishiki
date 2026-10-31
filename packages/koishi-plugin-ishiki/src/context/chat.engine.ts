@@ -18,7 +18,7 @@ import Schema from "schemastery";
 
 import { CONFIRM_OPTION, confirm } from "../commands/context.js";
 import { expectRuntime, type ExtensionCommandDecl } from "../commands/contribute.js";
-import type { ExtensionContext } from "../extension.js";
+import type { ExtensionHost } from "../extension.js";
 import { ManagementError } from "../management/errors.js";
 import type { RuntimeView } from "../management/types.js";
 import type { EngineConfig, InstanceDomain } from "../profile/index.js";
@@ -1087,12 +1087,12 @@ export class ChatContextInstance implements ContextEngineInstance {
   private compactTurnId?: string;
   private compactCount = 0;
 
-  constructor(config: Partial<ChatContextConfig>, context: ExtensionContext) {
+  constructor(config: Partial<ChatContextConfig>, host: ExtensionHost) {
     this.config = normalizeConfig(config);
-    this.logger = context.logger;
-    this.domain = context.domain;
-    this.resources = context.resources;
-    this.gateway = context.gateway;
+    this.logger = host.logger;
+    this.domain = host.domain;
+    this.resources = host.resources;
+    this.gateway = host.gateway;
     this.maxTokens = this.config.maxTokens;
     this.highWater = this.maxTokens * this.config.highWaterRatio;
     this.target = this.maxTokens * this.config.targetRatio;
@@ -1552,7 +1552,7 @@ export class ChatContextEngine extends ContextEngine<"chat"> {
     registerChatCommands(ctx);
   }
 
-  public [Service.invoke](config: EngineConfig<Pick<ContextEngines, "chat">>, context: ExtensionContext): ContextEngineInstance {
-    return new ChatContextInstance(config.chat ?? {}, context);
+  public [Service.invoke](host: ExtensionHost, config: EngineConfig<Pick<ContextEngines, "chat">>): ContextEngineInstance {
+    return new ChatContextInstance(config.chat ?? {}, host);
   }
 }

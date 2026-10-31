@@ -9,7 +9,7 @@ import { listServices, registerService } from "./registry.js";
 import type { ResourceCenter } from "./resource/center.js";
 import { AgentRuntime } from "./runtime.js";
 
-export interface ExtensionContext {
+export interface ExtensionHost {
   readonly runtimeId: string;
   readonly domain: InstanceDomain;
   readonly home: string;
@@ -19,7 +19,7 @@ export interface ExtensionContext {
   readonly logger: Logger;
   /** runtime 的资源中心：扩展经它读 asset/artifact、注册自定义 scheme。 */
   readonly resources: ResourceCenter;
-  /** 网关与 profile 当前模型引用，用于解析摘要等辅助模型。 */
+  /** 模型网关，用于解析摘要等辅助模型。 */
   readonly gateway: Gateway;
 }
 
@@ -65,5 +65,5 @@ export abstract class Extension<T = any> extends Service {
     return listServices<Extension>(ctx, "extension");
   }
 
-  public abstract [Service.invoke](config: T, context: ExtensionContext): ExtensionInstance | undefined;
+  public abstract [Service.invoke](host: ExtensionHost, config: T): ExtensionInstance | undefined;
 }

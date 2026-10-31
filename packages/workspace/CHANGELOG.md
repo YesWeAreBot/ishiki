@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- The extension invoke hook now receives `ExtensionHost` before the config
+
 ### Added
 - Added a bundled `sandbox-environment` skill that routes work across just-bash, QuickJS, WebAssembly Python, SQLite, networking, and sandbox files, with detailed runtime references loaded only when needed
 

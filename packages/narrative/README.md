@@ -9,7 +9,7 @@ Ishiki Narrative 可以把一次普通的 Ishiki 模型调用，编排成多个�
 Profile 选择两个协同工作的引擎：
 
 - **Narrative ContextEngine** 在每个 runtime 的会话台账中维护剧本。它把已提交的剧本、新到事件、近期精确证据和附件投影到模型输入。新消息按增量叙事化，原始事件仍留在台账中。剧本超过近似预算后，系统会压缩较早的叙事，同时保留近期证据。
-- **Narrative ToolcallEngine** 包装 profile 的 `LanguageModelV4`。包装器在 profile 级共享且不保存会话状态；它协调各个模型阶段，输入来自对应 runtime 的 ContextEngine。
+- **Narrative ToolcallEngine** 包装当前 runtime 的 `LanguageModelV4`。包装器按 runtime 创建且本身不保存会话状态；它协调各个模型阶段，输入来自对应 runtime 的 ContextEngine。
 
 每个模型步骤大致经过以下流程：
 
@@ -97,7 +97,7 @@ Token 数由文本长度估算。压缩可能损失细节；原始台账不会�
 2. ToolcallEngine 通过现有 `LanguageModelV4` 接入 profile 模型，并在普通模型接口后协调额外的模型调用。
 3. 标准工具调用交回 Ishiki 宿主，由宿主继续掌握工具、存储、附件和轮次生命周期。
 
-剧本状态因此不需要放进 profile 级共享模型包装器，也不需要增加第二套 Agent runtime 或工具执行器。其他模型 pipeline 也可以沿用这种结构：内部阶段可以变化，外围 Agent 仍通过 `LanguageModel` 接口交互并接收标准工具调用。
+剧本状态因此不需要放进模型包装器，也不需要增加第二套 Agent runtime 或工具执行器。其他模型 pipeline 也可以沿用这种结构：内部阶段可以变化，外围 Agent 仍通过 `LanguageModel` 接口交互并接收标准工具调用。
 
 ## 当前限制
 

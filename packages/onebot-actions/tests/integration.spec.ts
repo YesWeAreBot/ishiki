@@ -4,7 +4,7 @@ import path from "node:path";
 
 import Server from "@koishijs/plugin-server";
 import { App, Service, type Logger } from "koishi";
-import { ResourceCenter, type ExtensionContext, type ToolSet } from "koishi-plugin-ishiki";
+import { ResourceCenter, type ExtensionHost, type ToolSet } from "koishi-plugin-ishiki";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import OneBotExtension, { OneBotExtensionConfig, type OneBotExtensionConfig as Config } from "../src/index.js";
@@ -47,8 +47,8 @@ function config(overrides: Partial<Config> = {}): Config {
   return OneBotExtensionConfig(overrides) as Config;
 }
 
-function context(domain: ExtensionContext["domain"], resources: ResourceCenter): ExtensionContext {
-  return { runtimeId: "rt", domain, home, root: home, fiber: app, logger: silent, resources };
+function host(domain: ExtensionHost["domain"], resources: ResourceCenter): ExtensionHost {
+  return { runtimeId: "rt", domain, home, root: home, fiber: app, logger: silent, resources, gateway: {} as never };
 }
 
 async function assemble(
@@ -58,7 +58,7 @@ async function assemble(
   const settings = config(overrides);
   const extension = new OneBotExtension(app, { defaultBackend: "napcat", defaultMode: "read", logLevel: 1, ...defaults });
   const resources = new ResourceCenter("rt", home);
-  const instance = extension[Service.invoke](settings, context({ mode: "channel", platform: "onebot", selfId: "10000", channelId: "group:1" }, resources));
+  const instance = extension[Service.invoke](host({ mode: "channel", platform: "onebot", selfId: "10000", channelId: "group:1" }, resources), settings);
   if (instance === undefined) throw new Error("extension returned no instance");
   return {
     tools: await instance.extendTools!(),

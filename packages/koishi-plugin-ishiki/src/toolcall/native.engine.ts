@@ -1,5 +1,6 @@
 import { Service, type Context } from "koishi";
 
+import type { ExtensionHost } from "../extension.js";
 import type { EngineConfig } from "../profile/index.js";
 import { ToolcallEngine, ToolcallEngineInstance, type ToolcallEngines } from "./engine.js";
 
@@ -18,7 +19,7 @@ export class NativeToolcallEngine extends ToolcallEngine<"native"> {
     super(ctx, "native");
   }
 
-  public [Service.invoke](_config: EngineConfig<Pick<ToolcallEngines, "native">>): ToolcallEngineInstance {
+  public [Service.invoke](_host: ExtensionHost, _config: EngineConfig<Pick<ToolcallEngines, "native">>): ToolcallEngineInstance {
     return new NativeToolcallInstance();
   }
 }

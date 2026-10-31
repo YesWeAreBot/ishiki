@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- The extension invoke hook now receives `ExtensionHost` before the config
 ## [0.0.4] - 2026-10-30
 
 ### Changed
