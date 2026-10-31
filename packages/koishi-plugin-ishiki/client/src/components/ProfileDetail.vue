@@ -172,7 +172,7 @@ function openRuntimeSession(sessionId: string): void {
 
       <div class="panel-body">
         <div class="profile-specs">
-          <div class="profile-spec profile-model-spec">
+          <div class="profile-spec">
             <span class="profile-spec-label">模型</span>
             <span class="profile-spec-value mono">{{ modelLabel }}</span>
           </div>
@@ -403,11 +403,7 @@ function openRuntimeSession(sessionId: string): void {
   gap: 4px;
   min-width: 0;
   padding: 10px 12px;
-  background: var(--surface-inset);
-}
-
-.profile-model-spec {
-  background: var(--surface-raised);
+  background: var(--surface-muted);
 }
 
 .profile-spec-label {

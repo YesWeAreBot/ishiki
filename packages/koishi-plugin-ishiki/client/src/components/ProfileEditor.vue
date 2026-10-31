@@ -759,7 +759,7 @@ const personaPath = computed(() => {
   align-items: start;
   min-width: 0;
   padding: 9px 11px;
-  background: var(--surface-inset);
+  background: var(--surface-muted);
 }
 
 .profile-file-row + .profile-file-row {

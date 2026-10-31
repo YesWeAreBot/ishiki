@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reworked the console client visual design with a muted slate palette, flat surfaces, tighter radius scale and unified design tokens
 - Split usage charts by unit so call counts and token usage render on independent axes
 - Updated console copy for sessions, profiles and groups to use consistent terminology
+
+### Fixed
+- Fixed mobile console layouts where the activity date filter, chat header and session entry filters overlapped or clipped
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes

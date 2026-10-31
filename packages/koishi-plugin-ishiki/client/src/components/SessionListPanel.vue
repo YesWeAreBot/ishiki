@@ -57,11 +57,11 @@ function resetFilters(): void {
       <div class="stack-sm">
         <div class="search-box">
           <Icon name="search" :size="15" />
-          <input v-model="keyword" class="input" type="search" placeholder="搜索会话编号、人格配置或文件" aria-label="搜索会话" />
+          <input v-model="keyword" class="input" type="search" placeholder="搜索会话或人格" aria-label="搜索会话" />
         </div>
         <div class="row">
           <select v-model="profile" class="select" aria-label="按人格配置筛选">
-            <option value="all">全部人格配置</option>
+            <option value="all">全部人格</option>
             <option v-for="profileId in profileIds" :key="profileId" :value="profileId">{{ profileId }}</option>
           </select>
           <button v-if="hasFilters" type="button" class="btn btn-ghost btn-sm" @click="resetFilters">清除</button>
@@ -70,7 +70,7 @@ function resetFilters(): void {
           <summary aria-label="活动日期">
             <span class="row">
               <Icon name="clock" :size="13" />
-              活动日期
+              <span class="list-date-label">活动日期</span>
             </span>
             <span v-if="fromDate.length > 0 || toDate.length > 0" class="badge badge-info">已限定</span>
             <Icon class="list-date-chevron" name="chevronDown" :size="13" />
@@ -190,6 +190,14 @@ function resetFilters(): void {
 
 .list-date-range {
   padding: 0 8px 8px;
+}
+
+.list-date-filter[open] .list-date-range {
+  flex-wrap: wrap;
+}
+
+.list-date-filter[open] .list-date-range > .input {
+  flex: 1 0 100%;
 }
 
 .list-date-range > .input {
@@ -312,6 +320,30 @@ function resetFilters(): void {
     align-self: stretch;
   }
 
+  .list-date-filter[open] .list-date-range {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 10px;
+    z-index: 20;
+    width: min(320px, calc(100vw - 64px));
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: var(--shadow-overlay);
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .list-date-filter[open] .list-date-range > .input {
+    flex: 1 1 0;
+    width: 0;
+  }
+
+  .session-list-panel:has(.list-date-filter[open]) .session-list-scroll {
+    padding-top: 68px;
+  }
+
   .session-list-item {
     padding-top: 7px;
     padding-bottom: 7px;
@@ -326,20 +358,23 @@ function resetFilters(): void {
     gap: 6px;
   }
 
-  .list-search .row {
+  .list-search > .stack-sm > .row {
     display: contents;
   }
 
   .list-search .row > .select {
     grid-column: 2;
+    grid-row: 1;
   }
 
   .list-search .row > .btn {
     grid-column: 4;
+    grid-row: 1;
   }
 
   .list-search .list-date-filter {
     grid-column: 3;
+    grid-row: 1;
     align-self: center;
   }
 
@@ -355,18 +390,10 @@ function resetFilters(): void {
   }
 
   .list-date-filter summary .row > span,
+  .list-date-filter summary .list-date-label,
   .list-date-filter summary .badge,
   .list-date-filter summary .list-date-chevron {
     display: none;
-  }
-
-  .list-date-filter[open] {
-    position: absolute;
-    z-index: 6;
-    top: calc(100% - 4px);
-    right: 8px;
-    width: min(280px, calc(100vw - 48px));
-    box-shadow: var(--shadow-overlay);
   }
 
   .panel-foot {

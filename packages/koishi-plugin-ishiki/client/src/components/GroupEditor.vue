@@ -332,13 +332,15 @@ function positiveInteger(value: unknown): number | undefined {
         <span>还没有候选。模型组至少需要一个语言模型才能通过模型网关构建。</span>
       </div>
       <div v-else class="stack-sm">
-        <div v-for="(member, index) in members" :key="member" class="member-row" style="padding: 8px 10px">
+        <div v-for="(member, index) in members" :key="member" class="member-row member-row-editor" style="padding: 8px 10px">
           <span class="member-index">{{ index + 1 }}</span>
           <span class="flex-1">
             {{ memberLabel(member) }}
             <span class="faint small mono">{{ member }}</span>
           </span>
-          <span v-if="levelLabel(member) !== undefined" class="badge badge-outline">{{ levelLabel(member) }}</span>
+          <span class="member-level">
+            <span v-if="levelLabel(member) !== undefined" class="badge badge-outline">{{ levelLabel(member) }}</span>
+          </span>
           <button type="button" class="btn btn-ghost btn-icon btn-sm" aria-label="上移" :disabled="index === 0 || busy === true" @click="moveMember(index, -1)">
             <Icon name="arrowUp" :size="13" />
           </button>

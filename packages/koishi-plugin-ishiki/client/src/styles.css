@@ -580,6 +580,7 @@
     border-radius: var(--radius);
     background: var(--surface);
     box-shadow: none;
+    overflow: clip;
   }
 
   .panel-head {
@@ -1724,7 +1725,16 @@
     padding: 4px 3px 4px 8px;
     border: 1px solid var(--line);
     border-radius: var(--radius-sm);
-    background: var(--surface-inset);
+    background: var(--surface-muted);
+  }
+
+  .member-row-editor {
+    grid-template-columns: 22px minmax(0, 1fr) auto repeat(3, 30px);
+  }
+
+  .member-level {
+    display: flex;
+    min-width: 0;
   }
 
   .member-index {
@@ -1853,7 +1863,7 @@
   }
 
   .log-entry.is-tool .log-card {
-    background: var(--surface-inset);
+    background: var(--surface);
   }
 
   .log-entry.is-tool .log-body {

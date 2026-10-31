@@ -159,7 +159,7 @@ watch(
       <span :class="{ 'metric-warning': corruptTotal > 0 }"
         ><strong>{{ formatNumber(corruptTotal) }}</strong> 损坏行</span
       >
-      <span
+      <span class="metric-activity"
         ><strong>{{ relativeTime(lastActivity) }}</strong> 最后活动</span
       >
       <span class="metric-loaded"
@@ -298,6 +298,7 @@ watch(
 
 <style scoped>
 .session-workspace {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -655,8 +656,14 @@ watch(
 
 @media (max-width: 720px) {
   .chat-head {
+    flex-wrap: wrap;
     align-items: flex-start;
+    gap: 8px;
     padding: 10px;
+  }
+
+  .chat-identity {
+    flex-basis: 100%;
   }
 
   .chat-avatar {
@@ -666,6 +673,9 @@ watch(
   }
 
   .chat-actions {
+    width: 100%;
+    justify-content: flex-start;
+    padding-left: 42px;
     gap: 3px;
   }
 
@@ -673,17 +683,46 @@ watch(
     min-height: 32px;
   }
 
+  .chat-metrics {
+    flex-wrap: wrap;
+    align-content: center;
+    overflow: visible;
+    padding: 3px 0;
+    white-space: normal;
+  }
+
   .chat-metrics > span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
     padding: 0 8px;
+    white-space: nowrap;
   }
 
   .chat-metrics .metric-live {
     display: none;
   }
 
+  .chat-metrics .metric-loaded {
+    display: none;
+  }
+
+  .chat-metrics .metric-activity {
+    display: none;
+  }
+
   .chat-aux {
-    max-height: 34vh;
-    padding: 9px 10px;
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 5;
+    max-height: 57%;
+    padding: 10px;
+    border-top: 1px solid var(--line);
+    border-bottom: 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+    box-shadow: var(--shadow-overlay);
   }
 
   .entry-filters .field {
