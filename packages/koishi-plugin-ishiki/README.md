@@ -125,11 +125,40 @@ cross 模式的上下文带有来源频道坐标。Agent 根据这些坐标选�
 codemode:
   enable: true
   direct: []
+  maxTasks: 4
 ```
 
 默认开启。codemode 把业务工具收进 QuickJS 沙箱，模型写一段 JavaScript 调用它们，中间数据不进入上下文。`send_message` 可直接调用或由程序调用，`finish`、`wait` 保持直接调用；`direct` 列出的业务工具同时保留在模型目录里。
 
 沙箱里有一套确定的环境：`tools["原名"]` 调用宿主工具，`searchTools(query)` 与 `describeTool(name)` 按关键词检索工具声明，`text()` 与 `console.log()` 显式输出，`image()` 保存图片，`store()` 与 `load()` 在会话内保存小状态。脚本的执行结果按 STATUS、WALL TIME、RESULT、TEXT、CONSOLE、ATTACHMENTS、ERROR 分节返回；`// @options` 可以覆盖单次调用的超时与输出预算。
+
+### 后台任务
+
+耗时较长的宿主工具可以脱离脚本生命周期继续运行：
+
+```js
+const id = await task.start("bash", { command: "npm test", timeout: 600000 });
+return await task.status(id);
+```
+
+| 调用                          | 返回                                              |
+| ----------------------------- | ------------------------------------------------- |
+| `task.start(toolName, input)` | 提交成功后立即返回字符串 id                       |
+| `task.status(id)`             | `{ id, toolName, state, startedAt, finishedAt? }` |
+| `task.result(id)`             | 状态字段加上投影后的 `text`、`items`、`error`     |
+| `task.cancel(id)`             | 发出取消请求后的当前快照                          |
+
+`state` 取值 `running`、`cancelling`、`succeeded`、`failed`、`cancelled`、`interrupted`。时间戳是 Unix 毫秒。当前状态用不上的字段直接省略，不会填 null；未结束的任务只有状态字段。三个按 id 查询或取消的调用都会对未知 id 报错。
+
+脚本返回、超时或被中止都不影响已提交的任务。每个任务拥有独立的中止信号，取消只作用于目标任务：工具在信号中止后抛出该信号的原因或 `AbortError` 时结算为 `cancelled`，抛出其他错误结算为 `failed`，请求取消后仍正常返回则结算为 `succeeded`。`finish`、`wait`、`codemode` 不能作为后台任务，目标工具需要本地实现，输入按其 schema 校验。
+
+`codemode.maxTasks` 限制同时运行的任务数量，默认 4。达到上限时新的 `task.start` 立即失败，不会排队；任务结束或中断后释放名额。
+
+任务结束后写入 `codemode-tasks.jsonl`（与 `events.jsonl` 同目录），并在下一次可运行时投递一条 `ishiki.task` 通知与一句唤醒提示，模型用 `task.result(id)` 读取投影后的文本、附件引用或错误摘要。只有成功结束的任务会把附件带进消息，并且需要同一条成功通知存在；失败、取消、中断的任务不产生附件。记录只保存状态、投影文本与附件引用，原始输入与原始结果不落盘；账本按追加方式增长，历史文件的大小由运维清理。
+
+进程停止时仍在运行的任务被标记为 `interrupted` 并写入记录，不发送通知；下次启动恢复状态与结果，不重新运行工具，也不补发通知。工具忽略中止信号时，它的副作用由工具自身决定，关闭流程只等待记录写入。记录写入失败按宿主的异步错误策略抛出，不重试，也不补发通知。
+
+`task.result(id)` 返回的附件引用遵守 `AttachmentItem.lifetime`：`once` 在投递后释放，`recent` 与 `retain` 保持可读。需要长期保留的产物用 `artifact://` 或扩展提供的持久 scheme。
 
 工具结果中的资源可以通过 URL 引用。内核提供 `asset://`、`artifact://`、`local://`；扩展可以增加自己的 scheme，并使用已有的 `read` 读取。每个 runtime 拥有独立资源中心。
 

@@ -381,3 +381,6 @@ tools/harness2-ishiki/runs/
 bun.lock
 skills-lock.json
 tsconfig.temp.json
+
+# task feature tests
+.test-tmp/

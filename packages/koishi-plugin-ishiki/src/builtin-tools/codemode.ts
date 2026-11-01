@@ -24,11 +24,15 @@ import {
 import type { CodemodeConfig } from "../profile/index.js";
 import type { ResourceCenter } from "../resource/center.js";
 import { keepsFailedToolAttachments } from "../resource/tool-output.js";
-import type { AttachmentItem, IshikiCodemodeStore } from "../types/messages.js";
+import type { AttachmentItem, IshikiCodemodeStore, IshikiTaskNotice } from "../types/messages.js";
 import { createCatalog, DESCRIBE_TOOL_GLOBAL, SEARCH_TOOLS_GLOBAL } from "./codemode/catalog.js";
+import { settled } from "./codemode/host-call.js";
 import { prepareCodemodeOutput } from "./codemode/output.js";
+import { createTaskManager, type TaskCall } from "./codemode/tasks/manager.js";
+import { createTaskStore } from "./codemode/tasks/store.js";
 import { FINISH_TOOL } from "./finish.js";
 import { SEND_MESSAGE_TOOL } from "./send-message.js";
+import { WAIT_TOOL } from "./wait.js";
 
 export const CODEMODE_TOOL = "codemode";
 
@@ -102,6 +106,8 @@ const DESCRIPTION = [
   "",
   "`store(key, value)` saves JSON state for later calls, `store(key, undefined)` deletes a key, and `load(key)` reads one. Keep it small: images and large data belong in variables or in a host tool's own storage.",
   "",
+  "Background work: `task.start(toolName, input)` persists the call, returns its id string, and lets it run after the script ends; `task.status(id)`, `task.cancel(id)`, and `task.result(id)` inspect it. A settled task sends you a notice and wakes you with its projected text, attachments, or error. `finish`, `wait`, and `codemode` are refused as background tasks, and `codemode.maxTasks` bounds how many run at once.",
+  "",
   "`i` is required: one line stating why you are running this program.",
   'Put `// @options: {"timeout_ms": 60000, "max_output_tokens": 2000}` on the first line to override the timeout and the display budget of this call.',
   "",
@@ -139,18 +145,6 @@ const toModelOutput = (options: { output: CodemodeToolResult }): ToolResultOutpu
         value: options.output.text,
         ...(options.output.items.length === 0 ? {} : { providerOptions: { ishiki: { keepAttachments: true } } }),
       };
-
-function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
-  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
-}
-
-/** Host tools may stream partial values; the session keeps the final one. */
-async function settled(value: unknown): Promise<unknown> {
-  if (!isAsyncIterable(value)) return value;
-  let last: unknown;
-  for await (const item of value) last = item;
-  return last;
-}
 
 /** PI declares schemas structurally; the AI SDK hands over plain JSON Schema documents. */
 function codemodeSchema(schema: unknown): CodemodeJsonSchema | undefined {
@@ -207,17 +201,32 @@ export interface CodemodeOptions {
   config: CodemodeConfig;
   resources: ResourceCenter;
   imageInput: boolean;
+  /** Runtime home; the task ledger lives beside `events.jsonl`. */
+  home: string;
   /** Per-tool context handed to description functions by the current step. */
   contextOf(name: string): unknown;
   /** Raw tools for scripts; they bypass the model-facing intent wrapper. */
   hostTools?: () => ToolSet;
+  /** Delivered once a task terminal record is durable and the manager is still open. */
+  onTaskSettled(notice: IshikiTaskNotice, items: readonly AttachmentItem[]): void;
 }
 
 export async function createCodemode(options: CodemodeOptions): Promise<CodemodeSurface> {
   const pi = await loadCodemode();
   const catalog = createCatalog(pi.renderDeclarations);
+  let current: TaskCall | undefined;
+  const tasks = createTaskManager({
+    store: createTaskStore(options.home),
+    maxTasks: options.config.maxTasks,
+    resources: options.resources,
+    imageInput: options.imageInput,
+    exclude: [CODEMODE_TOOL, FINISH_TOOL, WAIT_TOOL],
+    onSettled: options.onTaskSettled,
+  });
+  await tasks.open();
   const sandbox = new pi.CodemodeSandbox({
-    globals: [...catalog.globals],
+    // PI snapshots globals at construction, so the task namespace resolves the live call instead.
+    globals: [...catalog.globals, ...tasks.globals(() => current)],
     timeoutMs: options.config.timeoutMs,
     memoryLimitBytes: options.config.memoryLimitBytes,
   });
@@ -240,6 +249,7 @@ export async function createCodemode(options: CodemodeOptions): Promise<Codemode
 
   /** Install this call's host table; the sandbox snapshots it synchronously in `execute`. */
   const install = (entries: readonly HostEntry[], tools: ToolSet, toolCallId: string): void => {
+    current = { tools, toolCallId };
     for (const name of installed) sandbox.unregisterTool(name);
     installed.clear();
     for (const entry of entries) {
@@ -393,7 +403,10 @@ export async function createCodemode(options: CodemodeOptions): Promise<Codemode
       return [...entries, ...appended];
     },
     reset: () => pending.clear(),
-    dispose: () => sandbox.close(),
+    dispose: async () => {
+      await tasks.close();
+      await sandbox.close();
+    },
   };
 }
 

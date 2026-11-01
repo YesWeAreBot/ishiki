@@ -388,4 +388,13 @@ describe("profile validation", () => {
       resolveProfile({ model: "mock:vision", mode: "channel", channels: { "test:bot": ["*"] }, codemode: { enable: false } }, "test", os.tmpdir()),
     ).not.toThrow();
   });
+
+  it("bounds background tasks with a positive integer", () => {
+    expect(CodemodeConfig({} as never).maxTasks).toBe(4);
+    expect(CodemodeConfig({ maxTasks: 2 } as never).maxTasks).toBe(2);
+    const profile = { model: "mock:vision", mode: "channel", channels: { "test:bot": ["*"] } };
+    for (const maxTasks of [0, -1, 1.5]) {
+      expect(() => resolveProfile({ ...profile, codemode: { maxTasks } }, "test", os.tmpdir())).toThrow(/maxTasks/);
+    }
+  });
 });

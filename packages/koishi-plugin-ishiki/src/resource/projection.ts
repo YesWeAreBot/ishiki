@@ -16,9 +16,12 @@ function platformKey(data: { platform: string; selfId: string; channelId: string
 export function attachmentMessages(messages: readonly AgentMessage[]): AgentMessage[] {
   const platforms = new Set<string>();
   const deleted = new Set<string>();
+  const succeeded = new Set<string>();
   for (const message of messages) {
-    if (message.role === "custom" && message.type === "ishiki.message.created") platforms.add(platformKey(message.data));
-    if (message.role === "custom" && message.type === "ishiki.message.deleted") deleted.add(platformKey(message.data));
+    if (message.role !== "custom") continue;
+    if (message.type === "ishiki.message.created") platforms.add(platformKey(message.data));
+    if (message.type === "ishiki.message.deleted") deleted.add(platformKey(message.data));
+    if (message.type === "ishiki.task" && message.data.state === "succeeded") succeeded.add(message.data.taskId);
   }
   const results = new Map<string, boolean>();
   return messages.filter((message) => {
@@ -35,6 +38,7 @@ export function attachmentMessages(messages: readonly AgentMessage[]): AgentMess
     }
     if (message.role !== "custom" || message.type !== "ishiki.attachment") return true;
     const data: IshikiAttachment = message.data;
+    if (data.source === "task") return succeeded.has(data.taskId);
     return data.source === "tool"
       ? results.get(JSON.stringify([data.toolName, data.toolCallId])) === true
       : platforms.has(platformKey(data)) && !deleted.has(platformKey(data));
@@ -69,9 +73,9 @@ interface Candidate {
 }
 
 function originOf(data: IshikiAttachment): string {
-  return data.source === "tool"
-    ? `tool ${data.toolName}, call ${data.toolCallId}`
-    : `platform ${data.platform}:${data.selfId}, channel ${data.channelId}, message ${data.messageId}`;
+  if (data.source === "tool") return `tool ${data.toolName}, call ${data.toolCallId}`;
+  if (data.source === "task") return `task ${data.taskId}`;
+  return `platform ${data.platform}:${data.selfId}, channel ${data.channelId}, message ${data.messageId}`;
 }
 
 /** Per-runtime projection; delivery records commit with the model response, never with request preparation. */

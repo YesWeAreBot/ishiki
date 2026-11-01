@@ -122,11 +122,40 @@ Add to the profile:
 codemode:
   enable: true
   direct: []
+  maxTasks: 4
 ```
 
 It is on by default. codemode moves business tools into a QuickJS sandbox: the model writes a JavaScript program that calls them, and intermediate data never enters the context. `send_message` works both directly and from a program; `finish` and `wait` stay directly callable. Tools listed in `direct` also remain in the model catalog.
 
 The sandbox exposes a fixed environment: `tools["name"]` calls host tools, `searchTools(query)` and `describeTool(name)` look declarations up by keyword, `text()` and `console.log()` emit output, `image()` stores images, and `store()`/`load()` keep small session state. Results come back in STATUS, WALL TIME, RESULT, TEXT, CONSOLE, ATTACHMENTS and ERROR sections, and `// @options` overrides the timeout and output budget for one call.
+
+### Background tasks
+
+Slow host tools can outlive the script that started them:
+
+```js
+const id = await task.start("bash", { command: "npm test", timeout: 600000 });
+return await task.status(id);
+```
+
+| Call                          | Returns                                                       |
+| ----------------------------- | ------------------------------------------------------------- |
+| `task.start(toolName, input)` | the id string, once the start record is durable               |
+| `task.status(id)`             | `{ id, toolName, state, startedAt, finishedAt? }`             |
+| `task.result(id)`             | the status fields plus projected `text`, `items`, and `error` |
+| `task.cancel(id)`             | the current snapshot after the request                        |
+
+`state` is one of `running`, `cancelling`, `succeeded`, `failed`, `cancelled`, `interrupted`. Timestamps are Unix milliseconds. Fields that do not apply to the current state are omitted rather than set to null, and a task that has not settled reports status fields only. All three id-based calls reject unknown ids.
+
+Script return, timeout, and abort do not touch submitted tasks. Every task has its own abort signal, and cancel affects only its target: a tool that throws the signal's reason or an `AbortError` after cancellation settles as `cancelled`, any other error settles as `failed`, and a normal result after the request settles as `succeeded`. `finish`, `wait`, and `codemode` cannot run as background tasks, the target tool needs a local implementation, and its input is validated against its schema.
+
+`codemode.maxTasks` bounds how many tasks run at once and defaults to 4. A `task.start` at the limit fails immediately instead of queueing, and a settled or interrupted task frees its slot.
+
+Settled tasks are appended to `codemode-tasks.jsonl` beside `events.jsonl`. The next runnable turn receives one `ishiki.task` notice and a wake prompt, and the model reads projected text, attachment references, or an error summary through `task.result(id)`. Only successful tasks contribute media, and only when the matching success notice is present; failed, cancelled, and interrupted tasks contribute none. Records hold status, projected text, and attachment references; inputs and raw results never reach disk. The ledger is append-only, and operators own pruning its historical size.
+
+Shutdown marks tasks that are still running as `interrupted`, writes their records, and sends no notice. The next start restores status and results without rerunning tools and without backfilling notifications. A runtime that stopped after a terminal record stays queryable after restart. When a tool ignores the abort signal, its side effects are its own concern and shutdown only waits for record writes. Record write failures propagate through the host's async error policy; nothing is retried and no notice is faked.
+
+Attachment references returned by `task.result(id)` follow `AttachmentItem.lifetime`: `once` releases after delivery, `recent` and `retain` stay readable. Long-lived artefacts belong in `artifact://` or a durable scheme from an extension.
 
 Resources in tool results can be carried as URLs. The core provides `asset://`, `artifact://`, and `local://`. Extensions can add schemes that use the same `read` interface. Each runtime has its own resource center.
 

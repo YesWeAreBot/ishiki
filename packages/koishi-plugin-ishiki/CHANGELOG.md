@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added hover and focus highlighting to usage chart legends
 - Added hour, day, week and month usage buckets with automatic interval selection
 - Added a cache hit rate series to usage charts
+- Added background task notices that surface tool name, task id, state and elapsed time in chat context
+- Added a task result record so background task outcomes are stored with the session
+- Added codemode background tasks: scripts start long-running host tools with `task.start`, then query, cancel, or read projected results by id; settled tasks append to `codemode-tasks.jsonl`, deliver one notice with optional attachments, and wake the runtime, while `codemode.maxTasks` bounds how many run at once
 
 ### Changed
 - Reworked the console client visual design with a muted slate palette, flat surfaces, tighter radius scale and unified design tokens

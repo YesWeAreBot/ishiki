@@ -56,6 +56,7 @@ export interface CodemodeConfig {
   timeoutMs: number;
   memoryLimitBytes: number;
   maxOutputTokens: number;
+  maxTasks: number;
 }
 
 export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
@@ -67,6 +68,7 @@ export const CodemodeConfig: Schema<CodemodeConfig> = Schema.object({
     .description("沙箱内存上限（字节），创建时固定")
     .default(512 * 1024 * 1024),
   maxOutputTokens: Schema.number().min(0).description("工具结果里 RESULT/TEXT/CONSOLE 预览的字符预算（按每 token 4 字符折算），0 表示省略预览").default(3_000),
+  maxTasks: Schema.natural().min(1).description("同时运行的代码模式后台任务上限").default(4),
 });
 
 export interface PacingConfig {

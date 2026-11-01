@@ -8,6 +8,7 @@ import {
   createEntry,
   createJsonlStorage,
   createToolMessage,
+  createUserMessage,
   jsonSchema,
   tool,
   type Agent,
@@ -35,6 +36,7 @@ import { processOutput } from "../src/resource/output.js";
 import { AttachmentProjection, attachmentMessages } from "../src/resource/projection.js";
 import { TEXT_BUDGET } from "../src/resource/text.js";
 import { AgentRuntime } from "../src/runtime.js";
+import type { TaskState } from "../src/types/messages.js";
 import { StandardWakeupInstance } from "../src/wakeup/index.js";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY7sAAAAASUVORK5CYII=";
@@ -833,6 +835,64 @@ function screenshotTool(blocks: () => ScreenshotBlock[]) {
 }
 
 const emptyInput = jsonSchema({ type: "object", properties: {} });
+
+async function taskAttachment(taskId: string, lifetime?: "once" | "retain") {
+  const item = (await process({ attachments: [imageBlock()] }, undefined, "read")).items[0]!;
+  return createCustomMessage("ishiki.attachment", {
+    source: "task",
+    taskId,
+    items: [lifetime === undefined ? item : { ...item, lifetime }],
+  });
+}
+
+function taskNotice(taskId: string, state: TaskState) {
+  return createCustomMessage("ishiki.task", { taskId, toolName: "read", state, startedAt: 1, finishedAt: 2, summary: "" });
+}
+
+describe("task attachments", () => {
+  it("inlines a successful task result under its task origin and remembers the delivery", async () => {
+    const attachment = await taskAttachment("t1", "retain");
+    const messages = [createUserMessage("go"), taskNotice("t1", "succeeded"), attachment];
+    expect(attachmentMessages(messages)).toContain(attachment);
+    const projection = new AttachmentProjection(center, { imageInput: true });
+    projection.restore([], messages);
+    const projected = await projection.project(messages, "turn");
+    expect(imageParts(projected)).toHaveLength(1);
+    expect(JSON.stringify(projected)).toContain("Attachment material from task t1");
+
+    const entries = await commitImages(projection, messages);
+    projection.restore(entries, messages);
+    expect(imageParts(await projection.project(messages, "turn"))).toHaveLength(1);
+  });
+
+  it("drops task attachments without a matching success notice", () => {
+    const attachment = createCustomMessage("ishiki.attachment", { source: "task", taskId: "t1", items: [] });
+    expect(attachmentMessages([attachment])).not.toContain(attachment);
+    expect(attachmentMessages([taskNotice("t2", "succeeded"), attachment])).not.toContain(attachment);
+  });
+
+  it("drops attachments of tasks that did not succeed", () => {
+    for (const state of ["failed", "cancelled", "interrupted"] as const) {
+      const attachment = createCustomMessage("ishiki.attachment", { source: "task", taskId: state, items: [] });
+      expect(attachmentMessages([taskNotice(state, state), attachment])).not.toContain(attachment);
+    }
+  });
+
+  it("keeps the notice through folding and still projects the attachment", async () => {
+    const attachment = await taskAttachment("t9");
+    const folded = collapse(attachmentMessages([createUserMessage("go"), taskNotice("t9", "succeeded"), attachment]));
+    expect(folded.some((message) => message.role === "user" && typeof message.content === "string" && message.content.includes("后台任务 read #t9"))).toBe(
+      true,
+    );
+    expect(folded).toContain(attachment);
+
+    const projection = new AttachmentProjection(center, { imageInput: true });
+    projection.restore([], folded);
+    const projected = await projection.project(folded, "turn");
+    expect(imageParts(projected)).toHaveLength(1);
+    expect(JSON.stringify(projected)).toContain("Attachment material from task t9");
+  });
+});
 
 describe("real Agent / codemode / provider smoke", () => {
   it("reports a script return as text sections with no media side effects", async () => {

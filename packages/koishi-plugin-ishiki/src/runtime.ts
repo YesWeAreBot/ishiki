@@ -223,8 +223,15 @@ export class AgentRuntime {
         config: config.codemode,
         resources: config.resources,
         imageInput: config.attachment.imageInput,
+        home: this.home,
         contextOf: (name) => this.toolsContext[name],
         hostTools: () => this.codemodeHosts,
+        onTaskSettled: (notice, items) => {
+          const batch: AgentMessage[] = [createCustomMessage("ishiki.task", notice)];
+          if (items.length > 0) batch.push(createCustomMessage("ishiki.attachment", { source: "task", taskId: notice.taskId, items: [...items] }));
+          this.agent.send(batch, { ifBusy: "join", trigger: false });
+          this.wake(`后台任务 ${notice.taskId} 已结束，需要结果时用 task.result("${notice.taskId}") 读取。`);
+        },
       });
     }
 
@@ -462,6 +469,8 @@ export class AgentRuntime {
   }
 
   async stop(): Promise<void> {
+    // Task records are written through the codemode surface, so it closes before extensions release their deps.
+    if (this.codemode !== undefined) await (await this.codemode).dispose();
     this.condition.dispose();
     for (const ext of this.extensions) {
       try {
@@ -477,7 +486,6 @@ export class AgentRuntime {
         this.logger.warn(`[${this.id}] extension dispose failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    if (this.codemode !== undefined) await (await this.codemode).dispose();
     await this.agent.stop();
   }
 }
