@@ -134,6 +134,10 @@ describe("execution", () => {
     const snow = createTools(options({ bot: fakeBot(calls), mode: "write", backend: "snowluma" }));
     await call(snow, "invoke_action", { action: "ArkSharePeer", params: { user_id: "1" } });
     expect(calls[1]!.action).toBe("share_peer");
+
+    const llbot = createTools(options({ bot: fakeBot(calls), mode: "read", backend: "llbot" }));
+    await call(llbot, "query_action", { action: "get_group_ignored_notifies", params: { group_id: "1" } });
+    expect(calls[2]!.action).toBe("get_group_ignore_add_request");
   });
 
   it("surfaces a business failure as an ordinary result", async () => {

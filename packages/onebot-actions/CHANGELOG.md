@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added LLBot as a third backend, generated from its OneBot 11 OpenAPI export; 108 actions are available on it
+- Added 14 LLBot-only actions: `batch_delete_group_member`, `create_group_album`, `delete_group_album`, `download_flash_file`, `get_flash_file_info`, `get_profile_like_count`, `get_profile_like_me`, `get_qq_avatar`, `get_recommend_face`, `reshare_flash_file`, `scan_qrcode`, `set_group_file_forever`, `set_group_msg_mask`, and `upload_flash_file`
+
+### Changed
+- Folded LLBot's own names into the shared catalog: `send_pb`, `_delete_group_notice`, `voice_msg_to_text`, `set_friend_category`, and `upload_group_album` are now aliases of their canonical actions
+- Backend-specific parameters and required sets are recorded per backend, so LLBot's stricter required lists no longer leak into NapCat or SnowLuma
+- Classified `upload_images_to_qun_album` under 群相册, matching the other album actions
+- Made the extension `backend` option optional; it now falls back to the plugin's `defaultBackend` setting
+- Action docs now list each other backend's exclusive parameters under its own heading instead of only the single alternate backend
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes

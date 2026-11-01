@@ -4,6 +4,7 @@ import type { Backend, CatalogAction, ParamDoc } from "./types.js";
 const BACKEND_LABEL: Record<Backend, string> = {
   napcat: "NapCat",
   snowluma: "SnowLuma",
+  llbot: "LLBot",
 };
 
 function paramType(spec: ParamDoc): string {
@@ -60,9 +61,8 @@ export function renderAction(action: CatalogAction, backend: Backend): string {
     lines.push("## 参数", "", "无参数。", "");
   }
 
-  // 另一个后端的独有参数：模型切换 backend 时会遇到，值得一并列出。
-  const other: Backend = backend === "napcat" ? "snowluma" : "napcat";
-  if (action.backends.includes(other)) {
+  // 其余后端的独有参数：模型切换 backend 时会遇到，值得一并列出。
+  for (const other of action.backends.filter((entry) => entry !== backend)) {
     const foreign = shapeOf(action, other);
     const only = Object.keys(foreign.params).filter((name) => shape.params[name] === undefined);
     if (only.length > 0) {

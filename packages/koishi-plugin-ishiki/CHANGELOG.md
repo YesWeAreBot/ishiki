@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added background task notices that surface tool name, task id, state and elapsed time in chat context
 - Added a task result record so background task outcomes are stored with the session
 - Added codemode background tasks: scripts start long-running host tools with `task.start`, then query, cancel, or read projected results by id; settled tasks append to `codemode-tasks.jsonl`, deliver one notice with optional attachments, and wake the runtime, while `codemode.maxTasks` bounds how many run at once
+- Added rejection reasons to the chat fold and compact commands, reporting the measured candidate size and the threshold it fell below
 
 ### Changed
 - Reworked the console client visual design with a muted slate palette, flat surfaces, tighter radius scale and unified design tokens
@@ -25,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dropped reasoning token tracking and record source fields from usage data
 - Reworked usage charts with unit-split axes so call counts and token usage scale independently
 - Replaced reasoning token tracking with a cache hit rate summary card
+- Extended automatic compaction across the whole cold zone up to the inbound message that starts the current turn
+- Kept injected user prompts at the end of history out of the compact region
 
 ### Removed
 - Removed the cache page, its snapshot API and related console store state
@@ -32,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fixed mobile console layouts where the activity date filter, chat header and session entry filters overlapped or clipped
 - Fixed mobile console layouts where filters, chat headers and session entries overlapped
+- Fixed fold release figures to match the tokens the projection actually drops, so command previews, usage stats and fold records report one number
+- Fixed token calibration adopting inflated samples, including steps crossing an image attachment or yielding a negative fixed overhead
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes

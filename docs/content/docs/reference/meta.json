@@ -1,4 +1,4 @@
 {
   "title": "参考",
-  "pages": ["plugin-config", "models-yaml", "tools", "mcp-json", "data-layout", "api"]
+  "pages": ["plugin-config", "models-yaml", "tools", "mcp-json", "data-layout", "session-format", "api"]
 }

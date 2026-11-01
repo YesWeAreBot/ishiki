@@ -2,7 +2,7 @@
 
 `koishi-plugin-ishiki-onebot-actions` 把核心工具没有覆盖的 OneBot v11 动作交给 Ishiki Agent：群管理、群文件与群相册、历史消息、表情回应、好友管理、资料修改。
 
-它支持 NapCat 与 SnowLuma 两种协议后端。普通对话仍走 `send_message`；这个插件只补足协议特有的操作。
+它支持 NapCat、SnowLuma 与 LLBot 三种协议后端。普通对话仍走 `send_message`；这个插件只补足协议特有的操作。
 
 ## 工作机制
 
@@ -19,7 +19,7 @@ flowchart LR
     E --> M["资源 URL → base64:// 或发布的 HTTP URL"]
 ```
 
-两个后端的差异不止命名。205 个规范动作中，160 个两边都有，NapCat 有 174 个，SnowLuma 有 191 个；68 个共有动作的参数形状不同。目录保留这些差异，并记录每个后端各自的线上动作名，因为折叠后的别名可能对应不同名字（`share_peer` 在 NapCat 上是 `ArkSharePeer`）。
+各后端的差异不止命名。219 个规范动作中，89 个三个后端都有，71 个 NapCat 与 SnowLuma 共有，3 个 SnowLuma 与 LLBot 共有，2 个 NapCat 与 LLBot 共有；NapCat 有 174 个，SnowLuma 有 191 个，LLBot 有 108 个。83 个动作的参数形状或必填项不一致。目录保留这些差异，并记录每个后端各自的线上动作名，因为折叠后的别名可能对应不同名字（`share_peer` 在 NapCat 上是 `ArkSharePeer`，`send_packet` 在 LLBot 上是 `send_pb`）。
 
 ## 安装与启用
 
@@ -36,13 +36,13 @@ plugins:
 extends:
   onebot-actions:
     config:
-      backend: napcat # 必填：napcat | snowluma
+      backend: napcat # 可选：napcat | snowluma | llbot，默认取插件配置
       mode: read # docs | read | write，默认 read
 ```
 
 | 字段              | 默认                | 说明                                                           |
 | ----------------- | ------------------- | -------------------------------------------------------------- |
-| `backend`         | 必填                | 选择动作集合、参数形状与只读判定                               |
+| `backend`         | 插件配置            | 选择动作集合、参数形状与只读判定                               |
 | `mode`            | `read`              | `docs` 只答目录问题；`read` 增加只读执行；`write` 增加全部执行 |
 | `maxInlineBytes`  | 8 MiB               | 资源转 `base64://` 的字节上限，超限报错而不截断                |
 | `resourceBaseUrl` | Koishi 的 `selfUrl` | 协议端访问 Koishi HTTP 服务用的 origin                         |
@@ -74,8 +74,8 @@ extends:
 
 带媒体的参数接受任何已注册的资源 URL（`asset://`、`artifact://`、`local://`、`workspace://`、`skill://`、`mcp://`）：
 
-- 默认把字节转成 `base64://`，两个后端都接受。
-- 需要 URL 的参数（SnowLuma 的 `ocr_image.image`、`send_tuwen_ark.preview_url`、`get_mini_app_ark` 的图片字段、`download_file.url`）改为发布到 Koishi 的 HTTP 服务，返回临时 URL。
+- 默认把字节转成 `base64://`。
+- 只接受 URL 的参数（`ocr_image.image`、`send_tuwen_ark.preview_url`、`get_mini_app_ark` 的图片字段、`download_file.url`）改为发布到 Koishi 的 HTTP 服务，返回临时 URL。
 - `http(s)://`、`base64://`、`data:`、`file://` 与宿主路径原样透传。
 - 文本资源与超过 `maxInlineBytes` 的字节直接报错，不做截断。
 
@@ -101,11 +101,12 @@ node packages/onebot-actions/scripts/generate-catalog.mjs
 node packages/onebot-actions/scripts/generate-catalog.mjs --check   # 过期时退出非零
 ```
 
-脚本读取 `NAPCAT_DOCS` 与 `SNOWLUMA_DOCS`，默认是 `D:/Codespace/references/NapCatDocs` 与 `D:/Codespace/references/SnowLumaDocs`。参数取自最新的 NapCat OpenAPI 文档；脚本会扫描全部版本，记录每个动作首次出现的版本。SnowLuma 的只读标记与别名取自它的 `catalog.json`，因为它的 OpenAPI 没有这两项。
+脚本读取 `NAPCAT_DOCS`、`SNOWLUMA_DOCS` 与 `LLBOT_DOCS`，默认是 `D:/Codespace/references/NapCatDocs`、`D:/Codespace/references/SnowLumaDocs` 与 `D:/Codespace/references/LLBotDocs`。参数取自最新的 NapCat OpenAPI 文档；脚本会扫描全部版本，记录每个动作首次出现的版本。SnowLuma 的只读标记与别名取自它的 `catalog.json`，因为它的 OpenAPI 没有这两项。LLBot 读 `openapi.json`，按 tag 挑出 OneBot 11 部分（同一份导出里还有 Milky），排除接收事件的 `_events`，并用 GET 兜底只有 GET 定义的查询动作。
 
-生成规则有两条：
+生成规则有三条：
 
-- NapCat 没有只读标记。动作按名称前缀分类，再用覆盖表修正前缀判断错误的几个（`get_ai_record`、`_mark_all_as_read`、`ocr_image` 等）。
+- NapCat 与 LLBot 没有只读标记。动作按名称前缀分类，再用覆盖表修正前缀判断错误的几个（`get_ai_record`、`_mark_all_as_read`、`ocr_image`、`voice_msg_to_text` 等）。
+- 不同后端的动作名折叠到同一个规范名，各后端的线上名与参数变体单独记录（`send_packet` 在 LLBot 上是 `send_pb`，`upload_images_to_qun_album` 在 LLBot 上是 `upload_group_album`）。
 - OpenAPI 把一部分带 `default` 的参数列为必填。这些按可选处理，因为后端会补上默认值。
 
 ## 安全边界
@@ -117,7 +118,7 @@ node packages/onebot-actions/scripts/generate-catalog.mjs --check   # 过期时�
 
 ## 当前限制
 
-- 目录是 NapCat 4.18.38 与当前 SnowLuma 文档的快照。较旧的 NapCat 对新动作返回未知动作错误，该错误原样传回。
+- 目录是 NapCat 4.18.38、当前 SnowLuma 文档与 LLBot 导出的快照。导出不含统一的版本信息，LLBot 动作的版本门槛只留在描述文本里。较旧的后端对新动作返回未知动作错误，该错误原样传回。
 - SnowLuma 的 `ocr_image` 只接受 HTTP(S) URL 或已缓存的 `file_id`。扩展把资源字节发布成 URL 让第一种写法可用；base64 与本地路径仍会被该后端拒绝。
 - 只读分类是文档元数据，不保证没有副作用。后端标记为只读的动作，其实现仍可能改变状态。
 - 发布出来的媒体 URL 不设鉴权：随机路径是唯一的秘密，条目很快过期。除非能接受这个取舍，不要把 `resourceBaseUrl` 指向公网 origin。

@@ -2,7 +2,7 @@
 
 `koishi-plugin-ishiki-onebot-actions` gives an Ishiki agent the OneBot v11 actions that core tools do not cover: group administration, group files and albums, message history, reactions, friend management, and profile edits.
 
-It supports two protocol backends, NapCat and SnowLuma. Ordinary conversation still goes through `send_message`; this pack only fills in protocol-specific operations.
+It supports three protocol backends: NapCat, SnowLuma, and LLBot. Ordinary conversation still goes through `send_message`; this pack only fills in protocol-specific operations.
 
 ## How it works
 
@@ -19,7 +19,7 @@ flowchart LR
     E --> M["resource URL → base64:// or published HTTP URL"]
 ```
 
-The two backends differ in more than naming. Of 205 canonical actions, 160 exist on both, 174 on NapCat, and 191 on SnowLuma; 68 shared actions have different parameter shapes. The catalog keeps those differences instead of averaging them away, and it records each backend's wire name, because a folded alias can map to different action names (`share_peer` is `ArkSharePeer` on NapCat).
+The backends differ in more than naming. Of 219 canonical actions, 89 exist on all three, 71 on NapCat and SnowLuma, 3 on SnowLuma and LLBot, and 2 on NapCat and LLBot; 174 exist on NapCat, 191 on SnowLuma, and 108 on LLBot. 83 actions have different parameter shapes or required sets. The catalog keeps those differences instead of averaging them away, and it records each backend's wire name, because a folded alias can map to different action names (`share_peer` is `ArkSharePeer` on NapCat; `send_packet` is `send_pb` on LLBot).
 
 ## Install and enable
 
@@ -36,13 +36,13 @@ Then declare it in a profile:
 extends:
   onebot-actions:
     config:
-      backend: napcat # required: napcat | snowluma
+      backend: napcat # optional: napcat | snowluma | llbot, defaults to the plugin setting
       mode: read # docs | read | write, default read
 ```
 
 | Field             | Default          | Meaning                                                                                        |
 | ----------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
-| `backend`         | required         | Selects the action set, parameter shape, and read-only classification.                         |
+| `backend`         | plugin setting   | Selects the action set, parameter shape, and read-only classification.                         |
 | `mode`            | `read`           | `docs` only answers catalog questions; `read` adds read-only execution; `write` adds all.      |
 | `maxInlineBytes`  | 8 MiB            | Limit for converting a resource URL into `base64://`; larger bytes fail instead of truncating. |
 | `resourceBaseUrl` | Koishi `selfUrl` | Origin the protocol backend uses to reach Koishi's HTTP service.                               |
@@ -74,8 +74,8 @@ In `read` or `write` mode, discover both `query_action` and the download tool fi
 
 Parameters that carry media accept any registered resource URL (`asset://`, `artifact://`, `local://`, `workspace://`, `skill://`, `mcp://`):
 
-- By default the bytes become `base64://`, which both backends accept.
-- Parameters that require a URL instead (SnowLuma's `ocr_image.image`, `send_tuwen_ark.preview_url`, the image fields of `get_mini_app_ark`, and `download_file.url`) are published through Koishi's HTTP service as a temporary URL.
+- By default the bytes become `base64://`.
+- Parameters that require a URL instead (`ocr_image.image`, `send_tuwen_ark.preview_url`, the image fields of `get_mini_app_ark`, and `download_file.url`) are published through Koishi's HTTP service as a temporary URL.
 - `http(s)://`, `base64://`, `data:`, `file://`, and host paths pass through untouched.
 - Text resources and bytes above `maxInlineBytes` fail with a message; nothing is truncated.
 
@@ -101,11 +101,12 @@ node packages/onebot-actions/scripts/generate-catalog.mjs
 node packages/onebot-actions/scripts/generate-catalog.mjs --check   # exits non-zero when stale
 ```
 
-The script reads `NAPCAT_DOCS` and `SNOWLUMA_DOCS`, defaulting to `D:/Codespace/references/NapCatDocs` and `D:/Codespace/references/SnowLumaDocs`. It uses the newest NapCat OpenAPI document for parameters and scans every version to record when an action first appeared; SnowLuma's `catalog.json` supplies its read-only flags and aliases, since its OpenAPI does not carry them.
+The script reads `NAPCAT_DOCS`, `SNOWLUMA_DOCS`, and `LLBOT_DOCS`, defaulting to `D:/Codespace/references/NapCatDocs`, `D:/Codespace/references/SnowLumaDocs`, and `D:/Codespace/references/LLBotDocs`. It uses the newest NapCat OpenAPI document for parameters and scans every version to record when an action first appeared; SnowLuma's `catalog.json` supplies its read-only flags and aliases, since its OpenAPI does not carry them. LLBot is read from `openapi.json`, keeping the OneBot 11 part by tag (the same export also contains Milky), dropping the `_events` receive endpoint, and falling back to GET for queries that only declare GET.
 
-There are two generation rules:
+There are three generation rules:
 
-- NapCat has no read-only flag. Actions are classified by name prefix, then corrected by an override table for the cases the prefix gets wrong (`get_ai_record`, `_mark_all_as_read`, `ocr_image`, and others).
+- Neither NapCat nor LLBot carries read-only flags. Actions are classified by name prefix, then corrected by an override table for the cases the prefix gets wrong (`get_ai_record`, `_mark_all_as_read`, `ocr_image`, `voice_msg_to_text`, and others).
+- Action names from different backends fold into one canonical name while each backend's wire name and parameter variants are recorded separately (`send_packet` is `send_pb` on LLBot; `upload_images_to_qun_album` is `upload_group_album` on LLBot).
 - OpenAPI lists some parameters with a `default` as required. Those are treated as optional, because the backend fills them in.
 
 ## Safety
@@ -117,7 +118,7 @@ There are two generation rules:
 
 ## Current limits
 
-- The catalog is a snapshot of the NapCat 4.18.38 and current SnowLuma documentation. An older NapCat returns an unknown-action error for newer actions; the error is passed back unchanged.
+- The catalog is a snapshot of NapCat 4.18.38, the current SnowLuma documentation, and the LLBot export. The export carries no uniform version metadata, so LLBot version requirements survive only in action descriptions. An older backend returns an unknown-action error for newer actions; the error is passed back unchanged.
 - SnowLuma's `ocr_image` accepts an HTTP(S) URL or a cached `file_id` only. The extension publishes resource bytes as a URL so the first form works; base64 and local paths remain rejected by that backend.
 - Read-only classification is documentation metadata, not a guarantee about side effects. An action the backend marks read-only can still change state if its implementation does.
 - Published media URLs are unauthenticated by design: the random path is the only secret, and entries expire quickly. Do not point `resourceBaseUrl` at a public origin unless that tradeoff is acceptable.

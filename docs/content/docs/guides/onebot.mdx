@@ -3,22 +3,22 @@ title: 使用 OneBot 扩展
 description: 通过 OneBot v11 协议端调用群管理、文件、表情回应等协议特有动作
 ---
 
-OneBot 扩展（`koishi-plugin-ishiki-onebot-actions`）把 NapCat 与 SnowLuma 的 OneBot v11 动作目录带进对话，让 Agent 能查询并调用核心工具没有覆盖的协议能力：群管理、群文件与群相册、表情回应、历史消息、好友与资料管理。
+OneBot 扩展（`koishi-plugin-ishiki-onebot-actions`）把 NapCat、SnowLuma 与 LLBot 的 OneBot v11 动作目录带进对话，让 Agent 能查询并调用核心工具没有覆盖的协议能力：群管理、群文件与群相册、表情回应、历史消息、好友与资料管理。
 
 普通发言仍用 `send_message`；这些工具只补足协议特有的操作。
 
 ## 动作从哪来
 
-目录由 `packages/onebot-actions/scripts/generate-catalog.mjs` 从两边的 OpenAPI 文档生成，产物 `packages/onebot-actions/src/catalog/generated.ts` 提交进仓库，运行时不依赖参考仓库：
+目录由 `packages/onebot-actions/scripts/generate-catalog.mjs` 从三边的 OpenAPI 文档生成，产物 `packages/onebot-actions/src/catalog/generated.ts` 提交进仓库，运行时不依赖参考仓库：
 
 ```bash
 node packages/onebot-actions/scripts/generate-catalog.mjs          # 重新生成
 node packages/onebot-actions/scripts/generate-catalog.mjs --check  # 只校验
 ```
 
-脚本读取 `NAPCAT_DOCS` 与 `SNOWLUMA_DOCS` 指向的仓库，默认 `D:/Codespace/references/NapCatDocs` 与 `D:/Codespace/references/SnowLumaDocs`。
+脚本读取 `NAPCAT_DOCS`、`SNOWLUMA_DOCS` 与 `LLBOT_DOCS` 指向的仓库，默认 `D:/Codespace/references/NapCatDocs`、`D:/Codespace/references/SnowLumaDocs` 与 `D:/Codespace/references/LLBotDocs`。LLBot 的数据来自导出的 `openapi.json`，脚本按 tag 只取 OneBot 11 部分（同一份导出里还有 Milky），并跳过接收事件的 `_events`。
 
-两边的动作集合不同：交集为 159 个，NapCat 独有 19 个，SnowLuma 独有 34 个；交集里 80 个动作的参数形状不同。目录保留这些差异：公共参数放顶层，单后端独有的参数进对应后端的变体，同一个规范名在两个后端可以对应不同的线上名（例如 `share_peer` 在 NapCat 上是 `ArkSharePeer`）。
+各后端的动作集合不同：89 个三边都有，71 个 NapCat 与 SnowLuma 共有，3 个 SnowLuma 与 LLBot 共有，2 个 NapCat 与 LLBot 共有；NapCat 有 174 个，SnowLuma 有 191 个，LLBot 有 108 个。83 个动作的参数形状或必填项不一致。目录保留这些差异：公共参数放顶层，单后端独有的参数进对应后端的变体，同一个规范名在不同后端可以对应不同的线上名（例如 `share_peer` 在 NapCat 上是 `ArkSharePeer`，`send_packet` 在 LLBot 上是 `send_pb`）。
 
 ## 启用
 
@@ -35,13 +35,13 @@ plugins:
 extends:
   onebot-actions:
     config:
-      backend: napcat   # 必填：napcat | snowluma
+      backend: napcat   # 可选：napcat | snowluma | llbot，默认取插件配置
       mode: read        # docs | read | write，默认 read
 ```
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `backend` | 必填 | 动作集合、参数形状、只读判定都按它选择 |
+| `backend` | 插件配置 | 动作集合、参数形状、只读判定都按它选择 |
 | `mode` | `read` | `docs` 只查目录；`read` 加只读执行；`write` 加全部执行 |
 | `maxInlineBytes` | 8 MiB | 资源转 `base64://` 的字节上限 |
 | `resourceBaseUrl` | Koishi 的 `selfUrl` | 协议端访问 Koishi HTTP 服务的 origin，用于需要 URL 的参数 |
@@ -64,24 +64,28 @@ extends:
 
 ## 后端差异
 
-同一个动作在两个后端上的参数不一定相同。目录会把当前后端的参数放在「参数」一节，把另一个后端独有的参数放在单独一节，方便对照：
+同一个动作在不同后端上的参数不一定相同。目录会把当前后端的参数放在「参数」一节，把其他后端独有的参数各自放在单独一节，方便对照：
 
-| 动作 | NapCat | SnowLuma |
-| --- | --- | --- |
-| `get_group_msg_history` | `message_seq`、`reverseOrder` | `message_id`、`reverse_order` |
-| `mark_group_msg_as_read` | `group_id` | `message_id` 必填 |
-| `upload_group_file` | `file`、`name`、`folder` | 另有 `upload_file` |
-| `move_group_file` | `current_parent_directory`、`target_parent_directory` | `parent_directory`、`target_directory` |
-| `ocr_image` | 路径、URL、base64 | 只接受 http(s) URL 或已缓存的 `file_id` |
+| 动作 | NapCat | SnowLuma | LLBot |
+| --- | --- | --- | --- |
+| `get_group_msg_history` | `message_seq`、`reverseOrder`、`reverse_order` | `message_id`、`reverse_order` | `message_seq`、`reverseOrder` |
+| `mark_group_msg_as_read` | `group_id` | `message_id` 必填 | 无此动作 |
+| `upload_group_file` | 另有 `folder` | 另有 `folder`、`upload_file` | 无 `folder`、`upload_file` |
+| `move_group_file` | `current_parent_directory`、`target_parent_directory` | `parent_directory`、`target_directory` | `parent_directory`、`target_directory` |
+| `ocr_image` | 路径、URL、base64 | 只接受 http(s) URL 或已缓存的 `file_id` | 路径、URL、base64 |
 
-只存在于一个后端的动作不会出现在另一个后端的目录里；调用它会被拒绝，并提示查看当前后端的目录。
+LLBot 的必填项整体更严格：`set_group_admin` 要 `enable`，`set_group_ban` 要 `duration`，`set_group_kick` 要 `reject_add_request`，`get_group_files_by_folder` 要 `folder_id`。这些只影响 LLBot 的变体，不会放宽另外两个后端。
+
+LLBot 还有一批独有动作：闪传文件（`upload_flash_file`、`download_flash_file`、`get_flash_file_info`、`reshare_flash_file`）、群相册创建与删除、批量踢人、群消息遮蔽、二维码扫描、资料卡点赞、推荐表情、群文件永久保存。
+
+只存在于部分后端的动作不会出现在其他后端的目录里；调用它会被拒绝，并提示查看当前后端的目录。
 
 ## 媒体参数
 
 动作参数里的资源 URL 按参数类型处理：
 
-- 默认可内联的参数转成 `base64://`，两个后端都接受。
-- 标记为需要 URL 的参数（SnowLuma 的 `ocr_image.image`、`send_tuwen_ark.preview_url`、`get_mini_app_ark` 的图片地址、`download_file.url`）发布到 Koishi 的 HTTP 服务，返回临时 URL 交给协议端拉取。
+- 默认可内联的参数转成 `base64://`。
+- 标记为需要 URL 的参数（`ocr_image.image`、`send_tuwen_ark.preview_url`、`get_mini_app_ark` 的图片地址、`download_file.url`）发布到 Koishi 的 HTTP 服务，返回临时 URL 交给协议端拉取。
 - `http(s)://`、`base64://`、`data:`、`file://` 和宿主路径原样保留。
 - 文本资源、超过 `maxInlineBytes` 的字节都直接报错，不截断。
 

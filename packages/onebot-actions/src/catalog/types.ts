@@ -1,5 +1,5 @@
-/** 协议后端：两套实现的动作名与参数形状并不完全一致。 */
-export type Backend = "napcat" | "snowluma";
+/** 协议后端：各实现的动作名与参数形状并不完全一致。 */
+export type Backend = "napcat" | "snowluma" | "llbot";
 
 /** 工具可见档位：docs 只查文档；read 加只读执行；write 加全部执行。 */
 export type Mode = "docs" | "read" | "write";
@@ -37,9 +37,9 @@ export interface CatalogAction {
   /** 各后端的只读判定；执行前按当前 backend 取。 */
   readOnly: Record<Backend, boolean>;
   aliases: string[];
-  /** 两边都有的参数。 */
+  /** 各后端都有的参数。 */
   params: Record<string, ParamDoc>;
-  /** 两边都必填的参数；单后端动作即它自己的必填项。 */
+  /** 各后端都必填的参数；单后端动作即它自己的必填项。 */
   required: string[];
   variants?: Partial<Record<Backend, ActionVariant>>;
   /** 该动作在 NapCat 首次出现的文档版本。 */

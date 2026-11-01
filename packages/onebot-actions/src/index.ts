@@ -15,7 +15,7 @@ export interface OneBotExtensionConfig {
 }
 
 export const OneBotExtensionConfig: Schema<OneBotExtensionConfig> = Schema.object({
-  backend: Schema.union(["napcat", "snowluma"]).description("协议后端：两个实现的动作集合与参数形状不同，目录和只读判定都按它选择。"),
+  backend: Schema.union(["napcat", "snowluma", "llbot"]).description("协议后端：各实现的动作集合与参数形状不同，目录和只读判定都按它选择。"),
   mode: Schema.union(["docs", "read", "write"]).description("工具档位。docs 只提供目录查询；read 增加只读动作执行；write 增加全部动作执行。"),
   maxInlineBytes: Schema.number()
     .min(1)
@@ -95,8 +95,8 @@ namespace OneBotExtension {
     logLevel: number;
   }
   export const Config: Schema<Config> = Schema.object({
-    defaultBackend: Schema.union(["napcat", "snowluma"])
-      .description("协议后端：两个实现的动作集合与参数形状不同，目录和只读判定都按它选择。")
+    defaultBackend: Schema.union(["napcat", "snowluma", "llbot"])
+      .description("协议后端：各实现的动作集合与参数形状不同，目录和只读判定都按它选择。")
       .default("napcat"),
     defaultMode: Schema.union(["docs", "read", "write"])
       .description("工具档位。docs 只提供目录查询；read 增加只读动作执行；write 增加全部动作执行。")

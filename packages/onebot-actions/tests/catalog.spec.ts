@@ -4,13 +4,17 @@ import { actionsFor, categoriesFor, findAction, search, shapeOf } from "../src/c
 import { renderAction, renderIndex } from "../src/catalog/render.js";
 
 describe("catalog data", () => {
-  it("covers both backends without duplicate names", () => {
+  it("covers every backend without duplicate names", () => {
     const names = actionsFor("napcat").map((action) => action.name);
     expect(new Set(names).size).toBe(names.length);
     expect(names.length).toBeGreaterThan(150);
 
     const snowluma = actionsFor("snowluma").map((action) => action.name);
     expect(snowluma.length).toBeGreaterThan(names.length);
+
+    const llbot = actionsFor("llbot");
+    expect(llbot.length).toBeGreaterThan(100);
+    expect(llbot.every((action) => action.wire.llbot !== undefined)).toBe(true);
   });
 
   it("resolves aliases to the canonical action", () => {
@@ -18,6 +22,9 @@ describe("catalog data", () => {
     expect(findAction("ArkSharePeer")?.name).toBe("share_peer");
     expect(findAction("send_group_sign")?.name).toBe("set_group_sign");
     expect(findAction("upload_foward_msg")?.name).toBe("upload_forward_msg");
+    expect(findAction("send_pb")?.name).toBe("send_packet");
+    expect(findAction("_delete_group_notice")?.name).toBe("_del_group_notice");
+    expect(findAction("voice_msg_to_text")?.name).toBe("fetch_ptt_text");
     expect(findAction("no_such_action")).toBeUndefined();
   });
 
@@ -29,6 +36,11 @@ describe("catalog data", () => {
     const onlySnowluma = findAction("fetch_sys_faces");
     expect(onlySnowluma?.backends).toEqual(["snowluma"]);
     expect(actionsFor("napcat").some((action) => action.name === "fetch_sys_faces")).toBe(false);
+
+    const onlyLlbot = findAction("scan_qrcode");
+    expect(onlyLlbot?.backends).toEqual(["llbot"]);
+    expect(onlyLlbot?.media).toEqual({ file: "inline" });
+    expect(actionsFor("napcat").some((action) => action.name === "scan_qrcode")).toBe(false);
   });
 
   it("merges backend variants instead of dropping them", () => {
@@ -42,18 +54,25 @@ describe("catalog data", () => {
     const upload = findAction("upload_group_file");
     if (upload === undefined) throw new Error("catalog is missing upload_group_file");
     expect(shapeOf(upload, "snowluma").params).toHaveProperty("upload_file");
+
+    const kick = findAction("set_group_kick");
+    if (kick === undefined) throw new Error("catalog is missing set_group_kick");
+    expect(shapeOf(kick, "napcat").required).not.toContain("reject_add_request");
+    expect(shapeOf(kick, "llbot").required).toContain("reject_add_request");
   });
 
   it("marks read-only actions per backend", () => {
     const info = findAction("get_group_info");
-    expect(info?.readOnly).toEqual({ napcat: true, snowluma: true });
+    expect(info?.readOnly).toEqual({ napcat: true, snowluma: true, llbot: true });
     const record = findAction("get_ai_record");
     expect(record?.readOnly.napcat).toBe(false);
     const ocr = findAction("ocr_image");
-    expect(ocr?.readOnly).toEqual({ napcat: true, snowluma: true });
+    expect(ocr?.readOnly).toEqual({ napcat: true, snowluma: true, llbot: true });
     expect(ocr?.media).toEqual({ image: "http" });
     const mark = findAction("_mark_all_as_read");
     expect(mark?.readOnly.napcat).toBe(false);
+    // LLBot 的线上名不落在只读前缀里，靠覆盖表纠正。
+    expect(findAction("voice_msg_to_text")?.readOnly.llbot).toBe(true);
   });
 
   it("disables the dangerous actions by default", () => {
@@ -62,6 +81,8 @@ describe("catalog data", () => {
       expect(action?.deny).toBe(true);
       expect(action?.note).toBeTypeOf("string");
     }
+    // LLBot 的别名同样落在禁用范围内。
+    expect(findAction("send_pb")?.deny).toBe(true);
   });
 
   it("records when NapCat gained a newer action", () => {
@@ -99,11 +120,25 @@ describe("catalog rendering", () => {
     expect(text).toContain("`message_seq`");
   });
 
+  it("renders the other backends' own parameters", () => {
+    const action = findAction("get_group_msg_history");
+    if (action === undefined) throw new Error("missing action");
+    const text = renderAction(action, "llbot");
+    expect(text).toContain("后端: NapCat / SnowLuma / LLBot");
+    expect(text).toContain("NapCat 独有参数");
+    expect(text).toContain("SnowLuma 独有参数");
+    expect(text).toContain("`reverseOrder`");
+  });
+
   it("renders the index grouped by category", () => {
-    const text = renderIndex("napcat");
-    expect(text).toContain("# OneBot 动作目录 (NapCat)");
-    expect(text).toContain("## 消息");
-    expect(text).toContain("`send_msg`");
+    const text = renderIndex("llbot");
+    expect(text).toContain("# OneBot 动作目录 (LLBot)");
+    expect(text).toContain("`scan_qrcode`");
     expect(text).not.toContain("`fetch_sys_faces`");
+
+    const napcat = renderIndex("napcat");
+    expect(napcat).toContain("## 消息");
+    expect(napcat).toContain("`send_msg`");
+    expect(napcat).not.toContain("`scan_qrcode`");
   });
 });

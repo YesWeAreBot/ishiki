@@ -48,9 +48,9 @@ data/ishiki
 
 ### events.jsonl
 
-实例的完整事件流，每行一个 JSON 对象（`{ id, type, data, timestamp, turnId }`），包含消息、事件与状态条目。它是实例记忆的**唯一事实源**：每轮请求的历史投影、上下文压缩都从它出发。持续追加，不要手工编辑；文件损坏（某行非法 JSON）会影响该实例的恢复。
+实例的完整事件流，每行一个 JSON 条目，含消息、回合事件与 Ishiki 自定义条目。它是实例记忆的**唯一事实源**：每轮请求的历史投影、上下文压缩都从它出发。持续追加，不要手工编辑；文件损坏（某行非法 JSON）会影响该实例的恢复。
 
-使用 `narrative` 引擎时，流中还包含 `ishiki.narrative` 条目：`script` 是剧本正文，`originMessageId` 指向对应 assistant 消息；增量携带已处理的 `inputEntryIds`，摘要携带覆盖到的 `throughOriginMessageId`。这些条目是同一台账上的叙事投影，原始消息、工具调用和执行结果仍保留。投影缺失时引擎可从带标记的 assistant reasoning 恢复，不会因此重新调用工具。
+条目的字段、各类条目的写入时机与排查命令见[会话存储格式](/docs/reference/session-format)。使用 `narrative` 引擎时流中还包含 `ishiki.narrative` 条目，也列在该页。
 
 ### resources/assets/
 

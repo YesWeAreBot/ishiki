@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createAssistantMessage, createEntry, createToolMessage, createUserMessage, type Agent, type AgentEntry } from "@yesimagent/core";
+import { createAssistantMessage, createCustomMessage, createEntry, createToolMessage, createUserMessage, type Agent, type AgentEntry } from "@yesimagent/core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,6 +10,7 @@ import {
   buildCompactPrompt,
   buildShakeBundle,
   ChatContextInstance,
+  describePlanRejection,
   makeToolCallMap,
   planChat,
   planCompact,
@@ -21,7 +22,9 @@ import {
   type IshikiChatCompact,
   type IshikiChatShake,
 } from "../src/context/chat.engine.js";
+import { collapse, renderLine, visibleSize } from "../src/context/render.js";
 import { ResourceCenter } from "../src/resource/center.js";
+import type { TaskState } from "../src/types/messages.js";
 
 const budget: ChatBudget = {
   maxTokens: 1000,
@@ -41,6 +44,46 @@ const VALID_SUMMARY = "## 人物与关系\n测试\n## 偏好与边界\n无\n## �
 
 function user(id: string, text: string): AgentEntry<"message"> {
   return createEntry("message", createUserMessage(text), { id, timestamp: 1 });
+}
+
+function inbound(id: string, text: string): AgentEntry<"message"> {
+  return createEntry(
+    "message",
+    createCustomMessage("ishiki.message.created", {
+      timestamp: 1,
+      platform: "test",
+      selfId: "bot",
+      channelId: "channel",
+      messageId: id,
+      content: text,
+      isDirect: true,
+      user: { id: "u1", name: "Miaow" },
+    }),
+    { id, timestamp: 1 },
+  );
+}
+
+function attachment(id: string): AgentEntry<"message"> {
+  return createEntry(
+    "message",
+    createCustomMessage("ishiki.attachment", { source: "platform", platform: "test", selfId: "bot", channelId: "channel", messageId: id, items: [] }),
+    { id, timestamp: 1 },
+  );
+}
+
+function deleted(id: string): AgentEntry<"message"> {
+  return createEntry(
+    "message",
+    createCustomMessage("ishiki.message.deleted", { timestamp: 1, platform: "test", selfId: "bot", channelId: "channel", messageId: id }),
+    { id, timestamp: 1 },
+  );
+}
+
+function notice(id: string, state: TaskState, summary: string, startedAt: number, finishedAt: number): AgentEntry<"message"> {
+  return createEntry("message", createCustomMessage("ishiki.task", { taskId: id, toolName: "read", state, startedAt, finishedAt, summary }), {
+    id: `notice-${id}`,
+    timestamp: finishedAt,
+  });
 }
 
 function call(id: string, toolCallId: string, intent: string, text: string): AgentEntry<"message"> {
@@ -144,12 +187,105 @@ describe("chat planner", () => {
     const entries = [user("root", "开始"), ...taskStep("one", "x".repeat(4000)), ...taskStep("two", "y".repeat(4000))];
     const start = selectHotStart(entries, budget, rate);
     const shake = planShake(entries, start, budget, rate, undefined, 0, 1);
-    expect(shake).toBeDefined();
-    expect(shake?.range).toEqual({ start: "onea", end: "onet" });
-    expect(shake?.toolTokens).toBeGreaterThan(budget.shakeMinTool);
+    expect(shake.plan?.range).toEqual({ start: "onea", end: "onet" });
+    expect(shake.plan?.toolTokens).toBeGreaterThan(budget.shakeMinTool);
 
     const small = planShake(entries, start, { ...budget, shakeMinTool: 5000 }, rate, undefined, 0, 1);
-    expect(small).toBeUndefined();
+    expect(small.plan).toBeUndefined();
+    expect(small.rejection).toMatchObject({ reason: "shakeMinTool", threshold: 5000 });
+  });
+
+  it("counts fold release as the projection difference when the digest outgrows the remaining tool bodies", () => {
+    // 线上形态：一段很长的 send_message 失败输出不进入摘要，摘要因此比"仍可折叠的工具正文"更长。
+    const calls = createEntry(
+      "message",
+      createAssistantMessage([
+        { type: "tool-call", toolCallId: "s1", toolName: "send_message", input: { messages: ["早上好"] } },
+        { type: "tool-call", toolCallId: "r1", toolName: "read", input: { i: "读取偏好", url: "local://p.txt" } },
+      ]),
+      { id: "calls", timestamp: 2 },
+    );
+    const outputs = createEntry(
+      "message",
+      createToolMessage([
+        { type: "tool-result", toolCallId: "s1", toolName: "send_message", output: { type: "error", value: "发送失败：连接中断。".repeat(300) } },
+        { type: "tool-result", toolCallId: "r1", toolName: "read", output: { type: "text", value: "ok" } },
+      ]),
+      { id: "outputs", timestamp: 3 },
+    );
+    const entries = [user("root", "开始"), calls, outputs];
+
+    const decision = planShake(entries, entries.length, budget, rate, undefined, 0, 0);
+    const plan = decision.plan!;
+    expect(plan.digestChars).toBeGreaterThan("ok".length);
+    expect(plan.freedTokens).toBeGreaterThan(0);
+
+    const folded: AgentEntry<"ishiki.chat.shake"> = createEntry(
+      "ishiki.chat.shake",
+      {
+        range: plan.range,
+        digest: "摘".repeat(plan.digestChars),
+        artifact: plan.artifact,
+        regions: [],
+        stats: {
+          coveredMessages: plan.coveredMessages,
+          coveredTokens: plan.coveredTokens,
+          freedTokens: plan.freedTokens,
+          digestTokens: Math.round(plan.digestChars * rate),
+        },
+      } satisfies IshikiChatShake,
+      { id: "folded", timestamp: 4 },
+    );
+
+    const before = projectChat(entries, budget, rate).chars;
+    const after = projectChat([...entries, folded], budget, rate).chars;
+    expect(Math.round((before - after) * rate)).toBe(plan.freedTokens);
+  });
+
+  it("explains a rejection with its threshold instead of an empty plan", () => {
+    expect(planShake([user("root", "开始")], 0, budget, rate, undefined, 0).rejection).toEqual({ reason: "noRange" });
+    expect(planShake([user("root", "开始"), user("two", "再说")], 2, budget, rate, undefined, 0).rejection).toEqual({ reason: "covered" });
+
+    const thin = planShake([user("root", "开始"), ...taskStep("one", "x".repeat(20))], 3, { ...budget, shakeMinTool: 5000 }, rate, undefined, 0);
+    const thinRejection = thin.rejection as { actual: number; threshold: number };
+    expect(thin.rejection).toMatchObject({ reason: "shakeMinTool", threshold: 5000 });
+    expect(thinRejection.actual).toBeGreaterThan(0);
+    expect(thinRejection.actual).toBeLessThan(5000);
+    expect(describePlanRejection("shake", thin.rejection!)).toBe(
+      `当前没有可折叠的工具内容：候选工具正文约 ${Math.round(thinRejection.actual)} tokens，低于阈值 5000 tokens`,
+    );
+
+    const small = planCompact([user("root", "开始")], { ...budget, compactMinCovered: 5000 }, rate, 1, undefined, 0);
+    const smallRejection = small.rejection as { actual: number; threshold: number };
+    expect(small.rejection).toMatchObject({ reason: "compactMinCovered", threshold: 5000 });
+    expect(smallRejection.actual).toBe(1);
+    expect(describePlanRejection("compact", small.rejection!)).toBe(`当前没有可压缩的内容：候选内容约 1 tokens，低于阈值 5000 tokens`);
+
+    expect(describePlanRejection("shake", { reason: "noRange" })).toBe("当前没有可折叠的工具内容：热区之外没有候选条目");
+    expect(describePlanRejection("compact", { reason: "covered" })).toBe("当前没有可压缩的内容：候选区已无未覆盖内容");
+  });
+
+  it("records the release that the projection actually loses", async () => {
+    const harness = await maintenanceHarness([
+      user("u1", "开始"),
+      createEntry("message", createAssistantMessage([{ type: "tool-call", toolCallId: "c1", toolName: "read", input: { i: "取大块", url: "local://x" } }]), {
+        id: "a1",
+        timestamp: 2,
+      }),
+      result("t1", "c1", "x".repeat(4000)),
+      createEntry("message", createAssistantMessage([{ type: "text", text: "done" }]), { id: "a2" }),
+    ]);
+    try {
+      const before = (await harness.instance.stats()).assembledChars;
+      expect(await harness.instance.forceShake()).toMatchObject({ appended: true });
+      const after = (await harness.instance.stats()).assembledChars;
+      const shake = harness.entries.find((entry): entry is AgentEntry<"ishiki.chat.shake"> => entry.type === "ishiki.chat.shake");
+      expect(after).toBeLessThan(before);
+      expect(shake?.data.stats?.freedTokens).toBe(Math.round((before - after) * 0.5));
+      expect((await harness.instance.stats()).lastShake?.freedTokens).toBe(shake?.data.stats?.freedTokens);
+    } finally {
+      await harness.cleanup();
+    }
   });
 
   it("projects the compact head and active shake digest in order", () => {
@@ -188,6 +324,68 @@ describe("chat planner", () => {
     expect(plan.projection.entries.length).toBeGreaterThan(0);
   });
 
+  it("compacts the whole cold zone when the last entry is an inbound message", () => {
+    const entries = [
+      ...taskStep("one", "x".repeat(2000)),
+      user("prompt", "回复Miaow"),
+      ...taskStep("two", "y".repeat(2000)),
+      ...taskStep("three", "z".repeat(2000)),
+      inbound("incoming", "在吗"),
+    ];
+    const plan = planChat(entries, { ...budget, compactMinCovered: 1500 }, rate);
+    expect(plan.compact).toBeDefined();
+    expect(plan.compact?.start).toBe(0);
+    expect(plan.compact?.end).toBe(plan.hotStart - 1);
+    expect(plan.compact?.throughEntryId).toBe(entries[plan.hotStart - 1].id);
+
+    const attached = [
+      ...taskStep("one", "x".repeat(2000)),
+      user("prompt", "回复Miaow"),
+      ...taskStep("two", "y".repeat(2000)),
+      ...taskStep("three", "z".repeat(2000)),
+      attachment("picture"),
+    ];
+    const attachedPlan = planChat(attached, { ...budget, compactMinCovered: 1500 }, rate);
+    expect(attachedPlan.compact?.end).toBe(attachedPlan.hotStart - 1);
+    expect(attachedPlan.compact?.throughEntryId).toBe(attached[attachedPlan.hotStart - 1].id);
+  });
+
+  it("keeps an injected user prompt at the end of the history out of the compact region", () => {
+    const entries = [
+      ...taskStep("one", "x".repeat(2000)),
+      user("prompt", "Continue."),
+      ...taskStep("two", "y".repeat(2000)),
+      ...taskStep("three", "z".repeat(2000)),
+    ];
+    const plan = planChat(entries, budget, rate);
+    expect(plan.compact?.start).toBe(0);
+    expect(plan.compact?.end).toBe(1);
+    expect(plan.compact?.throughEntryId).toBe("onet");
+    expect(plan.compact?.end).toBeLessThan(2);
+  });
+
+  it("falls back to the hot boundary when the history holds no inbound message", () => {
+    const entries = [...taskStep("one", "x".repeat(2000)), ...taskStep("two", "y".repeat(2000)), deleted("gone")];
+    const plan = planChat(entries, budget, rate);
+    expect(plan.compact).toBeDefined();
+    expect(plan.compact?.end).toBe(plan.hotStart - 1);
+    expect(plan.compact?.throughEntryId).toBe(entries[plan.hotStart - 1].id);
+  });
+
+  it("prefers the last inbound message over a later injected prompt", () => {
+    const entries = [
+      ...taskStep("one", "x".repeat(2000)),
+      inbound("incoming", "开始任务"),
+      ...taskStep("two", "y".repeat(2000)),
+      ...taskStep("three", "z".repeat(2000)),
+      user("prompt", "Continue."),
+    ];
+    const plan = planChat(entries, budget, rate);
+    expect(plan.compact?.end).toBe(1);
+    expect(plan.compact?.throughEntryId).toBe("onet");
+    expect(plan.compact?.end).toBeLessThan(2);
+  });
+
   it("starts planning from the previous compact anchor when later messages precede the compact entry", () => {
     const compact: AgentEntry<"ishiki.chat.compact"> = createEntry(
       "ishiki.chat.compact",
@@ -197,7 +395,7 @@ describe("chat planner", () => {
     const entries = [user("root", "开始"), user("joined", "后".repeat(1000)), compact, user("later", "续".repeat(1000))];
 
     expect(boundaryIndex(entries)).toBe(1);
-    const plan = planCompact(entries, budget, rate, 4, undefined, 3);
+    const plan = planCompact(entries, budget, rate, 4, undefined, 3).plan;
     expect(plan?.start).toBe(1);
     expect(plan?.end).toBe(3);
     expect(plan?.throughEntryId).toBe("later");
@@ -568,6 +766,170 @@ describe("chat engine maintenance", () => {
       await harness.instance.prepareEntries(harness.entries, request);
       expect(harness.calls()).toBe(2);
       expect(harness.entries.filter((entry) => entry.type === "ishiki.chat.compact")).toHaveLength(2);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+});
+
+describe("task notices", () => {
+  it("renders a compact success line with tool, id, duration, and summary", () => {
+    const entry = notice("t1", "succeeded", "输出 3 行", 1_000, 2_500);
+    expect(renderLine(entry.data as never)).toMatch(/^\[\d\d-\d\d \d\d:\d\d\] 后台任务 read #t1 成功（1\.5s）：输出 3 行$/);
+  });
+
+  it("renders failures with their error summary and cancellations without one", () => {
+    expect(renderLine(notice("t2", "failed", "连接超时", 0, 0).data)).toMatch(/后台任务 read #t2 失败（0ms）：连接超时$/);
+    expect(renderLine(notice("t3", "cancelled", "", 0, 400).data)).toMatch(/后台任务 read #t3 已取消（400ms）$/);
+    expect(renderLine(notice("t4", "interrupted", "运行时关闭", 0, 1_200).data)).toMatch(/后台任务 read #t4 已中断（1\.2s）：运行时关闭$/);
+  });
+
+  it("keeps notices addressable through folding", () => {
+    const entries = [inbound("m1", "你好"), notice("t5", "succeeded", "", 0, 10)];
+    const folded = collapse(entries.map((entry) => entry.data));
+    expect(folded).toHaveLength(1);
+    expect(folded[0]?.role).toBe("user");
+    expect(folded[0]?.role === "user" ? folded[0].content : "").toMatch(/你好\n\[\d\d-\d\d \d\d:\d\d\] 后台任务 read #t5 成功（10ms）$/);
+  });
+});
+
+describe("chat engine token calibration", () => {
+  const renderOverhead = JSON.stringify([{ type: "text", text: "" }]).length;
+
+  type ChannelEvent = { type: string; usage?: { inputTokens?: number } };
+
+  async function calibrationHarness() {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-chat-calibration-"));
+    let entries: AgentEntry[] = [];
+    const listeners: Array<(event: ChannelEvent) => void> = [];
+    const agent = {
+      channel: {
+        subscribe: (_scope: string, listener: (event: ChannelEvent) => void) => {
+          listeners.push(listener);
+          return () => {
+            listeners.splice(listeners.indexOf(listener), 1);
+          };
+        },
+      },
+      storage: {
+        read: async () => entries,
+        append: async (...batch: readonly AgentEntry[]) => {
+          entries.push(...batch);
+        },
+      },
+      isIdle: () => true,
+      getModel: () => {
+        throw new Error("chat calibration test does not generate");
+      },
+    } as unknown as Agent;
+    const instance = new ChatContextInstance({ maxTokens: 1_000_000 }, {
+      runtimeId: "chat-calibration",
+      domain: { mode: "channel", platform: "test", selfId: "bot", channelId: "channel" },
+      home,
+      root: home,
+      fiber: {} as never,
+      logger: { level: 1, debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+      resources: new ResourceCenter("chat-calibration", home),
+    } as never);
+    instance.attach(agent);
+
+    /** 补齐投影字符数：新增一条 assistant 文本，长度按渲染开销反推。 */
+    const pad = (target: number): void => {
+      const length = target - visibleSize(entries) - renderOverhead;
+      if (length < 0) throw new Error(`target ${target} is below the current projection`);
+      entries.push(createEntry("message", createAssistantMessage([{ type: "text", text: "x".repeat(length) }]), { id: `pad-${entries.length}`, timestamp: 1 }));
+    };
+
+    return {
+      instance,
+      reset: (next: AgentEntry[]) => {
+        entries = next;
+      },
+      attachImage: (): void => {
+        entries.push(attachment(`image-${entries.length}`));
+      },
+      sample: async (chars: number, tokens: number): Promise<void> => {
+        pad(chars);
+        expect(visibleSize(entries)).toBe(chars);
+        await instance.prepareEntries(entries, { signal: new AbortController().signal });
+        expect((await instance.stats()).assembledChars).toBe(chars);
+        for (const listener of listeners) listener({ type: "turn.step", usage: { inputTokens: tokens } });
+      },
+      state: () => instance as unknown as { rate?: number; fixed?: number },
+      cleanup: () => fs.rm(home, { recursive: true, force: true }),
+    };
+  }
+
+  it("keeps the adopted calibration when a pair yields a negative intercept", async () => {
+    const harness = await calibrationHarness();
+    try {
+      await harness.sample(1_000, 500);
+      await harness.sample(2_000, 900);
+      expect(harness.state().rate).toBeCloseTo(0.4, 9);
+      expect(harness.state().fixed).toBeCloseTo(100, 9);
+      let stats = await harness.instance.stats();
+      expect(stats.rateCalibrated).toBe(true);
+      expect(stats.messageTokens).toBe(800);
+      expect(stats.estimatedTokens).toBe(900);
+
+      // Δchars 500、Δtokens 500：rate 1.0 在区间内，截距 900 - 1.0 × 2000 = -1100 为负。
+      await harness.sample(2_500, 1_400);
+      expect(harness.state().rate).toBeCloseTo(0.4, 9);
+      expect(harness.state().fixed).toBeCloseTo(100, 9);
+      stats = await harness.instance.stats();
+      expect(stats.messageTokens).toBe(1_000);
+      expect(stats.estimatedTokens).toBe(1_100);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it("does not let a step crossing an image attachment enter the sample pair", async () => {
+    const harness = await calibrationHarness();
+    try {
+      await harness.sample(1_000, 450);
+      await harness.sample(2_000, 900);
+      expect(harness.state().rate).toBeCloseTo(0.45, 9);
+      expect(harness.state().fixed).toBeCloseTo(0, 9);
+
+      // 图片步进：Δchars 400、Δtokens 80 → rate 0.2、截距 500，单看这对样本会被采纳。
+      harness.attachImage();
+      await harness.sample(2_400, 980);
+      expect(harness.state().rate).toBeCloseTo(0.45, 9);
+      expect(harness.state().fixed).toBeCloseTo(0, 9);
+      expect((await harness.instance.stats()).messageTokens).toBe(1_080);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it("lands on the production prefix after rejecting the four inflated pairs", async () => {
+    const harness = await calibrationHarness();
+    try {
+      // 生产的四对样本（字符数与 token 取自 ISHI-3 的 usage.jsonl 复算）。
+      await harness.sample(244_015, 81_539);
+      await harness.sample(246_231, 84_400); // rate 1.291
+      await harness.sample(248_361, 85_143); // rate 0.3488
+      await harness.sample(250_685, 86_645); // rate 0.6463，中间夹着图片步进
+      await harness.sample(252_018, 87_212); // rate 0.4254
+      expect(harness.state().rate).toBeUndefined();
+      expect((await harness.instance.stats()).rateCalibrated).toBe(false);
+
+      // 压缩后字符回落，下一对样本的截距非负：rate 0.14395、fixed 48910。
+      harness.reset([]);
+      await harness.sample(220_000, 80_579);
+      await harness.sample(240_000, 83_458);
+      expect(harness.state().rate).toBeCloseTo(0.14395, 6);
+      expect(harness.state().fixed).toBeCloseTo(48_910, 6);
+
+      harness.reset([
+        createEntry("message", createAssistantMessage([{ type: "text", text: "x".repeat(252_018 - renderOverhead) }]), { id: "prefix", timestamp: 1 }),
+      ]);
+      const stats = await harness.instance.stats();
+      expect(stats.assembledChars).toBe(252_018);
+      expect(stats.rateCalibrated).toBe(true);
+      expect(stats.messageTokens).toBe(36_278);
+      expect(stats.estimatedTokens).toBe(85_188);
     } finally {
       await harness.cleanup();
     }

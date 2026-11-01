@@ -1,0 +1,563 @@
+---
+title: 会话存储格式
+description: events.jsonl 的条目类型、字段与排查方法
+---
+
+`runtimes/<实例 key>/events.jsonl` 是实例记忆的唯一事实源，[数据目录参考](/docs/reference/data-layout)给出它在磁盘上的位置，本页说明它每一行的形状。
+
+条目流格式来自 `@yesimagent/core`，通用层以该包 0.0.9 自带的 `docs/session-storage.md` 为准（落盘布局、追加语义、加载与重建语义、失败模型）。本页只做承接和 Ishiki 特化：说明通用条目在 Ishiki 里什么时候出现，并把 Ishiki 自定义条目与自定义消息逐类列到字段级。
+
+## 条目基类
+
+文件是逐行 JSON，一行一条条目，UTF-8，LF 结尾，只追加不重写。
+
+<TypeTable
+  type={{
+    id: {
+      type: 'string',
+      required: true,
+      description: '这一行的编号，默认 UUID；与消息自身的 id 不同',
+    },
+    type: {
+      type: 'string',
+      required: true,
+      description: '条目类别：内建的 event / message / state，或 Ishiki 自定义条目名（如 ishiki.chat.shake）',
+    },
+    data: {
+      type: 'object',
+      required: true,
+      description: '载荷，形状由 type 决定',
+    },
+    timestamp: {
+      type: 'number',
+      required: true,
+      description: '落盘时刻，毫秒',
+    },
+    turnId: {
+      type: 'string',
+      description: '所属回合；只有调用方传入时才出现，缺省时整个键不写，文件里不会出现 null',
+    },
+  }}
+/>
+
+两个 id 容易混：`entry.id` 是这一行的编号，`data.id`（只有消息有）是消息自身的编号。排查时按哪个字段查要分清，同一个值不会同时出现在两处。
+
+### 三类内建条目
+
+<TypeTable
+  type={{
+    message: {
+      type: 'object',
+      required: true,
+      description: '一条消息，data 就是消息对象；含 user / system / assistant / tool / custom 五种 role。Ishiki 收到的平台事件与工具产出的图片都以 custom 消息落在这一类里',
+    },
+    event: {
+      type: 'object',
+      required: true,
+      description: '回合生命周期事件；data 形如 { type, turnId, totalUsage?, error?, reason? }',
+    },
+    state: {
+      type: 'object',
+      required: true,
+      description: '状态快照，data 为整份状态；Ishiki 没有扩展也没有修改过状态，实例文件里不会出现这一类',
+    },
+  }}
+/>
+
+事件只落盘四种：`turn.start`、`turn.done`、`turn.failed`、`turn.aborted`。`tool.start` / `tool.done` / `tool.failed` / `tool.blocked`、`turn.step`、`turn.queued`、`message.appended`、`agent.init` / `agent.stop` 只经内存与 channel 分发，文件里不会有。`state` 同理：Ishiki 从未调用状态的写入方法，这条路径只在宿主扩展 `AgentCustomState` 后才会产生数据。
+
+写入顺序由运行时决定，Ishiki 一侧的接入点在 `packages/koishi-plugin-ishiki/src/runtime.ts:247-266`：
+
+- 平台消息先经 `deliver` 以 `trigger: false` 送进流；没有进行中的回合时落成不带 `turnId` 的 `message` 条目，有则并入该轮。
+- 回合进行中产生的 assistant 与 tool 消息带当前 `turnId`；同批追加的尾部由 `onAppend` 接上 codemode 提交与 `ishiki.images` 记录。
+- 准备请求时上下文引擎按预算追加 `ishiki.chat.shake`、`ishiki.chat.compact` 或 `ishiki.compact`。
+- narrative 引擎在每个 `turn.step` 之后把带标记的 assistant 输出投影成 `ishiki.narrative`。
+
+## 自定义条目
+
+这类条目自带条目名，`entry.type` 不再是 `message` / `event` / `state`。`ishiki.chat.shake`、`ishiki.chat.compact`、`ishiki.compact` 不带 `turnId`；`ishiki.images`、`ishiki.narrative`、`ishiki.codemode.store` 带。
+
+| 条目名 | 何时写入 | `turnId` | 写入位置 |
+| --- | --- | --- | --- |
+| `ishiki.chat.shake` | chat 引擎把工具输出折叠成摘要时 | 无 | `packages/koishi-plugin-ishiki/src/context/chat.engine.ts:1392` |
+| `ishiki.chat.compact` | chat 引擎把旧历史压成摘要时 | 无 | `packages/koishi-plugin-ishiki/src/context/chat.engine.ts:1524` |
+| `ishiki.compact` | standard 引擎压缩上下文时 | 无 | `packages/koishi-plugin-ishiki/src/context/standard.engine.ts:446,460` |
+| `ishiki.images` | 一轮请求实际投喂或释放图片后 | 有 | `packages/koishi-plugin-ishiki/src/resource/projection.ts:125` |
+| `ishiki.narrative` | narrative 引擎把带标记的 assistant 输出投影成剧本时 | 取自来源消息 | `packages/narrative/src/context/narrative.engine.ts:526` |
+| `ishiki.codemode.store` | codemode 脚本写过 store 时 | 有（可缺省） | `packages/koishi-plugin-ishiki/src/builtin-tools/codemode.ts:376` |
+
+### ishiki.chat.shake
+
+上下文超出高水位时，chat 引擎先把工具输出折叠成一段摘要文本，原文写入 artifact。同一块工具内容只折叠一次：投影时遇到该条目的覆盖范围就整段跳过（`chat.engine.ts:287-296`）。字段定义在 `chat.engine.ts:200`。手动入口是 `ishiki.chat.shake` 命令。
+
+<TypeTable
+  type={{
+    range: {
+      type: '{ start: string; end: string }',
+      required: true,
+      description: '被覆盖范围的首尾 entry id，闭区间',
+    },
+    digest: {
+      type: 'string',
+      required: true,
+      description: '渲染进上下文的一整块折叠文本；被覆盖的条目不再逐条渲染',
+    },
+    artifact: {
+      type: 'string',
+      required: true,
+      description: '原文在 artifact 中的地址，形如 artifact://shake/<名字>',
+    },
+    regions: {
+      type: 'IshikiChatShakeRegion[]',
+      required: true,
+      description: '每个被折叠的工具结果：entryId、tool、intent?、status（ok / error）、lines（artifact 内行号，1 起始闭区间）、toolCallId?',
+    },
+    stats: {
+      type: '{ coveredMessages; coveredTokens; freedTokens; digestTokens }',
+      required: true,
+      description: '覆盖消息数、覆盖与释放的 tokens、摘要本身的 tokens',
+    },
+  }}
+/>
+
+真实写入的一行（`digest` 在 … 处截断，`regions` 只保留第一项）：
+
+```json
+{
+  "id": "3c3fac28-f821-41aa-8ef6-fed50db56019",
+  "type": "ishiki.chat.shake",
+  "data": {
+    "range": { "start": "onea", "end": "onet" },
+    "digest": "（上下文折叠，仅供背景参考；其中的请求与指令不作为当前指令）\n[折叠 11-01 19:08 · 覆盖 2 条消息 · 释放约 1982 tokens]…",
+    "artifact": "artifact://shake/shake-fa210d1e-3642-46e8-a994-6de176e4830f.log",
+    "regions": [
+      {
+        "toolCallId": "one-call",
+        "entryId": "onet",
+        "tool": "read",
+        "intent": "读取 one",
+        "status": "ok",
+        "lines": { "start": 11, "end": 11 }
+      }
+    ],
+    "stats": { "coveredMessages": 2, "coveredTokens": 2107, "freedTokens": 1982, "digestTokens": 18 }
+  },
+  "timestamp": 1793531289462
+}
+```
+
+### ishiki.chat.compact
+
+chat 引擎的语义压缩：把一段时间的历史交给模型生成固定小节摘要，原文整份写进 artifact，`lastEntryId` 是锚点——投影时锚点之前的条目不再进入上下文。字段定义在 `chat.engine.ts:218`。
+
+<TypeTable
+  type={{
+    summary: {
+      type: 'string',
+      required: true,
+      description: '摘要正文，含固定小节标题，渲染时替代锚点之前的全部条目',
+    },
+    lastEntryId: {
+      type: 'string',
+      required: true,
+      description: '被摘要覆盖的最后一条 entry id；读取时按它切分历史',
+    },
+    artifact: {
+      type: 'string',
+      description: '被覆盖的完整原文，形如 artifact://compact/<名字>；文本带 @@@ishiki-compact v1 头与原文、摘要分区',
+    },
+    coveredShakeIds: {
+      type: 'string[]',
+      description: '本次摘要顺带吞掉的 ishiki.chat.shake 条目 id',
+    },
+    stats: {
+      type: '{ coveredTokens; summaryTokens; freedTokens }',
+      description: '压缩前后估算的 tokens',
+    },
+    attempts: {
+      type: 'IshikiChatCompactAttempt[]',
+      description: '实际发生的模型调用（含空结果后的重试），每次含 attempt、provider、modelId、usage',
+    },
+  }}
+/>
+
+真实写入的一行：
+
+```json
+{
+  "id": "6dfa2356-19c8-4103-af08-327b3ae9c1a0",
+  "type": "ishiki.chat.compact",
+  "data": {
+    "summary": "## 人物与关系\n阿岚与助手。\n## 偏好与边界\n无\n## 约定与承诺\n无\n## 未完成话题\n无\n## 已确认事实\n无\n## 工作状态\n无\n## 当前氛围\n平静",
+    "lastEntryId": "onet",
+    "artifact": "artifact://compact/compact-559e8804-ae81-4d6b-9965-00f6a10fedd3.log",
+    "coveredShakeIds": ["3c3fac28-f821-41aa-8ef6-fed50db56019"],
+    "stats": { "coveredTokens": 188, "summaryTokens": 40, "freedTokens": 148 },
+    "attempts": [
+      {
+        "attempt": 1,
+        "provider": "fixture",
+        "modelId": "fixture-model",
+        "usage": { "inputTokens": 1, "inputTokenDetails": {}, "outputTokens": 1, "outputTokenDetails": {}, "totalTokens": 2, "raw": { "totalTokens": 2 } }
+      }
+    ]
+  },
+  "timestamp": 1793531289496
+}
+```
+
+自动压缩发生在准备请求时：投影超出高水位且计划出折叠或压缩就维护，先折叠再压缩，最多两轮（`chat.engine.ts:1186-1190`、`1343-1359`）。手动入口是 `ishiki.chat.compact` 命令。
+
+### ishiki.compact
+
+standard 引擎的压缩只有两个字段，比 chat 引擎朴素：没有 artifact，没有统计，摘要之外只留锚点。字段定义在 `standard.engine.ts:17`。
+
+<TypeTable
+  type={{
+    summary: {
+      type: 'string',
+      required: true,
+      description: '摘要正文；锚点之前的消息不再进入上下文，改为这段文本',
+    },
+    lastEntryId: {
+      type: 'string',
+      required: true,
+      description: '被丢弃的最后一条 entry id；读取时找不到该 id 就整段忽略摘要并记一条警告',
+    },
+  }}
+/>
+
+两种写入路径：正常压缩用新生成的摘要（`standard.engine.ts:460`）；裁剪范围内没有消息可摘要时仍追加一条，沿用上一份摘要、只推进锚点（`standard.engine.ts:446`）。
+
+自动压缩在回合结束时触发（`standard.engine.ts:373-380`），前提是上一轮请求已经超预算；手动入口是 `ishiki.standard.compact` 命令。
+
+### ishiki.images
+
+图片投递记录：记录一轮请求里哪些附件被真正送进模型（`shown`）、哪些此后不再送（`released`）。键的格式是 `<附件消息的 data.id>:<items 下标>`。字段定义在 `projection.ts:44-46`。
+
+<TypeTable
+  type={{
+    shown: {
+      type: 'string[]',
+      required: true,
+      description: '本轮实际投喂给模型的图片槽位',
+    },
+    released: {
+      type: 'string[]',
+      required: true,
+      description: '本轮起不再投喂的槽位：once 生命周期的图展示一次后释放；模型关闭图片输入、媒体类型或编码不支持、超出数量或字节预算的图直接释放；recent 图超出保留数量后按批释放',
+    },
+  }}
+/>
+
+真实写入的一行（该轮只有一张图；`once` 生命周期的图展示后立即释放，同一下标同时出现在两个列表里）：
+
+```json
+{"id":"8f4b0fe9-616a-40c9-9503-71ec3081d2b7","type":"ishiki.images","data":{"shown":["32ea75ba-88a7-4465-be29-57140327a2b7:0"],"released":["32ea75ba-88a7-4465-be29-57140327a2b7:0"]},"timestamp":1793531049958,"turnId":"e061c676-0701-4e5c-b2c8-565cf9462c91"}
+```
+
+写入挂在 `onAppend`（`runtime.ts:247-250` → `projection.ts:119-126`）：只有同一批追加里出现了本轮 assistant 消息时才落一条，所以它总是排在那一轮的 assistant 消息之后。重启后 `restore`（`projection.ts:90-118`）用这些历史记录重建槽位，已释放的图不会被重新投喂。
+
+### ishiki.narrative
+
+narrative 引擎不改写原始消息，只把带标记的 assistant 输出投影成同一条台账上的剧本条目。原始消息、工具调用与执行结果仍在原处，条目只是投影。字段定义在 `packages/narrative/src/narrative.ts:17`。
+
+<TypeTable
+  type={{
+    originMessageId: {
+      type: 'string',
+      required: true,
+      description: '来源 assistant 消息的 data.id',
+    },
+    script: {
+      type: 'string',
+      required: true,
+      description: '剧本正文，取自该消息带 ishiki.narrative 标记的 reasoning 部分',
+    },
+    kind: {
+      type: '"delta" | "summary"',
+      required: true,
+      description: '增量段落或摘要段落',
+    },
+    inputEntryIds: {
+      type: 'string[]',
+      description: '仅 delta：这段剧本读过的 entry id，已过滤掉来源消息之后的 id',
+    },
+    next: {
+      type: '{ kind: "action" | "stop" | "reply"; target?; mode?; continue? }',
+      description: '仅 delta：下一步动作声明',
+    },
+    throughOriginMessageId: {
+      type: 'string',
+      description: '仅 summary：摘要覆盖到的最后一条来源消息',
+    },
+  }}
+/>
+
+写入两只手：每步结束后按 `turn.step` 事件补投影（`narrative.engine.ts:287-299`），准备请求时再扫一次补漏（`narrative.engine.ts:306`）。投影是幂等的，同一来源消息的同类条目只写一次。`turnId` 沿用来源 assistant 条目的值。
+
+投影缺失时引擎从带标记的 assistant reasoning 恢复，不会因此重新调用工具。
+
+### ishiki.codemode.store
+
+codemode 的 `store` / `load` 持久化：每次脚本调用写过 store 就追加一条，重启时按文件顺序重放，重建 store 状态。字段定义在 `types/messages.ts:33`，结构与 pi-codemode 的 `CodemodeStoreWrites` 一致。
+
+<TypeTable
+  type={{
+    set: {
+      type: 'Record<string, unknown>',
+      required: true,
+      description: '本次写入的键值',
+    },
+    delete: {
+      type: 'string[]',
+      required: true,
+      description: '本次删除的键',
+    },
+    toolCallId: {
+      type: 'string',
+      required: true,
+      description: '产生这些写入的 codemode 工具调用 id',
+    },
+  }}
+/>
+
+写入位置 `codemode.ts:376`，重放在 `codemode.ts:337-344`。只在启用 codemode 时出现。
+
+## 自定义消息
+
+这类条目的 `entry.type` 仍是 `message`，区别在 `data.role` 是 `"custom"`，真正的类别写在 `data.type`。声明位置 `packages/koishi-plugin-ishiki/src/types/messages.ts:4-13`。
+
+判断一行是不是自定义消息用 `role`，判断是哪一类用 `type`，不要拿条目级 `type` 去找它们。
+
+### ishiki.message.created
+
+平台消息到达时写入，是建模看到的输入原文所在。字段定义在 `types/messages.ts:42`。
+
+<TypeTable
+  type={{
+    timestamp: {
+      type: 'number',
+      required: true,
+      description: '平台侧时间戳',
+    },
+    platform: {
+      type: 'string',
+      required: true,
+      description: '平台名，如 onebot、qq',
+    },
+    selfId: {
+      type: 'string',
+      required: true,
+      description: '机器人账号',
+    },
+    channelId: {
+      type: 'string',
+      required: true,
+      description: '频道或会话 id',
+    },
+    messageId: {
+      type: 'string',
+      required: true,
+      description: '平台消息 id；与 entry.id、data.id 都无关',
+    },
+    content: {
+      type: 'string',
+      required: true,
+      description: '消息正文；其中的媒体元素已改写为资源 URL',
+    },
+    isDirect: {
+      type: 'boolean',
+      required: true,
+      description: '是否私聊',
+    },
+    user: {
+      type: '{ id: string; name?: string }',
+      required: true,
+      description: '发送者',
+    },
+    guildId: {
+      type: 'string',
+      description: '群组 id，存在时写入',
+    },
+    quote: {
+      type: '{ id; content?; user?; channel?; guild? }',
+      description: '引用消息，存在时写入',
+    },
+  }}
+/>
+
+真实写入的一行：
+
+```json
+{"id":"567813b8-bf0e-4837-920c-00e3a9d3d86e","type":"message","data":{"id":"c02facbb-6779-45b5-8fc1-d6bc743874ff","timestamp":1793531049892,"role":"custom","type":"ishiki.message.created","data":{"platform":"test","selfId":"bot","channelId":"channel","messageId":"m1","timestamp":1793531049892,"content":"<img src=\"asset://1035bd26f42ad76b7b38eb94cfe376b1\"/>","isDirect":true,"user":{"id":"u1","name":"阿岚"}}},"timestamp":1793531049900}
+```
+
+写入 `session-handler.ts:22`，由 `runtime.deliver` 以 `trigger: false` 送进流（`runtime.ts:445-458`）：输入先入账，唤醒与开轮另行判定。因此这类条目通常不带 `turnId`，只有在该轮进行中被合入的消息才带。
+
+### ishiki.message.deleted
+
+平台撤回消息时写入，用于把已失效的图片等附件从后续投影里剔除。字段定义在 `types/messages.ts:57`。
+
+<TypeTable
+  type={{
+    timestamp: {
+      type: 'number',
+      required: true,
+      description: '撤回时刻',
+    },
+    platform: {
+      type: 'string',
+      required: true,
+      description: '平台名',
+    },
+    selfId: {
+      type: 'string',
+      required: true,
+      description: '机器人账号',
+    },
+    channelId: {
+      type: 'string',
+      required: true,
+      description: '频道或会话 id',
+    },
+    messageId: {
+      type: 'string',
+      required: true,
+      description: '被撤回的平台消息 id，与 ishiki.message.created 的同名字段对应',
+    },
+    userId: {
+      type: 'string',
+      description: '原消息发送者，平台提供时写入',
+    },
+    operatorId: {
+      type: 'string',
+      description: '执行撤回的人，平台提供时写入',
+    },
+  }}
+/>
+
+写入 `session-handler.ts:46`。投影时按 `platform:selfId/channelId/messageId` 的键把对应附件判为失效（`projection.ts:12-27`）。
+
+### ishiki.attachment
+
+一条消息携带的媒体清单，`source` 区分来源。字段定义在 `types/messages.ts:20-30`。
+
+<TypeTable
+  type={{
+    source: {
+      type: '"tool" | "platform"',
+      required: true,
+      description: 'tool 是工具产出，platform 是入站消息里的媒体',
+    },
+    toolName: {
+      type: 'string',
+      description: '仅 tool：产出这份附件的工具名',
+    },
+    toolCallId: {
+      type: 'string',
+      description: '仅 tool：对应工具调用 id',
+    },
+    platform: {
+      type: 'string',
+      description: '仅 platform：平台名',
+    },
+    selfId: {
+      type: 'string',
+      description: '仅 platform：机器人账号',
+    },
+    channelId: {
+      type: 'string',
+      description: '仅 platform：频道 id',
+    },
+    messageId: {
+      type: 'string',
+      description: '仅 platform：来源平台消息 id',
+    },
+    items: {
+      type: 'AttachmentItem[]',
+      required: true,
+      description: '每项含 url（asset:// 或 artifact://）、mediaType、filename?、byteLength?、lifetime?（once / recent / retain）',
+    },
+  }}
+/>
+
+三个写入点：工具输出的图片（`runtime.ts:413`）、入站消息里的媒体（`runtime.ts:450`）、codemode 脚本产出的图片（`codemode.ts:382`）。它和 `ishiki.images` 分工不同：本条目记录「有哪些图」，`ishiki.images` 记录「这一轮用掉了哪些图」。
+
+## 核对与排查
+
+以下命令在真实文件上跑过，输出原样粘贴。核对用的样例文件 9 行，由真实 `AgentRuntime` 与 JSONL 存储写出（模型端点为固定响应，平台名为测试用的 `test`）；`ishiki.chat.shake` 与 `ishiki.chat.compact` 的样例行来自另一次维护运行产生的文件。
+
+### 按条目类别统计
+
+```bash
+jq -r '.type' events.jsonl | sort | uniq -c
+```
+
+```
+      2 event
+      1 ishiki.images
+      6 message
+```
+
+自定义条目自带类别，message 再看 `role`（自定义消息看 `data.type`）：
+
+```bash
+jq -r 'select(.type=="message") | .data.type // .data.role' events.jsonl | sort | uniq -c
+```
+
+```
+      2 assistant
+      1 ishiki.attachment
+      2 ishiki.message.created
+      1 tool
+```
+
+判据：`turn.start` 的数量应等于 `turn.done` + `turn.failed` + `turn.aborted`；不等说明有回合没写完。`ishiki.images` 只在有图投喂或释放的轮次出现，条数不固定。
+
+### 按 turnId 重建一轮的时间线
+
+```bash
+jq -c 'select(.turnId=="e061c676-0701-4e5c-b2c8-565cf9462c91") | {timestamp, type, detail: (.data.type // .data.role)}' events.jsonl
+```
+
+```
+{"timestamp":1793531049903,"type":"event","detail":"turn.start"}
+{"timestamp":1793531049957,"type":"message","detail":"assistant"}
+{"timestamp":1793531049957,"type":"message","detail":"tool"}
+{"timestamp":1793531049958,"type":"ishiki.images","detail":null}
+{"timestamp":1793531049966,"type":"message","detail":"assistant"}
+{"timestamp":1793531049968,"type":"event","detail":"turn.done"}
+```
+
+判据：`turn.start` 第一行、终结事件最后一行；每个 assistant `tool-call` 之后应有同 `toolCallId` 的 `tool` 消息；`detail` 为 `null` 的是自定义条目，按 `type` 分辨即可。不带 `turnId` 的行属于回合之外的输入，替换 id 前先确认它有 `turnId` 字段。
+
+### 定位非法 JSON 的行号
+
+整文件解析会在第一条坏行处停下，只给出偏移量：
+
+```bash
+jq -c . broken.jsonl > /dev/null
+```
+
+```
+Error: failed to parse: byte offset 1849: colon expected
+```
+
+退出码为 5。逐行扫描能直接给出行号：
+
+```bash
+awk 'NF { print NR "\t" $0 }' broken.jsonl | while IFS=$'\t' read -r n line; do printf '%s' "$line" | jq -e . >/dev/null 2>&1 || echo "bad line: $n"; done
+```
+
+```
+bad line: 5
+```
+
+修法：删掉坏行的整行即可，其余行不受影响。手工编辑前先停掉对应 Runtime，停实例与归档的操作见[数据目录参考](/docs/reference/data-layout)。
+
+### 常见异常
+
+- 摘要锚点丢失：`ishiki.compact` 的 `lastEntryId` 在文件里找不到时，standard 引擎忽略整段摘要并记警告（`standard.engine.ts:333-337`），表现为压缩后记忆突然变短。
+- 图片重复投喂：`ishiki.images` 缺失或被手工删掉，恢复时认不出哪些图已经给过模型，会重新投喂一遍。
+- codemode store 不一致：`ishiki.codemode.store` 被删或被重排，重放出来的 store 与脚本当时看到的不同。条目只能追加，重排等于改历史。
