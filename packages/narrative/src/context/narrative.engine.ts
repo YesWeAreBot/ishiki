@@ -89,9 +89,12 @@ function relationKeys(message: AgentMessage): string[] {
     switch (message.type) {
       case "ishiki.attachment": {
         const data = message.data;
-        const key = data.source === "tool" ? [data.toolName, data.toolCallId] : [data.platform, data.selfId, data.channelId, data.messageId];
-        return [JSON.stringify(key)];
+        if (data.source === "tool") return [JSON.stringify([data.toolName, data.toolCallId])];
+        if (data.source === "task") return [JSON.stringify(["task", data.taskId])];
+        return [JSON.stringify([data.platform, data.selfId, data.channelId, data.messageId])];
       }
+      case "ishiki.task":
+        return [JSON.stringify(["task", message.data.taskId])];
       case "ishiki.message.created":
       case "ishiki.message.deleted": {
         const data = message.data;
@@ -114,7 +117,12 @@ function isSourceEntry(entry: AgentEntry): entry is SourceEntry {
   if (entry.type !== "message") return false;
   const message = entry.data;
   if (message.role !== "custom") return true;
-  return message.type === "ishiki.message.created" || message.type === "ishiki.message.deleted" || message.type === "ishiki.attachment";
+  return (
+    message.type === "ishiki.message.created" ||
+    message.type === "ishiki.message.deleted" ||
+    message.type === "ishiki.task" ||
+    message.type === "ishiki.attachment"
+  );
 }
 
 function inputMarker(message: AgentMessage): NarrativeInput | undefined {

@@ -26,5 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Narrative context now records `ishiki.task` completion notices as source events and keeps each notice beside the attachment it delivered
 - Narrative context preserves each message's direct/group conversation setting; Narrator continuity retains past events without locking current feelings, interpretations or plans to the opening scene.
 - Narrative JSON stages request provider JSON mode instead of relying only on prose instructions; author style rules apply inside `script` and cannot override the outer output contract.

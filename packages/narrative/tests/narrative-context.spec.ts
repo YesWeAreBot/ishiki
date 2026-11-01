@@ -52,6 +52,28 @@ function incomingEntry(id: string, isDirect: boolean, channelId = "channel"): Ag
   );
 }
 
+function taskNoticeEntry(id: string): AgentEntry<"message"> {
+  return createEntry(
+    "message",
+    {
+      id: `message-${id}`,
+      timestamp: 0,
+      role: "custom",
+      type: "ishiki.task",
+      data: { taskId: id, toolName: "shot", state: "succeeded", startedAt: 0, finishedAt: 1, summary: "1 个附件" },
+    },
+    { id },
+  );
+}
+
+function taskAttachmentEntry(id: string, taskId: string): AgentEntry<"message"> {
+  return createEntry(
+    "message",
+    { id: `message-${id}`, timestamp: 0, role: "custom", type: "ishiki.attachment", data: { source: "task", taskId, items: [] } },
+    { id },
+  );
+}
+
 interface MarkedAssistant {
   entryId: string;
   messageId: string;
@@ -333,6 +355,32 @@ describe("narrative context", () => {
 
     expect(text).toContain("[image/png 3 B]");
     expect(text).not.toContain("AAAA");
+  });
+
+  it("keeps a settled task notice beside the attachment it delivered", async () => {
+    const agent = agentWith([
+      taskNoticeEntry("background"),
+      taskAttachmentEntry("task-image", "background"),
+      markedAssistant({
+        entryId: "narrator-entry",
+        messageId: "narrator-message",
+        script: "The screenshot arrived.",
+        marker: delta(["background", "task-image"]),
+      }),
+    ]);
+    const instance = new NarrativeContextInstance({ recentEntries: 2 }, fixture);
+    instance.attach(agent);
+    const prepared = await instance.prepareEntries(await agent.storage.read());
+
+    // Only the attachment falls in the recent window; the notice it belongs to
+    // must be retained by association even though the delta already covered both.
+    const ids = prepared.flatMap((entry) => (entry.type === "message" ? [entry.id] : []));
+    expect(ids).toContain("background");
+    expect(ids).toContain("task-image");
+    expect(ids.at(-1)).toBe("narrator-entry");
+    const text = JSON.stringify(instance.renderMessages(prepared.flatMap((entry) => (entry.type === "message" ? [entry.data] : []))));
+    expect(text).toContain("后台任务 shot #background");
+    expect(text).toContain("The screenshot arrived.");
   });
 
   it("keeps sessions isolated between context instances", async () => {
