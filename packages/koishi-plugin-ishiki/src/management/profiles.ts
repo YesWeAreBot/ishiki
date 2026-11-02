@@ -100,7 +100,7 @@ export class ProfilesManager {
     return {
       ...summary,
       config: resolvedConfig(loaded.raw),
-      persona: persona === undefined ? "" : await readFile(path.join(this.root, id, persona.path), "utf8").catch(() => ""),
+      persona: persona === undefined ? "" : await readFile(this.instructionTarget(id, persona.path), "utf8").catch(() => ""),
       instructions,
       runtimes: this.runtimes.list().filter((runtime) => runtime.profileId === id),
       sessionCount: (await this.sessions.list({ profileId: id })).length,
@@ -137,7 +137,7 @@ export class ProfilesManager {
         throw new ManagementError("invalid", `Profile 配置无效: ${this.describe(error)}`);
       }
 
-      const target = input.persona === undefined ? undefined : await this.personaPath(id, config);
+      const target = input.persona === undefined ? undefined : this.personaPath(id, config);
       if (input.persona !== undefined && target !== undefined) await mkdir(path.resolve(target, ".."), { recursive: true });
       await writeAtomic(loaded.file, stringify(config, { lineWidth: 0 }));
       if (target !== undefined && input.persona !== undefined) await writeAtomic(target, input.persona);
@@ -206,7 +206,7 @@ export class ProfilesManager {
       } catch (error) {
         throw new ManagementError("invalid", `Profile 配置无效: ${this.describe(error)}`);
       }
-      const target = input.persona === undefined || input.persona.length === 0 ? undefined : await this.personaPath(id, config);
+      const target = input.persona === undefined || input.persona.length === 0 ? undefined : this.personaPath(id, config);
       await mkdir(directory, { recursive: true });
       if (target !== undefined) await mkdir(path.resolve(target, ".."), { recursive: true });
       await writeAtomic(path.join(directory, "profile.yml"), stringify(config, { lineWidth: 0 }));
@@ -295,8 +295,8 @@ export class ProfilesManager {
     assertId(id);
     return this.changes.run(async () => {
       const loaded = await this.load(id);
-      const target = await this.personaPath(id, loaded.raw);
-      if (target === undefined) throw new ManagementError("rejected", "人格文件必须位于 Profile 目录内");
+      const target = this.personaPath(id, loaded.raw);
+      if (target === undefined) throw new ManagementError("rejected", "Profile 未配置指令文件");
       await mkdir(path.resolve(target, ".."), { recursive: true });
       await writeAtomic(target, text);
       const view = await this.read(id);
@@ -471,29 +471,28 @@ export class ProfilesManager {
     throw new ManagementError("not-found", `Profile ${id} 不存在`);
   }
 
+  /** 指令文件的实际路径：绝对路径直接使用，相对路径以 Profile 目录为准。 */
+  private instructionTarget(id: string, item: string): string {
+    return path.isAbsolute(item) ? item : path.resolve(this.root, id, item);
+  }
+
   private async instructionFiles(id: string, raw: Record<string, unknown>): Promise<Array<{ path: string; missing: boolean }>> {
     const listed = Array.isArray(raw.instructions) ? raw.instructions : ["PERSONA.md"];
     const files: Array<{ path: string; missing: boolean }> = [];
     for (const item of listed) {
       if (typeof item !== "string" || item.length === 0) continue;
-      const target = path.isAbsolute(item) ? item : path.join(this.root, id, item);
+      const target = this.instructionTarget(id, item);
       const info = await stat(target).catch(() => undefined);
       files.push({ path: item, missing: info === undefined });
     }
     return files;
   }
 
-  private async personaPath(id: string, config: Record<string, unknown>): Promise<string | undefined> {
+  private personaPath(id: string, config: Record<string, unknown>): string | undefined {
     const listed = Array.isArray(config.instructions) ? config.instructions : ["PERSONA.md"];
     const first = listed.find((item): item is string => typeof item === "string" && item.length > 0);
-    if (first === undefined || path.isAbsolute(first)) return undefined;
-    const root = path.join(this.root, id);
-    const target = path.resolve(root, first);
-    const relativePath = path.relative(root, target);
-    if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-      throw new ManagementError("rejected", `人格文件必须位于 Profile 目录内: ${first}`);
-    }
-    return target;
+    if (first === undefined) return undefined;
+    return this.instructionTarget(id, first);
   }
 
   private describe(error: unknown): string {

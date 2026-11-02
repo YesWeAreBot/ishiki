@@ -258,45 +258,45 @@ watch(
         </div>
       </aside>
 
-    <div class="chat-stage">
-      <div v-if="selectedId.length === 0" class="chat-empty">
-        <EmptyState title="选择一个会话" desc="从左侧会话列表选择，或使用会话编号直接打开。" icon="sessions" />
-      </div>
-
-      <div v-else-if="loading" class="chat-loading" aria-busy="true">
-        <div class="chat-loading-note"><span class="spinner" aria-hidden="true"></span> 正在定位最新消息</div>
-        <div v-for="index in 4" :key="index" class="skeleton chat-loading-row" :class="`row-${index}`"></div>
-      </div>
-
-      <div v-else-if="failure !== undefined && entries.length === 0" class="chat-empty">
-        <div class="error-panel chat-fatal">
-          <Icon name="alert" :size="17" />
-          <div class="flex-1">
-            <strong>读取会话条目失败</strong>
-            <p class="small">{{ failure.message }}</p>
-          </div>
-          <button type="button" class="btn btn-sm btn-ghost" @click="retryFailure">重试</button>
+      <div class="chat-stage">
+        <div v-if="selectedId.length === 0" class="chat-empty">
+          <EmptyState title="选择一个会话" desc="从左侧会话列表选择，或使用会话编号直接打开。" icon="sessions" />
         </div>
-      </div>
 
-      <div v-else-if="entries.length === 0" class="chat-empty">
-        <EmptyState
-          :title="hasEntryFilters ? '没有匹配的条目' : '会话还没有条目'"
-          :desc="hasEntryFilters ? '当前筛选条件下没有匹配，清除筛选后可看到全部条目。' : '运行时会话在产生消息后写入日志。'"
-          icon="inbox"
-        >
-          <button v-if="hasEntryFilters" type="button" class="btn btn-ghost btn-sm" @click="clearFilters">清除筛选</button>
-        </EmptyState>
-      </div>
+        <div v-else-if="loading" class="chat-loading" aria-busy="true">
+          <div class="chat-loading-note"><span class="spinner" aria-hidden="true"></span> 正在定位最新消息</div>
+          <div v-for="index in 4" :key="index" class="skeleton chat-loading-row" :class="`row-${index}`"></div>
+        </div>
 
-      <ConversationFeed
-        v-else
-        :key="`${selectedId}:${feedVersion}`"
-        :entries="entries"
-        :has-older="hasOlder"
-        :loading-older="loadingOlder"
-        @load-older="loadOlder"
-      />
+        <div v-else-if="failure !== undefined && entries.length === 0" class="chat-empty">
+          <div class="error-panel chat-fatal">
+            <Icon name="alert" :size="17" />
+            <div class="flex-1">
+              <strong>读取会话条目失败</strong>
+              <p class="small">{{ failure.message }}</p>
+            </div>
+            <button type="button" class="btn btn-sm btn-ghost" @click="retryFailure">重试</button>
+          </div>
+        </div>
+
+        <div v-else-if="entries.length === 0" class="chat-empty">
+          <EmptyState
+            :title="hasEntryFilters ? '没有匹配的条目' : '会话还没有条目'"
+            :desc="hasEntryFilters ? '当前筛选条件下没有匹配，清除筛选后可看到全部条目。' : '运行时会话在产生消息后写入日志。'"
+            icon="inbox"
+          >
+            <button v-if="hasEntryFilters" type="button" class="btn btn-ghost btn-sm" @click="clearFilters">清除筛选</button>
+          </EmptyState>
+        </div>
+
+        <ConversationFeed
+          v-else
+          :key="`${selectedId}:${feedVersion}`"
+          :entries="entries"
+          :has-older="hasOlder"
+          :loading-older="loadingOlder"
+          @load-older="loadOlder"
+        />
       </div>
     </div>
   </section>

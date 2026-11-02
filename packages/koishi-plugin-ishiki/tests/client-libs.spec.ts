@@ -1,10 +1,14 @@
+import { Schema } from "koishi";
 import { describe, expect, it } from "vitest";
 
 import { classifyReference } from "../client/src/lib/entities";
 import { buildModelDecl, draftsFromDecl, fieldsForType, validateModelDraft } from "../client/src/lib/modelFields";
+import { modelOptions } from "../client/src/lib/models";
 import { blankProfileDraft, buildProfileConfig, validateProfileDraft } from "../client/src/lib/profileDraft";
 import { inspectModelEntry, inspectProfileConfig, parseRaw, serializeRaw } from "../client/src/lib/rawConfig";
+import { schemaDefaults, schemaFields } from "../client/src/lib/schema";
 import { bucketUsage } from "../client/src/lib/usageSeries";
+import { serializeSchema } from "../src/management/schema";
 import type { GroupView, ProviderView, UsageRecord } from "../src/management/types";
 
 const providers: ProviderView[] = [
@@ -25,6 +29,52 @@ const groups: GroupView[] = [{ name: "chat", strategy: "failover", models: ["ope
 
 const jan1 = new Date(2026, 0, 1).getTime();
 const jan3 = new Date(2026, 0, 3).getTime();
+
+describe("model option catalog", () => {
+  const mixed: ProviderView[] = [
+    {
+      ...providers[0]!,
+      models: [...providers[0]!.models, { id: "jev", type: "decision", reference: "openai:jev", provider: "openai" }],
+    },
+  ];
+
+  it("keeps groups and language models for chat-facing roles", () => {
+    expect(modelOptions(mixed, groups, { types: ["language"] }).map((row) => row.reference)).toEqual(["chat", "openai:gpt-4o"]);
+  });
+
+  it("returns only concrete decision models for judgment roles", () => {
+    expect(modelOptions(mixed, groups, { types: ["decision"], groups: false }).map((row) => row.reference)).toEqual(["openai:jev"]);
+  });
+});
+
+describe("schema field resolution", () => {
+  const node = serializeSchema(
+    Schema.intersect([
+      Schema.object({
+        backend: Schema.union(["sandbox", "native"]).default("sandbox"),
+        timeoutMs: Schema.number().default(30_000),
+      }),
+      Schema.union([
+        Schema.object({ backend: Schema.const("native").required(), shell: Schema.string().default("") }),
+        Schema.object({ cwd: Schema.string().default("/home/workspace"), mounts: Schema.array(Schema.string()).default([]) }),
+      ]),
+    ]),
+  )!;
+
+  it("expands the sandbox branch when the backend is sandbox or omitted", () => {
+    const expected = ["backend", "timeoutMs", "cwd", "mounts"];
+    expect(schemaFields(node, { backend: "sandbox" }).map(([key]) => key)).toEqual(expected);
+    expect(schemaFields(node, {}).map(([key]) => key)).toEqual(expected);
+  });
+
+  it("expands only the native branch when the backend is native", () => {
+    expect(schemaFields(node, { backend: "native" }).map(([key]) => key)).toEqual(["backend", "timeoutMs", "shell"]);
+  });
+
+  it("omits scalar defaults that are only shown as placeholders", () => {
+    expect(schemaDefaults(node)).toEqual({ backend: "sandbox", mounts: [] });
+  });
+});
 
 describe("usage entity classification", () => {
   it("treats a declared group name as a group, never as a model", () => {
@@ -135,12 +185,12 @@ describe("raw config round trip", () => {
     expect(parsed.issues[0].message.length).toBeGreaterThan(0);
   });
 
-  it("inspects profile configs for missing model, bad channels and unknown keys", () => {
-    const issues = inspectProfileConfig({ mode: "cross", channels: { qq: "not-array" }, mystery: 1 }, ["model", "mode", "channels"]);
+  it("inspects profile configs for missing model and bad channels while allowing extra keys", () => {
+    const issues = inspectProfileConfig({ mode: "cross", channels: { qq: "not-array" }, mystery: 1 });
     const paths = issues.map((issue) => issue.path);
     expect(paths).toContain("model");
     expect(paths).toContain("channels.qq");
-    expect(paths).toContain("mystery");
+    expect(paths).not.toContain("mystery");
   });
 
   it("inspects model raw entries with the shared field registry", () => {

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { App } from "koishi";
 import { afterEach, describe, expect, it } from "vitest";
+import { stringify } from "yaml";
 
 import Ishiki from "../src/index.js";
 
@@ -307,6 +308,44 @@ describe("Ishiki management interfaces", () => {
     expect(usage.totals).toMatchObject({ calls: 2, input: 12, output: 5, cacheRead: 2, cacheWrite: 1, total: 17 });
     expect(usage.records.map((record) => record.input).sort((left, right) => left - right)).toEqual([5, 7]);
     expect(usage.records.every((record) => record.provider === "mock" && record.modelId === "vision")).toBe(true);
+  });
+
+  it("reads and writes persona files declared outside the profile directory", async () => {
+    const instance = await start();
+    const management = instance.get("ishiki")!.management;
+    const home = path.join(dataPath!, "profiles", "demo");
+    const shared = path.join(dataPath!, "profiles", "shared", "persona.md");
+    await mkdir(home, { recursive: true });
+    await mkdir(path.dirname(shared), { recursive: true });
+    await writeFile(shared, "外部人格");
+    await writeFile(path.join(home, "profile.yml"), stringify({ model: "mock:vision", mode: "cross", channels: {}, instructions: ["../shared/persona.md"] }));
+
+    const before = await management.profiles.read("demo");
+    expect(before.instructions).toEqual([{ path: "../shared/persona.md", missing: false }]);
+    expect(before.persona).toBe("外部人格");
+
+    const saved = await management.profiles.save("demo", { config: before.config, persona: "更新后的外部人格" }, before.revision);
+    expect(saved.persona).toBe("更新后的外部人格");
+    expect(await readFile(shared, "utf8")).toBe("更新后的外部人格");
+  });
+
+  it("reads and writes persona files declared by absolute path", async () => {
+    const instance = await start();
+    const management = instance.get("ishiki")!.management;
+    const home = path.join(dataPath!, "profiles", "demo");
+    const shared = path.join(dataPath!, "shared", "absolute.md");
+    await mkdir(home, { recursive: true });
+    await mkdir(path.dirname(shared), { recursive: true });
+    await writeFile(shared, "绝对路径人格");
+    await writeFile(path.join(home, "profile.yml"), stringify({ model: "mock:vision", mode: "cross", channels: {}, instructions: [shared] }));
+
+    const before = await management.profiles.read("demo");
+    expect(before.instructions).toEqual([{ path: shared, missing: false }]);
+    expect(before.persona).toBe("绝对路径人格");
+
+    const saved = await management.profiles.save("demo", { config: before.config, persona: "更新后的绝对路径人格" }, before.revision);
+    expect(saved.persona).toBe("更新后的绝对路径人格");
+    expect(await readFile(shared, "utf8")).toBe("更新后的绝对路径人格");
   });
 
   it("saves profile files with revisions, rejects stale writes, and supports deletion", async () => {

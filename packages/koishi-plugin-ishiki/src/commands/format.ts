@@ -167,7 +167,7 @@ export function formatEnginesDirectory(directory: EnginesDirectory): string {
 
 export function formatExtensionsDirectory(directory: ExtensionsDirectory): string {
   if (directory.extensions.length === 0) return "当前没有已加载的扩展。";
-  return directory.extensions.map((extension) => `${extension.name}${extension.known ? "" : "（未收录）"}`).join("、");
+  return directory.extensions.map((extension) => extension.name).join("、");
 }
 
 export function formatSessionList(sessions: SessionSummary[]): string {

@@ -330,7 +330,6 @@ export interface EnginesDirectory {
 export interface ExtensionDescriptor {
   name: string;
   schema?: SchemaNode;
-  known: boolean;
 }
 
 export interface ExtensionsDirectory {

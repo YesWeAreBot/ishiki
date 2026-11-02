@@ -194,10 +194,7 @@ onMounted(() => {
 
 <template>
   <PageShell>
-    <PageHeader
-      title="用量统计"
-      desc="用量账本记录每次模型调用的输入、输出与缓存 Token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。"
-    >
+    <PageHeader title="用量统计" desc="用量账本记录每次模型调用的输入、输出与缓存 Token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。">
       <template #actions>
         <span v-if="snapshot !== undefined" class="badge badge-outline"> 同步于 {{ formatDateTime(snapshot.syncedAt) }} </span>
         <span v-if="appliedCount > 0" class="badge badge-info">{{ appliedCount }} 项筛选</span>

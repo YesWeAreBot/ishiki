@@ -195,10 +195,7 @@ onMounted(() => {
 
 <template>
   <PageShell>
-    <PageHeader
-      title="唤醒判定"
-      desc="每条记录保留模型给出的语义证据与本地规则的最终结论。各项证据独立计算，每条规则只与自己的阈值比较。"
-    >
+    <PageHeader title="唤醒判定" desc="每条记录保留模型给出的语义证据与本地规则的最终结论。各项证据独立计算，每条规则只与自己的阈值比较。">
       <template #actions>
         <button type="button" class="btn btn-sm btn-soft" :disabled="loading" @click="refresh(false)">
           <Icon v-if="loading" name="loading" :size="14" />
@@ -257,7 +254,8 @@ onMounted(() => {
               {{ modeMeta(item).label }}
             </div>
             <div class="panel-sub">
-              <span class="mono">{{ reasonText(item) }}</span>，{{ formatDateTime(item.at) }}，{{ relativeTime(item.at) }}，{{ item.context?.scene ?? "频道" }} {{ item.channelId }}，
+              <span class="mono">{{ reasonText(item) }}</span
+              >，{{ formatDateTime(item.at) }}，{{ relativeTime(item.at) }}，{{ item.context?.scene ?? "频道" }} {{ item.channelId }}，
               {{ formatNumber(item.pendingCount) }} 条合批，{{ item.durationMs }} 毫秒
             </div>
           </div>

@@ -380,7 +380,9 @@ function eventLabel(type: string): string {
             <span v-if="createdMessageId.length > 0" class="badge badge-outline mono">#{{ createdMessageId }}</span>
             <span class="faint small">{{ createdUserName }}</span>
           </div>
-          <pre v-if="createdContent.length > 0 && createdPayload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{ createdContent }}</pre>
+          <pre v-if="createdContent.length > 0 && createdPayload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{
+            createdContent
+          }}</pre>
           <div v-else class="log-text" :class="{ clamped: long && !textOpen }">{{ createdContent || "（空消息）" }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
           <div v-if="quote" class="notice" style="margin-top: 8px">
@@ -410,7 +412,9 @@ function eventLabel(type: string): string {
           <p class="muted small">
             压缩到条目 <span class="mono">{{ compactLast || "—" }}</span>
           </p>
-          <pre v-if="compactSummary.length > 0 && compactPayload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{ compactSummary }}</pre>
+          <pre v-if="compactSummary.length > 0 && compactPayload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{
+            compactSummary
+          }}</pre>
           <div v-else class="log-text" :class="{ clamped: long && !textOpen }">{{ compactSummary || "（空摘要）" }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
         </template>

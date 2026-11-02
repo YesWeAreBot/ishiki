@@ -104,7 +104,7 @@ watch(
   { immediate: true },
 );
 
-const languageOptions = computed<ModelOption[]>(() => modelOptions(store.providers, store.groups, { languageOnly: true }));
+const languageOptions = computed<ModelOption[]>(() => modelOptions(store.providers, store.groups, { types: ["language"] }));
 const groupOptions = computed(() => languageOptions.value.filter((option) => option.kind === "group"));
 const singleModelOptions = computed(() => languageOptions.value.filter((option) => option.kind === "model"));
 

@@ -51,12 +51,11 @@ function stringArray(value: unknown): boolean {
 }
 
 /**
- * Profile 配置的 RAW 检查：类型错误、必填缺失与未知顶层字段。
- * knownKeys 由调用方从 Schema 目录（基础字段 + 扩展名）汇总后传入。
+ * Profile 配置的 RAW 检查：类型错误与必填缺失。
+ * 未声明的顶层字段原样保留，不做拦截。
  */
-export function inspectProfileConfig(value: Record<string, unknown>, knownKeys: readonly string[]): RawIssue[] {
+export function inspectProfileConfig(value: Record<string, unknown>): RawIssue[] {
   const issues: RawIssue[] = [];
-  const known = new Set([...knownKeys, "context", "wakeup", "toolcall", "extends"]);
 
   if (typeof value.model !== "string" || value.model.trim().length === 0) {
     issues.push({ message: "必填字段缺失：model 需要是非空字符串。", path: "model" });
@@ -88,9 +87,6 @@ export function inspectProfileConfig(value: Record<string, unknown>, knownKeys: 
         if (!isRecord(entry)) issues.push({ message: "扩展条目需要是对象。", path: `extends.${name}` });
       }
     }
-  }
-  for (const key of Object.keys(value)) {
-    if (!known.has(key)) issues.push({ message: `未知字段 ${key}，保存时会被丢弃。`, path: key });
   }
   return issues;
 }

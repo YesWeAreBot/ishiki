@@ -2,6 +2,32 @@ import type { SchemaNode } from "../../../src/management/schema";
 
 export type { SchemaNode } from "../../../src/management/schema";
 
+/** 当前值命中的联合分支：所有 const 字段都必须相等，没有 const 字段的分支作为兜底。 */
+function branchMatches(node: SchemaNode, record: Record<string, unknown> | undefined): boolean {
+  if (node.type !== "object") return false;
+  return Object.entries(node.dict ?? {}).every(([key, child]) => child.type !== "const" || record?.[key] === child.value);
+}
+
+/** 展开对象字段；intersect 合并所有分支，union 只取当前值命中的分支。 */
+export function schemaFields(node: SchemaNode | undefined, value: unknown): Array<[string, SchemaNode]> {
+  if (node === undefined) return [];
+  if (node.type === "object") return Object.entries(node.dict ?? {});
+  if (node.type === "intersect") {
+    const merged = new Map<string, SchemaNode>();
+    for (const branch of node.list ?? []) {
+      for (const [key, child] of schemaFields(branch, value)) {
+        // 分支里的 const 只用于选择分支，不覆盖顶层的真实控件。
+        if (child.type !== "const") merged.set(key, child);
+      }
+    }
+    return [...merged.entries()];
+  }
+  if (node.type !== "union") return [];
+  const record = isRecord(value) ? value : undefined;
+  const selected = (node.list ?? []).find((branch) => branchMatches(branch, record));
+  return selected === undefined ? [] : Object.entries(selected.dict ?? {});
+}
+
 /** 递归计算表单默认值；显式默认值覆盖结构默认值。 */
 export function schemaDefaults(node: SchemaNode | undefined): unknown {
   if (node === undefined) return undefined;
@@ -10,7 +36,7 @@ export function schemaDefaults(node: SchemaNode | undefined): unknown {
   if (explicit === undefined) return structural;
   // 字符串与数字的显式默认值只用 placeholder 提示，不预填；
   // 用户未填写时提交由服务端 Schema 补默认值，已保存的实际值仍显示在输入框里。
-  if (node.type === "string" || node.type === "number") return structural === undefined ? undefined : structural;
+  if (node.type === "string" || node.type === "number") return undefined;
   if (isRecord(structural) && isRecord(explicit)) return mergeDefaults(structural, explicit);
   return cloneValue(explicit);
 }
@@ -37,7 +63,7 @@ function structuralDefaults(node: SchemaNode): unknown {
     case "object":
     case "intersect": {
       const value: Record<string, unknown> = {};
-      for (const [key, child] of Object.entries(collectDict(node))) {
+      for (const [key, child] of schemaFields(node, undefined)) {
         const fallback = schemaDefaults(child);
         if (fallback !== undefined) value[key] = fallback;
       }
@@ -69,14 +95,6 @@ function mergeDefaults(base: Record<string, unknown>, overlay: Record<string, un
     result[key] = isRecord(current) && isRecord(value) ? mergeDefaults(current, value) : cloneValue(value);
   }
   return result;
-}
-
-function collectDict(node: SchemaNode): Record<string, SchemaNode> {
-  if (node.type === "object") return node.dict ?? {};
-  if (node.type === "intersect") {
-    return Object.assign({}, ...(node.list ?? []).map(collectDict));
-  }
-  return node.dict ?? {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

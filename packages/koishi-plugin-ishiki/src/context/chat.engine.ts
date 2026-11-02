@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
 import {
   createEntry,
+  createJsonlStorage,
   createUserMessage,
   generateText,
   type Agent,
   type AgentEntry,
   type AgentMessage,
+  type AgentStorage,
   type LanguageModelV4,
   type LanguageModelUsage,
   type ToolResultOutput,
@@ -67,7 +70,7 @@ export interface ChatContextConfig {
 
 export const ChatContextConfig = Schema.object({
   maxTokens: Schema.number().min(0).default(DEFAULT_CONTEXT_TOKENS).description("消息预算的 token 上限，不含 system 与工具定义；0 关闭预算"),
-  compactModel: Schema.string().description("摘要模型引用；留空时从当前模型派生关闭 reasoning 的版本"),
+  compactModel: Schema.string().role("model").description("摘要模型引用；留空时从当前模型派生关闭 reasoning 的版本"),
   highWaterRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.highWaterRatio).description("消息 token 达到预算的该比例时触发整理"),
   targetRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.targetRatio).description("整理后的目标比例，用于统计与手动预览"),
   hotRatio: Schema.number().min(0).max(1).default(CHAT_DEFAULTS.hotRatio).description("热区占预算的比例，热区内的消息不折叠"),
@@ -1102,6 +1105,7 @@ export function registerChatCommands(ctx: Context): void {
           `将折叠 ${stats.plan.shake.coveredMessages} 条消息中的工具内容（约 ${stats.plan.shake.toolTokens} tokens），释放约 ${stats.plan.shake.freedTokens} tokens，原文写入 artifact`,
         );
         if (proceed !== true) return proceed;
+        await view.instance.agent.init();
         const result = await instance.forceShake();
         return result.appended
           ? `折叠完成：${result.coveredMessages} 条消息，释放约 ${result.freedTokens} tokens，原文 ${result.artifact}`
@@ -1125,6 +1129,7 @@ export function registerChatCommands(ctx: Context): void {
         if (stats.plan?.compact === undefined) return describePlanRejection("compact", stats.compactRejection ?? { reason: "covered" });
         const proceed = await confirm(argv, `将把约 ${stats.plan.compact.coveredTokens} tokens 压入摘要，保留最近 ${stats.hotTokens} tokens`);
         if (proceed !== true) return proceed;
+        await view.instance.agent.init();
         const result = await instance.forceCompact();
         return result.appended
           ? `压缩完成：摘要 ${result.summaryChars} 字符，锚点 ${result.throughEntryId}`
@@ -1143,6 +1148,7 @@ export class ChatContextInstance implements ContextEngineInstance {
   public readonly config: ChatContextConfig;
 
   private agent?: Agent;
+  private readonly storage: AgentStorage;
   private readonly logger?: Logger;
   private readonly domain?: InstanceDomain;
   private readonly resources: ResourceCenter;
@@ -1175,6 +1181,7 @@ export class ChatContextInstance implements ContextEngineInstance {
     this.domain = host.domain;
     this.resources = host.resources;
     this.gateway = host.gateway;
+    this.storage = createJsonlStorage(path.join(host.home, "events.jsonl"));
     this.maxTokens = this.config.maxTokens;
     this.highWater = this.maxTokens * this.config.highWaterRatio;
     this.target = this.maxTokens * this.config.targetRatio;
@@ -1265,7 +1272,13 @@ export class ChatContextInstance implements ContextEngineInstance {
     const signal = request?.signal ?? new AbortController().signal;
     let plan = this.plan(current);
     if (plan.over && (plan.shake !== undefined || plan.compact !== undefined) && !signal.aborted) {
-      await this.maintain(current, signal, request?.turnId);
+      try {
+        await this.maintain(current, signal, request?.turnId);
+      } catch (error) {
+        if (!signal.aborted) {
+          this.logger?.warn(`chat context maintenance failed, turn continues: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       current = await this.read();
       plan = this.plan(current);
     }
@@ -1389,7 +1402,7 @@ export class ChatContextInstance implements ContextEngineInstance {
   }
 
   private async read(): Promise<readonly AgentEntry[]> {
-    return this.agent === undefined ? [] : this.agent.storage.read();
+    return this.agent === undefined ? this.storage.read() : this.agent.storage.read();
   }
 
   private beginTurn(turnId: string | undefined): void {
@@ -1497,15 +1510,12 @@ export class ChatContextInstance implements ContextEngineInstance {
     if (configured === undefined) return agent.getModel();
 
     const gateway = this.gateway;
-    let base: LanguageModelV4;
     if (gateway.groups().includes(configured)) {
       const candidate = gateway.group(configured).candidates()[0];
       if (candidate === undefined) throw new Error(`chat compact model group "${configured}" has no available candidates`);
-      base = candidate.model;
-    } else {
-      base = gateway.languageModel(configured);
+      return candidate.model;
     }
-    return gateway.languageModel(`${base.provider}:${base.modelId}:none`);
+    return gateway.languageModel(configured);
   }
 
   private async applyCompact(
@@ -1556,7 +1566,6 @@ export class ChatContextInstance implements ContextEngineInstance {
           model,
           system,
           prompt,
-          reasoning: "none",
           maxOutputTokens: this.config.compactMaxOutputTokens,
           abortSignal: signal,
         });

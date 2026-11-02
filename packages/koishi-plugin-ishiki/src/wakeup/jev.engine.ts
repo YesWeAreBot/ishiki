@@ -554,7 +554,7 @@ export interface JevWakeupConfig extends JevPolicyConfig {
   rules: Partial<JevRules>;
 }
 export const JevWakeupConfig = Schema.object({
-  model: Schema.string().required().description("models.yaml 中已声明的 decision 模型名称"),
+  model: Schema.string().required().role("decision-model").description("models.yaml 中已声明的 decision 模型名称"),
   threshold: Schema.number().min(0).max(1).default(0.7),
   addressedThreshold: Schema.number().min(0).max(1).default(0.7),
   cooldownMs: Schema.number().min(0).default(30000).description("同一群主动加入的发言冷却（毫秒）"),

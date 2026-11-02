@@ -2,7 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { createAssistantMessage, createCustomMessage, createEntry, createToolMessage, createUserMessage, type Agent, type AgentEntry } from "@yesimagent/core";
+import {
+  createAssistantMessage,
+  createCustomMessage,
+  createEntry,
+  createJsonlStorage,
+  createToolMessage,
+  createUserMessage,
+  type Agent,
+  type AgentEntry,
+} from "@yesimagent/core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -549,7 +558,7 @@ describe("chat engine maintenance", () => {
       expect(compactEntry?.data.stats?.summaryTokens).toBeGreaterThan(0);
       expect(compactEntry?.data.stats?.freedTokens).toBeGreaterThanOrEqual(0);
       expect(compactEntry?.data.attempts).toHaveLength(2);
-      expect(compactOptions).toMatchObject({ reasoning: "none", maxOutputTokens: 3_500 });
+      expect(compactOptions).toMatchObject({ maxOutputTokens: 3_500 });
       expect(JSON.stringify(compactOptions?.prompt)).toContain('\\"targetTokens\\":500');
       expect(JSON.stringify(compactOptions?.prompt)).not.toContain("private reasoning");
       for (const [index, attempt] of compactEntry!.data.attempts!.entries()) {
@@ -687,13 +696,14 @@ describe("chat engine maintenance", () => {
       const result = await harness.instance.forceCompact();
       expect(result.appended).toBe(true);
       expect(harness.calls()).toBe(1);
-      expect(generated[0]).toMatchObject({ reasoning: "none", maxOutputTokens: 3_500 });
+      expect(generated[0]).toMatchObject({ maxOutputTokens: 3_500 });
+      expect(generated[0].reasoning).toBeUndefined();
     } finally {
       await harness.cleanup();
     }
   });
 
-  it("derives a reasoning-free model from the configured compact model", async () => {
+  it("uses the configured compact model as-is", async () => {
     const entries: AgentEntry[] = [
       user("root", "开始"),
       ...taskStep("one", "x".repeat(4000)),
@@ -729,11 +739,68 @@ describe("chat engine maintenance", () => {
     try {
       const result = await harness.instance.forceCompact();
       expect(result.appended).toBe(true);
-      expect(references).toEqual(["provider:base:high", "provider:base:none"]);
+      expect(references).toEqual(["provider:base:high"]);
       expect(harness.calls()).toBe(0);
-      expect(compactOptions).toMatchObject({ reasoning: "none", maxOutputTokens: 3_500 });
+      expect(compactOptions).toMatchObject({ maxOutputTokens: 3_500 });
+      expect(compactOptions?.reasoning).toBeUndefined();
     } finally {
       await harness.cleanup();
+    }
+  });
+
+  it("keeps the turn alive when compaction cannot produce a summary", async () => {
+    const entries: AgentEntry[] = [
+      user("root", "开始"),
+      ...taskStep("one", "x".repeat(4000)),
+      ...taskStep("two", "y".repeat(4000)),
+      ...taskStep("three", "z".repeat(4000)),
+      user("current", "继续"),
+    ];
+    const compactModel = {
+      specificationVersion: "v2",
+      provider: "provider",
+      modelId: "base",
+      supportedUrls: {},
+      doGenerate: async () => ({
+        content: [],
+        finishReason: "length",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      }),
+    };
+    const gateway = { groups: () => [], languageModel: () => compactModel };
+    const harness = await maintenanceHarness(entries, { compactModel: "provider:base", gateway });
+    try {
+      const projected = await harness.instance.prepareEntries(entries, { turnId: "turn", signal: new AbortController().signal });
+      expect(projected.length).toBeGreaterThan(0);
+      expect(harness.entries.some((entry) => entry.type === "ishiki.chat.compact")).toBe(false);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  it("reads persisted entries before the agent is attached", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-chat-cold-"));
+    try {
+      const storage = createJsonlStorage(path.join(home, "events.jsonl"));
+      await storage.append(user("root", "开始"), createEntry("ishiki.chat.compact", { summary: VALID_SUMMARY, lastEntryId: "root" }), user("current", "继续"));
+      const resources = new ResourceCenter("chat-cold", home);
+      const instance = new ChatContextInstance({ maxTokens: 10_000 }, {
+        runtimeId: "chat-cold",
+        domain: { mode: "channel", platform: "test", selfId: "bot", channelId: "channel" },
+        home,
+        root: home,
+        fiber: {} as never,
+        logger: { level: 1, debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as never,
+        resources,
+      } as never);
+
+      const stats = await instance.stats();
+      expect(stats.assembledChars).toBeGreaterThan(0);
+      expect(stats.messageTokens).toBeGreaterThan(0);
+      expect(stats.lastChatCompact).toMatchObject({ summaryChars: VALID_SUMMARY.length, anchorEntryId: "root" });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
     }
   });
 

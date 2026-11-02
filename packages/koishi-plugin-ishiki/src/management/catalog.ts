@@ -26,12 +26,6 @@ const ENGINE_LABELS: Record<string, string> = {
   "onebot-actions": "OneBot 动作",
 };
 
-const KNOWN_EXTENSIONS: Record<string, true> = {
-  workspace: true,
-  "mcp-client": true,
-  "onebot-actions": true,
-};
-
 function labelOf(name: string): string {
   return ENGINE_LABELS[name] ?? name;
 }
@@ -120,7 +114,6 @@ export function extensionsDirectory(ctx: Context): ExtensionsDirectory {
     .map((extension) => ({
       name: extension.name.replace(/^ishiki\.ext\./, ""),
       schema: serializeSchema(extension.Schema),
-      known: KNOWN_EXTENSIONS[extension.name.replace(/^ishiki\.ext\./, "")] === true,
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 

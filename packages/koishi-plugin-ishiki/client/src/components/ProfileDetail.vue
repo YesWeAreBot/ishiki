@@ -292,7 +292,7 @@ function openRuntimeSession(sessionId: string): void {
       <div class="panel-head">
         <div class="panel-title">指令文件</div>
         <div class="panel-actions">
-          <span class="panel-sub">路径相对于人格配置目录</span>
+          <span class="panel-sub">相对路径以人格配置目录为准</span>
         </div>
       </div>
       <div class="panel-body">

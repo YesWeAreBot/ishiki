@@ -6,7 +6,11 @@ import { store } from "../store";
 
 defineOptions({ name: "ModelReferenceSelect" });
 
-const props = withDefaults(defineProps<{ modelValue?: unknown; disabled?: boolean; required?: boolean }>(), {});
+export type ModelSelectRole = "language" | "decision";
+
+const props = withDefaults(defineProps<{ modelValue?: unknown; disabled?: boolean; required?: boolean; role?: ModelSelectRole }>(), {
+  role: "language",
+});
 
 const emit = defineEmits<{ "update:modelValue": [value: string | undefined] }>();
 
@@ -22,7 +26,13 @@ const parsed = computed(() => {
 const base = computed(() => parsed.value?.base ?? "");
 const level = computed(() => parsed.value?.level ?? "");
 
-const catalog = computed(() => modelOptions(store.providers, store.groups, { languageOnly: true }));
+/** 判定模型只能选具体模型，语言模型额外允许模型组。 */
+const catalog = computed(() =>
+  props.role === "decision"
+    ? modelOptions(store.providers, store.groups, { types: ["decision"], groups: false })
+    : modelOptions(store.providers, store.groups, { types: ["language"] }),
+);
+const acceptsLevels = computed(() => props.role !== "decision");
 const groupChoices = computed(() => catalog.value.filter((row) => row.kind === "group"));
 const modelChoices = computed(() => catalog.value.filter((row) => row.kind === "model"));
 
@@ -62,7 +72,7 @@ function selectLevel(next: string): void {
 }
 
 function withLevel(target: string, value: string): string {
-  if (value === "") return target;
+  if (!acceptsLevels.value || value === "") return target;
   const efforts = findDeclaredModel(store.providers, target)?.model.thinking?.efforts;
   if (efforts !== undefined && efforts.length > 0 && !efforts.includes(value)) return target;
   return `${target}:${value}`;
@@ -70,10 +80,16 @@ function withLevel(target: string, value: string): string {
 </script>
 
 <template>
-  <div class="model-reference">
-    <select class="select" :value="base" :disabled="disabled" aria-label="模型或模型组" @change="selectBase(($event.target as HTMLSelectElement).value)">
+  <div class="model-reference" :class="{ 'is-single': !acceptsLevels }">
+    <select
+      class="select"
+      :value="base"
+      :disabled="disabled"
+      :aria-label="role === 'decision' ? '判定模型' : '模型或模型组'"
+      @change="selectBase(($event.target as HTMLSelectElement).value)"
+    >
       <option v-if="!required" value="">（未设置）</option>
-      <option v-else-if="base === ''" value="" disabled>选择模型或模型组</option>
+      <option v-else-if="base === ''" value="" disabled>{{ role === "decision" ? "选择判定模型" : "选择模型或模型组" }}</option>
       <option v-if="missing && parsed !== undefined" :value="base">{{ base }}（目录中未找到）</option>
       <optgroup v-if="groupChoices.length > 0" label="模型组">
         <option v-for="row in groupChoices" :key="row.reference" :value="row.reference">{{ row.label }}</option>
@@ -83,6 +99,7 @@ function withLevel(target: string, value: string): string {
       </optgroup>
     </select>
     <select
+      v-if="acceptsLevels"
       class="select model-reference-level"
       :value="level"
       :disabled="disabled || parsed?.kind !== 'model' || levels.length === 0"
@@ -104,6 +121,10 @@ function withLevel(target: string, value: string): string {
 
 .model-reference-level {
   min-width: 0;
+}
+
+.model-reference.is-single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-width: 640px) {

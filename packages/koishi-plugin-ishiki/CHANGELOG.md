@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebuilt the model catalog as a table-style list with capability badges, usage stats and row actions
 - Moved session details into a side rail that toggles as a full-width band on narrow screens
 - Unified status labels and tones into a shared module used by badges and session lists
+- Expanded profile config fields from the schema branches matching the current values, showing only the active backend's options
+- Filtered model reference pickers by model type and role so decision model pickers list no groups or thinking levels
+- Accepted absolute instruction file paths and resolved relative ones against the profile directory
+- Stopped flagging undeclared profile fields and unlisted extensions in the console
+- Owned the chat event store per context instance and kept turns running when maintenance fails
 
 ### Removed
 - Removed the cache page, its snapshot API and related console store state

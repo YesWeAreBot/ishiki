@@ -54,7 +54,6 @@ interface EngineSection {
 interface ExtensionRow {
   name: string;
   descriptor: ExtensionDescriptor | undefined;
-  known: boolean;
   enabled: boolean;
   schema: SchemaNode | undefined;
   config: unknown;
@@ -134,13 +133,11 @@ const extensionRows = computed<ExtensionRow[]>(() => {
   const push = (name: string, descriptor: ExtensionDescriptor | undefined): void => {
     const entry = entries[name];
     const record = isRecord(entry) ? entry : undefined;
-    const known = descriptor?.known === true;
     rows.push({
       name,
       descriptor,
-      known,
       enabled: record !== undefined && record.enable !== false,
-      schema: known && descriptor !== undefined && descriptor.schema !== undefined ? descriptor.schema : undefined,
+      schema: descriptor?.schema,
       config: record?.config,
     });
   };
@@ -191,17 +188,11 @@ const validationIssue = computed(() => {
 
 /* 原始配置模式与表单共用 draft；校验失败时禁止切换与保存。 */
 
-const knownConfigKeys = computed<string[]>(() => {
-  const keys = new Set<string>(Object.keys(store.extensions?.schemas.base.dict ?? {}));
-  for (const descriptor of store.extensions?.extensions ?? []) keys.add(descriptor.name);
-  return [...keys];
-});
-
 const rawReport = computed<{ issues: string[]; line: number | undefined; value: JsonRecord | undefined }>(() => {
   if (mode.value !== "raw") return { issues: [], line: undefined, value: undefined };
   const parsed = parseRaw(rawDoc.value);
   if (!parsed.ok) return { issues: formatRawIssues(parsed.issues), line: parsed.issues[0]?.line, value: undefined };
-  return { issues: formatRawIssues(inspectProfileConfig(parsed.value, knownConfigKeys.value)), line: undefined, value: parsed.value };
+  return { issues: formatRawIssues(inspectProfileConfig(parsed.value)), line: undefined, value: parsed.value };
 });
 
 function enterRaw(): void {
@@ -317,7 +308,7 @@ function extensionDescriptor(name: string): ExtensionDescriptor | undefined {
 
 function extensionDefaults(name: string): unknown {
   const descriptor = extensionDescriptor(name);
-  if (descriptor === undefined || descriptor.known !== true || descriptor.schema === undefined) return {};
+  if (descriptor?.schema === undefined) return {};
   const defaults = schemaDefaults(descriptor.schema);
   return defaults === undefined ? {} : defaults;
 }
@@ -633,9 +624,6 @@ const personaPath = computed(() => {
               <div v-for="row in extensionRows" :key="row.name" class="form-section">
                 <div class="form-section-head">
                   <div class="form-section-title mono">{{ row.name }}</div>
-                  <span class="badge" :class="row.known ? 'badge-outline' : 'badge-warning'">
-                    {{ row.known ? "已知扩展" : "未知扩展" }}
-                  </span>
                   <span v-if="row.descriptor === undefined" class="badge badge-neutral">未注册</span>
                   <span class="spacer"></span>
                   <ToggleSwitch :checked="row.enabled" :label="row.enabled ? '启用' : '停用'" @update:checked="toggleExtension(row.name, $event)" />
@@ -683,7 +671,7 @@ const personaPath = computed(() => {
             <div class="form-section">
               <div class="form-section-head">
                 <div class="form-section-title">指令文件</div>
-                <div class="form-section-desc">路径来自人格配置，绝对路径只读展示。</div>
+                <div class="form-section-desc">路径来自人格配置，相对路径以 Profile 目录为准，绝对路径同样读写。</div>
               </div>
               <div class="profile-file-list">
                 <div v-for="file in profile.instructions" :key="file.path" class="profile-file-row">

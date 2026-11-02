@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import { schemaDefaults, schemaPlaceholder } from "../lib/schema";
+import { schemaDefaults, schemaFields, schemaPlaceholder } from "../lib/schema";
 import type { SchemaNode } from "../types";
 import ModelReferenceSelect from "./ModelReferenceSelect.vue";
 import ToggleSwitch from "./ToggleSwitch.vue";
@@ -28,24 +28,13 @@ const meta = computed(() => props.schema.meta ?? {});
 const required = computed(() => props.required === true || meta.value.required === true);
 const hint = computed(() => props.hint ?? (typeof meta.value.description === "string" ? meta.value.description : undefined));
 
-/** intersect 合并所有对象分支，any 分支不提供字段。 */
-const fields = computed<Array<[string, SchemaNode]>>(() => {
-  const node = props.schema;
-  if (node.type === "object") return Object.entries(node.dict ?? {});
-  if (node.type === "intersect") {
-    const merged = new Map<string, SchemaNode>();
-    for (const branch of node.list ?? []) {
-      for (const [key, child] of Object.entries(branch.dict ?? {})) merged.set(key, child);
-    }
-    return [...merged.entries()];
-  }
-  return [];
-});
-
 const record = computed<Record<string, unknown>>(() => {
   const value = props.modelValue;
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 });
+
+/** intersect 合并所有对象分支，union 只展开当前值命中的分支。 */
+const fields = computed<Array<[string, SchemaNode]>>(() => schemaFields(props.schema, record.value));
 
 const constants = computed(() => {
   if (kind.value === "const") return [{ value: props.schema.value, label: hint.value ?? String(props.schema.value) }];
@@ -60,6 +49,12 @@ const constants = computed(() => {
 
 const textarea = computed(() => meta.value.role === "textarea" || kind.value === "any");
 const secret = computed(() => meta.value.role === "secret");
+const modelRole = computed<"language" | "decision" | undefined>(() => {
+  if (kind.value !== "string") return undefined;
+  if (meta.value.role === "decision-model") return "decision";
+  if (meta.value.role === "model") return "language";
+  return undefined;
+});
 
 const jsonText = computed(() => {
   if (kind.value !== "any") return "";
@@ -78,7 +73,7 @@ const dictEntries = computed<Array<[string, unknown]>>(() =>
 /** 复杂控件独占整行，标量字段在宽屏下并排。 */
 function isWide(node: SchemaNode): boolean {
   if (node.type === "object" || node.type === "intersect" || node.type === "array" || node.type === "dict" || node.type === "any") return true;
-  if (node.type === "string" && (node.meta.role === "textarea" || node.meta.role === "model")) return true;
+  if (node.type === "string" && (node.meta.role === "textarea" || node.meta.role === "model" || node.meta.role === "decision-model")) return true;
   if (node.type === "union") return (node.list ?? []).some((item) => item.type !== "const");
   return false;
 }
@@ -192,10 +187,11 @@ function onJson(event: Event): void {
   ></textarea>
 
   <ModelReferenceSelect
-    v-else-if="kind === 'string' && meta.role === 'model'"
+    v-else-if="kind === 'string' && modelRole !== undefined"
     :model-value="textValue"
     :disabled="disabled"
     :required="required"
+    :role="modelRole"
     @update:model-value="emit('update:modelValue', $event)"
   />
 

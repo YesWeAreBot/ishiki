@@ -38,19 +38,30 @@ export function modelRows(providers: readonly ProviderView[]): Array<{ provider:
   return providers.flatMap((provider) => provider.models.map((model) => ({ provider, model, reference: `${provider.id}:${model.id}` })));
 }
 
-export function modelOptions(providers: readonly ProviderView[], groups: readonly GroupView[], options: { languageOnly?: boolean } = {}): ModelOption[] {
+export interface ModelOptionFilter {
+  /** 只保留这些类型的模型；省略时保留全部。 */
+  types?: readonly string[];
+  /** 是否列出模型组，默认列出。 */
+  groups?: boolean;
+}
+
+export function modelOptions(providers: readonly ProviderView[], groups: readonly GroupView[], filter: ModelOptionFilter = {}): ModelOption[] {
   const rows: ModelOption[] = [];
-  for (const group of groups) rows.push({ reference: group.name, label: `组 ${group.name}`, kind: "group" });
+  if (filter.groups !== false) {
+    for (const group of groups) rows.push({ reference: group.name, label: `组 ${group.name}`, kind: "group" });
+  }
   for (const { provider, model, reference } of modelRows(providers)) {
+    const type = model.type ?? "language";
+    if (filter.types !== undefined && !filter.types.includes(type)) continue;
     rows.push({
       reference,
       label: model.name === undefined || model.name.length === 0 ? model.id : `${model.name}（${model.id}）`,
       kind: "model",
-      type: model.type,
+      type,
       provider: provider.id,
     });
   }
-  return options.languageOnly === true ? rows.filter((row) => row.kind === "group" || row.type === "language") : rows;
+  return rows;
 }
 
 const MODEL_TYPE_LABELS: Record<string, string> = {

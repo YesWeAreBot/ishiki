@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Split workspace config into shared settings plus sandbox and native branches so forms show only the active backend's fields
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes

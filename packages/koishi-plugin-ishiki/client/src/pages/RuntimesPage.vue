@@ -154,10 +154,7 @@ async function confirmAction(): Promise<void> {
 
 <template>
   <PageShell>
-    <PageHeader
-      title="运行实例"
-      desc="运行实例由人格配置按需创建，承载独立的会话日志与资源目录。唤醒、重启、停止与中断会立即生效，状态随控制台推送更新。"
-    >
+    <PageHeader title="运行实例" desc="运行实例由人格配置按需创建，承载独立的会话日志与资源目录。唤醒、重启、停止与中断会立即生效，状态随控制台推送更新。">
       <template #actions>
         <span class="badge badge-outline">{{ store.runtimes.length }} 个实例</span>
       </template>
@@ -242,10 +239,9 @@ async function confirmAction(): Promise<void> {
                 </div>
               </div>
               <div class="list-item-side">
-                <time
-                  v-if="runtime.lastActivity !== undefined"
-                  :datetime="new Date(runtime.lastActivity).toISOString()"
-                >{{ relativeTime(runtime.lastActivity) }}</time>
+                <time v-if="runtime.lastActivity !== undefined" :datetime="new Date(runtime.lastActivity).toISOString()">{{
+                  relativeTime(runtime.lastActivity)
+                }}</time>
                 <span v-else class="faint small">未活动</span>
               </div>
             </button>
