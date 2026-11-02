@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-ishiki-mcp-client",
   "version": "0.0.4",
-  "description": "MCP client for Ishiki: connects MCP servers and exposes their tools and resources to agents",
+  "description": "MCP client for Ishiki",
   "keywords": [
     "agent",
     "chatbot",
@@ -52,8 +52,8 @@
   },
   "koishi": {
     "description": {
-      "zh": "MCP 客户端插件：接入 MCP 服务器的工具与资源",
-      "en": "MCP client plugin: MCP server tools and resources"
+      "zh": "Ishiki 的 MCP 客户端",
+      "en": "MCP client for Ishiki"
     },
     "service": {
       "required": [

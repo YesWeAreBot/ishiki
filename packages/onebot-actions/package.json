@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-ishiki-onebot-actions",
   "version": "0.0.5",
-  "description": "OneBot v11 action catalog and tools for Ishiki: group, file, history and profile operations",
+  "description": "OneBot actions for Ishiki, supporting NapCat, SnowLuma and LLBot",
   "keywords": [
     "agent",
     "chatbot",
@@ -53,8 +53,8 @@
   },
   "koishi": {
     "description": {
-      "zh": "OneBot v11 动作目录与调用工具",
-      "en": "OneBot v11 action catalog and tools"
+      "zh": "为 Ishiki 提供 OneBot 客户端操作能力，支持 NapCat、SnowLuma、LLBot 等兼容 OneBot 协议的后端",
+      "en": "OneBot client operations for Ishiki, supporting NapCat, SnowLuma, LLBot and other OneBot-compatible backends"
     },
     "service": {
       "required": [

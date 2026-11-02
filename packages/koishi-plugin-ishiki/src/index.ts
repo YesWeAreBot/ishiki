@@ -90,8 +90,12 @@ export interface SessionAddress {
 
 class Ishiki extends Service<Ishiki.Config> {
   static readonly name = "ishiki";
-  static readonly usage = `
-[快速上手](https://ishiki.js.org/docs/tutorial/quickstart/) · [常见问题与排查](https://ishiki.js.org/docs/guides/troubleshooting/)
+  static readonly usage = `<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://ishiki.js.org/logo-dark.svg">
+  <img src="https://ishiki.js.org/logo.svg" alt="Ishiki：意识的运行时，人格的栖息地" width="350">
+</picture>
+
+[文档](https://ishiki.js.org/docs/) · [快速上手](https://ishiki.js.org/docs/tutorial/quickstart/) · [常见问题与排查](https://ishiki.js.org/docs/guides/troubleshooting/)
 
 问题反馈：[GitHub Issues](https://github.com/YesWeAreBot/ishiki/issues)
 

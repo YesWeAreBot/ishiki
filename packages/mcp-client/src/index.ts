@@ -8,6 +8,7 @@ import { McpResourceHandler } from "./resource-schemes.js";
 
 class McpClientExtension extends Extension {
   static inject = ["ishiki"];
+  static readonly usage = ``;
   // 没有实例配置：连接池参数全部来自插件配置（Config），static Schema 缺省即透传。
 
   private readonly pools = new Map<string, ProfilePool>();

@@ -332,7 +332,7 @@ function renderChangeset(bumps: Map<string, BumpType>): string {
 function runChangesetStatus(): ChangesetStatus {
   mkdirSync(join(ROOT, "cache"), { recursive: true });
   rmSync(PLAN_FILE, { force: true });
-  run(process.execPath, ["x", "changeset", "status", "--output", "packs/release-plan.json"]);
+  run(process.execPath, ["x", "changeset", "status", "--output", "cache/release-plan.json"]);
   if (!existsSync(PLAN_FILE)) throw new Error("changeset status 没有生成计划文件");
   return JSON.parse(readFileSync(PLAN_FILE, "utf8")) as ChangesetStatus;
 }

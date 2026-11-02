@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-ishiki-workspace",
   "version": "0.0.5",
-  "description": "Workspace tools for Ishiki: sandboxed or native shell, file tools and skills",
+  "description": "workspace tools for Ishiki",
   "keywords": [
     "agent",
     "chatbot",
@@ -53,8 +53,8 @@
   },
   "koishi": {
     "description": {
-      "zh": "工作区工具插件",
-      "en": "Workspace tools plugin"
+      "zh": "Ishiki 的工作区扩展，提供 bash 沙箱和文件读写能力",
+      "en": "Ishiki workspace extension with bash sandbox and file read/write"
     },
     "service": {
       "required": [

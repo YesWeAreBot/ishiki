@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-ishiki",
   "version": "0.0.5",
-  "description": "Ishiki core runtime for Koishi: agent loop, model gateway, profiles, engines, tools and resources",
+  "description": "lightweight, extensible agent runtime for Koishi",
   "keywords": [
     "agent",
     "chatbot",
@@ -65,8 +65,8 @@
   },
   "koishi": {
     "description": {
-      "zh": "Ishiki 核心运行时：Agent 循环、模型网关、profile、引擎机制与工具资源",
-      "en": "Ishiki core runtime: agent loop, model gateway, profiles, engines, tools and resources"
+      "zh": "轻量级、可扩展的 Agent 运行时框架",
+      "en": "Lightweight and extensible agent runtime framework"
     },
     "service": {
       "implements": [

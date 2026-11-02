@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-ishiki-narrative",
   "version": "0.0.1",
-  "description": "Ishiki narrative engines for Koishi: a narrator, action decoder and replyer pipeline over one model step",
+  "description": "narrative engines for Ishiki",
   "keywords": [
     "agent",
     "chatbot",
@@ -50,8 +50,8 @@
   },
   "koishi": {
     "description": {
-      "zh": "叙事引擎插件",
-      "en": "Narrative engines plugin"
+      "zh": "Ishiki 的叙事引擎",
+      "en": "narrative engines for Ishiki"
     },
     "service": {
       "required": [

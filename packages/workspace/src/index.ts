@@ -12,6 +12,7 @@ import { createWorkspaceTools } from "./tools.js";
 
 class WorkspaceExtension extends Extension<WorkspaceConfig> {
   static inject = ["ishiki"];
+  static readonly usage = ``;
   public readonly Schema = WorkspaceConfig;
 
   private readonly dataPath: string;
