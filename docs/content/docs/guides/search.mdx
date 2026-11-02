@@ -1,0 +1,103 @@
+---
+title: 配置网络搜索
+description: 给 bot 接入多个搜索后端，按实例选择自动、并行或单个引擎
+---
+
+search 扩展提供搜索工具 `web_search` 和抓取工具 `web_fetch`；当前选择没有任何抓取引擎时只暴露 `web_search`。插件配置里可以同时登记多个后端和多份凭证；每个意识实例只选择使用方式。
+
+## 第一步：安装与启用
+
+在 Koishi 插件市场安装 `koishi-plugin-ishiki-search` 并启用。插件级配置放在 `koishi.yml` 的 `ishiki-search` 段，凭证和引擎都在这里。
+
+## 第二步：登记引擎
+
+每个引擎至少要有唯一的 `id` 和 `backend`。同一后端可以登记多次，用不同 `id` 区分不同凭证或参数：
+
+```yaml
+plugins:
+  ishiki-search:
+    engines:
+      - id: tavily-main
+        backend: tavily
+        apiKey: tvly-...
+      - id: tavily-backup
+        backend: tavily
+        apiKey: tvly-...
+        searchDepth: advanced
+      - id: local-searx
+        backend: searxng
+        endpoint: https://searx.example.com
+```
+
+`id` 不能是 `auto` 或 `parallel`，这两个值是保留的选择模式。
+
+## 第三步：实例选择模式
+
+profile 里只配置 `mode`：
+
+```yaml
+extends:
+  search:
+    config:
+      mode: auto
+```
+
+| `mode` | 行为 |
+| --- | --- |
+| `auto`（默认） | 按插件配置顺序逐个尝试，直到某个引擎返回非空结果；失败会记录在工具输出的 `errors` 里，空结果会继续尝试下一个引擎 |
+| `parallel` | 并发查询全部具备所需能力的引擎，按规范化 URL 合并去重 |
+| 任意引擎 `id` | 只使用该引擎；实例加载时要求它支持搜索，不支持抓取时不暴露 `web_fetch` |
+
+`auto` 和 `parallel` 只使用 `enabled: true` 的引擎。抓取时 `auto` 会依次尝试具备抓取能力的引擎，`parallel` 会并发全部具备抓取能力的引擎并采用最先成功的结果。
+
+## 后端
+
+| `backend` | 搜索 | 抓取 | 必填凭证 |
+| --- | --- | --- | --- |
+| `tavily` | 是 | 是 | `apiKey` |
+| `brave` | 是 | 否 | `apiKey` |
+| `exa` | 是 | 是 | `apiKey` |
+| `firecrawl` | 是 | 是 | `apiKey` |
+| `searxng` | 是 | 否 | `endpoint`；实例开启 JSON 输出 |
+| `deepseek` | 是 | 是 | `apiKey` |
+| `anthropic` | 是 | 是 | `apiKey`、`model` |
+| `openai` | 是 | 否 | `apiKey`、`model` |
+
+`anthropic` 与 `openai` 直接使用 `@ai-sdk/anthropic`、`@ai-sdk/openai` 提供的原生搜索工具，请求由 provider 包生成，不会转成普通 JSON 接口。`anthropic` 走 `web_search_20260318` 和 `web_fetch_20260318`，`openai` 走 Responses API 的 `web_search`。两者会把模型生成的综合答案放进 `answers`，同时保留带 URL 的来源。抓取正文返回前仍由扩展截断到 `maxContentChars` 字符。
+
+## 字段
+
+### 通用
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `id` | 必填 | 引擎标识，插件内唯一 |
+| `backend` | 必填 | 上表里的后端名 |
+| `enabled` | `true` | 关闭后不参与自动与并行，也不能被实例选中 |
+| `timeoutMs` | `0` | 单次请求超时；`0` 使用插件级 `timeoutMs` |
+
+### 插件级
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `engines` | `[]` | 引擎列表 |
+| `defaultLimit` | `5` | 工具未指定 `limit` 时的结果数 |
+| `maxLimit` | `20` | 工具允许请求的最大结果数 |
+| `timeoutMs` | `60000` | 默认请求超时（毫秒） |
+| `maxFetchUrls` | `5` | 单次抓取的 URL 上限 |
+| `maxContentChars` | `20000` | 单页正文进入模型上下文的最大字符数 |
+| `maxSnippetChars` | `1000` | 单条搜索摘要的最大字符数 |
+| `maxAnswerChars` | `8000` | 所有综合答案合计的最大字符数 |
+| `blacklist` | `[]` | URL 正则黑名单；命中的搜索结果被过滤，抓取直接拒绝 |
+
+### 各后端专有
+
+`searxng` 另有 `endpoint`、`apiKey`、`categories`、`language`、`safesearch`；`brave` 另有 `endpoint`、`country`、`searchLang`、`safesearch`、`extraSnippets`；`exa` 另有 `endpoint`、`type`；`deepseek` 另有 `endpoint`、`needContent`；`tavily` 另有 `endpoint`、`searchDepth`、`includeAnswer`；`firecrawl` 另有 `endpoint`。
+
+`anthropic` 另有 `endpoint`、`maxUses`、`maxTokens`、`maxContentTokens`、`allowedDomains`、`blockedDomains`；`openai` 另有 `endpoint`、`searchContextSize`、`maxOutputTokens`、`allowedDomains`、`blockedDomains`。`endpoint` 需要包含 API 版本段，例如 `https://api.anthropic.com/v1` 或兼容网关的 `/v1` 地址。两者的 `allowedDomains`、`blockedDomains` 互斥，不能同时填写。
+
+## 输出与安全
+
+搜索结果包含 `title`、`url`、`snippet` 和 `publishedAt`；并行模式下同一条 URL 只出现一次。抓取结果包含 `url`、`title`、`content` 或逐条 `error`，单个 URL 失败不会中断其余 URL。
+
+抓取到的网页是不可信的外部文本。扩展的提示词会要求模型把网页里的指令当作数据；`blacklist` 用于从入口处挡掉已知的广告、镜像或危险域名。
