@@ -79,8 +79,9 @@ function run(command: string, args: string[], options: { cwd?: string; capture?:
   return options.capture ? String(result.stdout ?? "") : "";
 }
 
-const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
+const NPM = process.platform === "win32" ? { command: "cmd.exe", prefix: ["/d", "/s", "/c", "npm"] } : { command: "npm", prefix: [] };
 const GH = "gh";
+const MIRROR = "https://registry.npmmirror.com";
 
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
@@ -137,6 +138,12 @@ async function registryHas(name: string, version: string): Promise<boolean> {
   if (response.status === 200) return true;
   if (response.status === 404) return false;
   throw new Error(`registry 查询失败：${name}@${version} 返回 ${response.status} ${response.statusText}`);
+}
+
+async function syncMirror(name: string): Promise<void> {
+  const response = await fetch(`${MIRROR}/-/package/${name.replace("/", "%2F")}/syncs`, { method: "PUT" });
+  if (!response.ok) throw new Error(`npmmirror 同步触发失败：${name} 返回 ${response.status} ${response.statusText}`);
+  console.log(`已触发 npmmirror 同步：${name}`);
 }
 
 function getRepoUrl(): string {
@@ -607,7 +614,7 @@ async function publish(args: string[]): Promise<void> {
         console.log(`跳过 ${tag}：registry 已存在`);
       } else {
         const distTag = release.version.includes("-") ? "next" : "latest";
-        run(NPM, ["publish", "--workspace", release.name, "--access", "public", "--tag", distTag]);
+        run(NPM.command, [...NPM.prefix, "publish", "--workspace", release.name, "--access", "public", "--tag", distTag]);
         console.log(`已发布 ${tag}`);
       }
       const note = notes.get(release.name);
@@ -624,6 +631,7 @@ async function publish(args: string[]): Promise<void> {
         run(GH, ["release", "create", tag, "--title", `${release.name} ${release.version}`, "--notes-file", NOTES_FILE, "--verify-tag"]);
       }
     }
+    for (const release of ordered) await syncMirror(release.name);
   } finally {
     rmSync(NOTES_FILE, { force: true });
   }
@@ -639,7 +647,7 @@ async function main(): Promise<void> {
   bun scripts/release.ts publish [--dry-run]
 
 bump     选择版本、更新 CHANGELOG、提交、创建 tag
-publish  按依赖顺序发布 HEAD 上的 package tag，并创建 GitHub Release`);
+publish  按依赖顺序发布 HEAD 上的 package tag，创建 GitHub Release，并同步 npmmirror`);
   } else throw new Error(`未知命令：${command}`);
 }
 
