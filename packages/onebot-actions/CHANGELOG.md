@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-03
+
 ### Added
 - Added LLBot as a third backend, generated from its OneBot 11 OpenAPI export; 108 actions are available on it
 - Added 14 LLBot-only actions: `batch_delete_group_member`, `create_group_album`, `delete_group_album`, `download_flash_file`, `get_flash_file_info`, `get_profile_like_count`, `get_profile_like_me`, `get_qq_avatar`, `get_recommend_face`, `reshare_flash_file`, `scan_qrcode`, `set_group_file_forever`, `set_group_msg_mask`, and `upload_flash_file`
@@ -17,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Classified `upload_images_to_qun_album` under 群相册, matching the other album actions
 - Made the extension `backend` option optional; it now falls back to the plugin's `defaultBackend` setting
 - Action docs now list each other backend's exclusive parameters under its own heading instead of only the single alternate backend
+
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes
@@ -67,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution.
 - File retrieval instructions use metadata file IDs and the backend's private/group file URL actions, with temporary URLs passed directly between tools in one codemode execution
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.5...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.6...HEAD
+[0.0.6]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.5...koishi-plugin-ishiki-onebot-actions@0.0.6
 [0.0.5]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.4...koishi-plugin-ishiki-onebot-actions@0.0.5
 [0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.3...koishi-plugin-ishiki-onebot-actions@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-onebot-actions@0.0.2...koishi-plugin-ishiki-onebot-actions@0.0.3

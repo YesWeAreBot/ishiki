@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-ishiki",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "lightweight, extensible agent runtime for Koishi",
   "keywords": [
     "agent",

@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-03
+
 ### Changed
 - Split workspace config into shared settings plus sandbox and native branches so forms show only the active backend's fields
+
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes
@@ -83,7 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native file tools resolve the git-bash path `/tmp` to the folder the shell itself reports, so tool paths and shell commands name the same file instead of `D:\tmp`.
 - Workspace tool descriptions state which path spellings the shell converts and that drive paths inside values handed to another program must be written `D:/...`.
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.5...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.6...HEAD
+[0.0.6]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.5...koishi-plugin-ishiki-workspace@0.0.6
 [0.0.5]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.4...koishi-plugin-ishiki-workspace@0.0.5
 [0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.3...koishi-plugin-ishiki-workspace@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-workspace@0.0.2...koishi-plugin-ishiki-workspace@0.0.3

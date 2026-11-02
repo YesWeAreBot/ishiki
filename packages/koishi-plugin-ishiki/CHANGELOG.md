@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-03
+
 ### Added
 - Added keyboard navigation, focus outlines and a skip link across the console for better accessibility
 - Added hover and focus highlighting to usage chart legends
@@ -47,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed mobile console layouts where filters, chat headers and session entries overlapped
 - Fixed fold release figures to match the tokens the projection actually drops, so command previews, usage stats and fold records report one number
 - Fixed token calibration adopting inflated samples, including steps crossing an image attachment or yielding a negative fixed overhead
+
 ## [0.0.5] - 2026-10-31
 
 ### Breaking Changes
@@ -245,7 +248,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attachment extraction requires a payload or URL up front.
 - The first request carries the baseline tool catalog instead of an empty one.
 
-[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.5...HEAD
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.6...HEAD
+[0.0.6]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.5...koishi-plugin-ishiki@0.0.6
 [0.0.5]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.4...koishi-plugin-ishiki@0.0.5
 [0.0.4]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.3...koishi-plugin-ishiki@0.0.4
 [0.0.3]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki@0.0.2...koishi-plugin-ishiki@0.0.3

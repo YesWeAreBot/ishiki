@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-11-03
+
 ### Added
 - Added a search guide covering engine options, selection modes and configuration
+
 ## [0.0.1] - 2026-11-02
 
 ### Added
@@ -16,3 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified `web_search` and `web_fetch` tools with `auto`, `parallel`, and single-engine selection modes
 - Tavily, Brave, Exa, Firecrawl, SearXNG, DeepSeek, Claude, and Codex search backends
 - Multiple credentials per backend, URL blacklisting, request timeouts, and output truncation
+
+[Unreleased]: https://github.com/YesWeAreBot/ishiki/compare/koishi-plugin-ishiki-search@0.0.1...HEAD
+[0.0.1]: https://github.com/YesWeAreBot/ishiki/releases/tag/koishi-plugin-ishiki-search@0.0.1
