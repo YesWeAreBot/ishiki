@@ -4,6 +4,7 @@ import { RouterLink } from "vue-router";
 
 import { ApiError, call } from "../api";
 import BaseModal from "../components/BaseModal.vue";
+import CopyButton from "../components/CopyButton.vue";
 import EmptyState from "../components/EmptyState.vue";
 import ExpandableText from "../components/ExpandableText.vue";
 import Icon from "../components/Icon.vue";
@@ -156,7 +157,6 @@ async function confirmAction(): Promise<void> {
     <PageHeader
       title="运行实例"
       desc="运行实例由人格配置按需创建，承载独立的会话日志与资源目录。唤醒、重启、停止与中断会立即生效，状态随控制台推送更新。"
-      eyebrow="运行 / 运行实例"
     >
       <template #actions>
         <span class="badge badge-outline">{{ store.runtimes.length }} 个实例</span>
@@ -242,9 +242,11 @@ async function confirmAction(): Promise<void> {
                 </div>
               </div>
               <div class="list-item-side">
-                <time :datetime="runtime.lastActivity === undefined ? undefined : new Date(runtime.lastActivity).toISOString()">
-                  {{ relativeTime(runtime.lastActivity) }}
-                </time>
+                <time
+                  v-if="runtime.lastActivity !== undefined"
+                  :datetime="new Date(runtime.lastActivity).toISOString()"
+                >{{ relativeTime(runtime.lastActivity) }}</time>
+                <span v-else class="faint small">未活动</span>
               </div>
             </button>
           </div>
@@ -330,8 +332,9 @@ async function confirmAction(): Promise<void> {
                 <dd class="mono">{{ selected.engines.toolcall.length > 0 ? selected.engines.toolcall : "未配置" }}</dd>
 
                 <dt>工作目录</dt>
-                <dd>
-                  <ExpandableText :value="selected.home" mode="ends" mono :head="30" :tail="14" copy-label="工作目录" />
+                <dd class="path-value">
+                  <code :title="selected.home">{{ selected.home }}</code>
+                  <CopyButton :value="selected.home" label="工作目录" />
                 </dd>
 
                 <dt>会话</dt>
@@ -420,5 +423,18 @@ async function confirmAction(): Promise<void> {
 <style scoped>
 .wrap {
   overflow-wrap: anywhere;
+}
+
+.path-value {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.path-value code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 </style>

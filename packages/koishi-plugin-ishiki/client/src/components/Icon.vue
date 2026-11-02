@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-const props = withDefaults(defineProps<{ name: string; size?: number; label?: string; strokeWidth?: number }>(), {
+const props = withDefaults(defineProps<{ name: string; size?: number; strokeWidth?: number }>(), {
   size: 18,
   strokeWidth: 1.7,
 });
@@ -79,9 +79,7 @@ const iconPaths = computed(() => paths[props.name] ?? paths.info);
     :stroke-width="strokeWidth"
     stroke-linecap="round"
     stroke-linejoin="round"
-    :aria-hidden="label === undefined ? 'true' : undefined"
-    :role="label === undefined ? undefined : 'img'"
-    :aria-label="label"
+    aria-hidden="true"
     focusable="false"
   >
     <path v-for="(path, index) in iconPaths" :key="index" :d="path" />

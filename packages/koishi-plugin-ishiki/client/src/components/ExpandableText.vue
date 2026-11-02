@@ -95,8 +95,9 @@ const summary = computed(() => {
   border: 0;
   background: none;
   color: var(--accent-ink);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: var(--fs-label);
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .expandable :deep(.btn) {

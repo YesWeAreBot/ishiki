@@ -2,10 +2,6 @@
 import { computed, defineAsyncComponent, nextTick, ref, watch, type Component } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import brandIconDark from "./assets/ishiki-icon-dark.svg";
-import brandIconLight from "./assets/ishiki-icon.svg";
-import brandLogoDark from "./assets/ishiki-logo-dark.svg";
-import brandLogoLight from "./assets/ishiki-logo.svg";
 import Icon from "./components/Icon.vue";
 import ToastHost from "./components/ToastHost.vue";
 import { useIshikiTheme } from "./lib/theme";
@@ -66,31 +62,22 @@ const pages: PageEntry[] = [
   },
 ];
 
-const groups = [
-  { label: "配置", ids: ["models", "profiles"] },
-  { label: "运行", ids: ["runtimes", "sessions"] },
-  { label: "观测", ids: ["jev", "usage"] },
-] as const;
+const order = ["models", "profiles", "runtimes", "sessions", "jev", "usage"] as const;
 
 const profileSnapshotReady = computed(() => store.engines !== undefined);
 const jevEnabled = computed(() => profileSnapshotReady.value && store.profiles.some((profile) => profile.state === "active" && profile.wakeupEngine === "jev"));
-const navGroups = computed(() =>
-  groups.map((group) => ({
-    label: group.label,
-    pages: group.ids.flatMap((id) => {
-      if (id === "jev" && !jevEnabled.value) return [];
-      const page = pages.find((entry) => entry.id === id);
-      return page === undefined ? [] : [page];
-    }),
-  })),
+const navPages = computed(() =>
+  order.flatMap((id) => {
+    if (id === "jev" && !jevEnabled.value) return [];
+    const page = pages.find((entry) => entry.id === id);
+    return page === undefined ? [] : [page];
+  }),
 );
 
 const route = useRoute();
 const router = useRouter();
 const mainContent = ref<HTMLElement>();
 const { isDark } = useIshikiTheme();
-const brandIcon = computed(() => (isDark.value ? brandIconDark : brandIconLight));
-const brandLogo = computed(() => (isDark.value ? brandLogoDark : brandLogoLight));
 
 const segments = computed<string[]>(() => {
   const raw = route.params.page;
@@ -126,42 +113,22 @@ function go(page: PageEntry): void {
     <div class="ishiki-root console-root" :class="{ 'is-dark': isDark }">
       <a class="skip-link" href="#ishiki-main">跳到主要内容</a>
       <div class="console-shell">
-        <aside class="console-sidebar" aria-label="Ishiki 导航">
-          <div class="console-sidebar-inner">
-            <div class="sidebar-brand">
-              <img class="sidebar-brand-logo" :src="brandLogo" alt="Ishiki，意识的运行时，人格的栖息地" width="740" height="240" />
-              <div class="sidebar-brand-compact" aria-hidden="true">
-                <img :src="brandIcon" alt="" width="192" height="192" />
-                <span>Ishiki</span>
-              </div>
-            </div>
-
-            <nav class="sidebar-nav" aria-label="Ishiki 页面">
-              <div v-for="group in navGroups" :key="group.label" class="sidebar-group">
-                <div class="sidebar-group-label">{{ group.label }}</div>
-                <button
-                  v-for="page in group.pages"
-                  :key="page.id"
-                  type="button"
-                  class="sidebar-item"
-                  :class="{ active: page.id === activeId }"
-                  :aria-current="page.id === activeId ? 'page' : undefined"
-                  @click="go(page)"
-                >
-                  <Icon class="sidebar-item-icon" :name="page.icon" :size="16" />
-                  <span>{{ page.label }}</span>
-                </button>
-              </div>
-            </nav>
-
-            <div class="sidebar-foot">
-              <span class="sidebar-dot" aria-hidden="true" />
-              <div class="sidebar-foot-copy">
-                <div class="sidebar-name">Ishiki 控制台</div>
-              </div>
-            </div>
-          </div>
-        </aside>
+        <header class="topbar">
+          <nav class="topbar-nav" aria-label="Ishiki 页面">
+            <button
+              v-for="page in navPages"
+              :key="page.id"
+              type="button"
+              class="topbar-item"
+              :class="{ active: page.id === activeId }"
+              :aria-current="page.id === activeId ? 'page' : undefined"
+              @click="go(page)"
+            >
+              <Icon class="topbar-item-icon" :name="page.icon" :size="16" />
+              <span>{{ page.label }}</span>
+            </button>
+          </nav>
+        </header>
 
         <main id="ishiki-main" ref="mainContent" class="console-main" tabindex="-1">
           <component :is="current.component" :key="activeId" />

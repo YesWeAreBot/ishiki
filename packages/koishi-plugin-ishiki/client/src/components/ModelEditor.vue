@@ -462,7 +462,7 @@ function recordOfStrings(value: unknown): Record<string, string> {
           <FormField label="归属供应商" required :hint="editing ? '编辑已有模型时不能切换供应商。' : '可以复用现有供应商，或新建一个。'">
             <select v-model="providerSelect" class="select" :disabled="editing">
               <option :value="NEW_PROVIDER">新建供应商</option>
-              <option v-for="entry in providers" :key="entry.id" :value="entry.id">{{ entry.id }} · {{ entry.api }}</option>
+              <option v-for="entry in providers" :key="entry.id" :value="entry.id">{{ entry.id }}（{{ entry.api }}）</option>
             </select>
           </FormField>
 

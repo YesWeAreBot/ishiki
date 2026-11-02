@@ -436,7 +436,7 @@ function clearLegendHighlight(): void {
 
 .axis-text {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
@@ -481,7 +481,7 @@ function clearLegendHighlight(): void {
 
 .tooltip-day {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   margin-bottom: 4px;
 }
 
@@ -489,7 +489,7 @@ function clearLegendHighlight(): void {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 .tooltip-row span {
@@ -499,7 +499,7 @@ function clearLegendHighlight(): void {
 
 .tooltip-row strong {
   font-family: var(--mono);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .tooltip-row i,
@@ -518,7 +518,7 @@ function clearLegendHighlight(): void {
   gap: 4px 8px;
   margin-top: 8px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-label);
 }
 
 .legend-item {

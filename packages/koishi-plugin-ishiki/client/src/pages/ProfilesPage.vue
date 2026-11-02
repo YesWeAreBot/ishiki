@@ -278,7 +278,7 @@ function clearFilters(): void {
 
 <template>
   <PageShell>
-    <PageHeader title="人格配置" desc="管理人格、频道认领、引擎与扩展配置，并应用或停止配置。保存后的配置需要应用才会生效。" eyebrow="配置 / 人格配置">
+    <PageHeader title="人格配置" desc="管理人格、频道认领、引擎与扩展配置，并应用或停止配置。保存后的配置需要应用才会生效。">
       <template #actions>
         <button type="button" class="btn btn-primary" @click="wizardOpen = true"><Icon name="plus" :size="15" /> 新建人格配置</button>
         <button v-if="!editing && profileId !== ''" type="button" class="btn" :disabled="detailLoading" @click="load(profileId)">

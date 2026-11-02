@@ -164,7 +164,7 @@ const label = computed(() => {
     case "attachment":
       return "附件";
     case "custom":
-      return `自定义消息 · ${customType.value || "未知类型"}`;
+      return `自定义消息（${customType.value || "未知类型"}）`;
     case "event":
       return eventLabel(eventType.value);
     case "state":
@@ -242,6 +242,15 @@ const bodyText = computed(() => {
   return json(value);
 });
 
+/** 消息体里带元素标记（图片、表情、提及）时按原始载荷呈现，避免当成正文读。 */
+function isPayload(value: string): boolean {
+  return /<[a-z][a-z-]*[\s/>]/i.test(value);
+}
+
+const payload = computed(() => isPayload(bodyText.value));
+const createdPayload = computed(() => isPayload(createdContent.value));
+const compactPayload = computed(() => isPayload(compactSummary.value));
+
 const reasoning = computed(() =>
   contentParts.value
     .map((part) => fields(part))
@@ -311,7 +320,7 @@ const eventText = computed(() => {
       const input = number(total, "inputTokens");
       const output = number(total, "outputTokens");
       const all = number(total, "totalTokens");
-      return `输入 ${formatNumber(input)} · 输出 ${formatNumber(output)} · 合计 ${formatNumber(all)} Token`;
+      return `输入 ${formatNumber(input)}，输出 ${formatNumber(output)}，合计 ${formatNumber(all)} Token`;
     }
     default:
       return "";
@@ -343,7 +352,7 @@ function eventLabel(type: string): string {
     case "turn.aborted":
       return "轮次中断";
     default:
-      return `事件 · ${type || "未知类型"}`;
+      return `事件（${type || "未知类型"}）`;
   }
 }
 </script>
@@ -371,7 +380,8 @@ function eventLabel(type: string): string {
             <span v-if="createdMessageId.length > 0" class="badge badge-outline mono">#{{ createdMessageId }}</span>
             <span class="faint small">{{ createdUserName }}</span>
           </div>
-          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ createdContent || "（空消息）" }}</div>
+          <pre v-if="createdContent.length > 0 && createdPayload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{ createdContent }}</pre>
+          <div v-else class="log-text" :class="{ clamped: long && !textOpen }">{{ createdContent || "（空消息）" }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
           <div v-if="quote" class="notice" style="margin-top: 8px">
             <Icon name="link" :size="14" />
@@ -400,7 +410,8 @@ function eventLabel(type: string): string {
           <p class="muted small">
             压缩到条目 <span class="mono">{{ compactLast || "—" }}</span>
           </p>
-          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ compactSummary || "（空摘要）" }}</div>
+          <pre v-if="compactSummary.length > 0 && compactPayload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{ compactSummary }}</pre>
+          <div v-else class="log-text" :class="{ clamped: long && !textOpen }">{{ compactSummary || "（空摘要）" }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
         </template>
 
@@ -414,11 +425,12 @@ function eventLabel(type: string): string {
 
         <template v-else-if="kind === 'assistant'">
           <details v-for="(item, index) in reasoning" :key="index" class="reasoning" style="margin-bottom: 8px">
-            <summary>推理内容 · {{ item.length }} 字符</summary>
+            <summary>推理内容，{{ item.length }} 字符</summary>
             <p>{{ item }}</p>
           </details>
 
-          <div v-if="bodyText.length > 0" class="log-text" :class="{ clamped: long && !textOpen }">{{ bodyText }}</div>
+          <pre v-if="bodyText.length > 0 && payload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{ bodyText }}</pre>
+          <div v-else-if="bodyText.length > 0" class="log-text" :class="{ clamped: long && !textOpen }">{{ bodyText }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
 
           <div v-for="call in toolCalls" :key="call.id" class="tool-call" style="margin-top: 8px">
@@ -481,7 +493,8 @@ function eventLabel(type: string): string {
         </template>
 
         <template v-else>
-          <div class="log-text" :class="{ clamped: long && !textOpen }">{{ bodyText || json(entry.data) }}</div>
+          <pre v-if="bodyText.length > 0 && payload" class="log-text log-payload" :class="{ clamped: long && !textOpen }">{{ bodyText }}</pre>
+          <div v-else class="log-text" :class="{ clamped: long && !textOpen }">{{ bodyText || json(entry.data) }}</div>
           <button v-if="long" type="button" class="log-toggle" @click="textOpen = !textOpen">{{ textOpen ? "收起" : "展开全文" }}</button>
         </template>
       </div>

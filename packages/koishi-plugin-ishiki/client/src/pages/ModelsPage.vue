@@ -6,7 +6,6 @@ import { ApiError, call } from "../api";
 import BaseModal from "../components/BaseModal.vue";
 import CopyButton from "../components/CopyButton.vue";
 import EmptyState from "../components/EmptyState.vue";
-import ExpandableText from "../components/ExpandableText.vue";
 import GroupEditor from "../components/GroupEditor.vue";
 import Icon from "../components/Icon.vue";
 import ModelEditor from "../components/ModelEditor.vue";
@@ -61,6 +60,17 @@ const router = useRouter();
 const tab = ref<"models" | "groups">("models");
 const query = ref("");
 const typeFilter = ref("all");
+
+const tabOrder = ["models", "groups"] as const;
+
+function onTabKeydown(event: KeyboardEvent, index: number) {
+  const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+  if (step === 0) return;
+  event.preventDefault();
+  const next = tabOrder[(index + step + tabOrder.length) % tabOrder.length];
+  tab.value = next;
+  document.getElementById(`ishiki-tab-${next}`)?.focus();
+}
 
 const models = computed(() => store.models);
 const providers = computed(() => store.providers);
@@ -462,7 +472,6 @@ function asRecord(value: unknown): Record<string, unknown> {
     <PageHeader
       title="模型目录"
       desc="维护模型供应商、模型声明与模型组。表单字段由服务端定义生成；保存时会重建模型网关目录，并检查人格配置和模型组的引用关系。"
-      eyebrow="配置 / 模型目录"
     >
       <template #actions>
         <button v-if="tab === 'models'" type="button" class="btn" @click="openNewProvider"><Icon name="plus" :size="15" /> 新增供应商</button>
@@ -474,7 +483,6 @@ function asRecord(value: unknown): Record<string, unknown> {
     <div class="session-meta-strip" style="margin-bottom: 18px">
       <span class="row" style="gap: 6px">
         <span v-if="models === undefined" class="spinner" aria-hidden="true"></span>
-        <span v-else class="status-dot" aria-hidden="true" style="margin: 0"></span>
         <strong>{{ models === undefined ? "等待配置推送" : "配置已加载" }}</strong>
         <span class="muted">{{ models === undefined ? "数据服务尚未返回 models.yaml" : relativeTime(models.readAt) }}</span>
       </span>
@@ -502,10 +510,30 @@ function asRecord(value: unknown): Record<string, unknown> {
     <div v-else class="panel">
       <div class="panel-head" style="padding-bottom: 0; border-bottom: 0; align-items: flex-end">
         <div class="tabs" role="tablist" aria-label="模型配置视图" style="border-bottom: 0">
-          <button type="button" role="tab" class="tab" :aria-selected="tab === 'models'" :tabindex="tab === 'models' ? 0 : -1" @click="tab = 'models'">
+          <button
+            id="ishiki-tab-models"
+            type="button"
+            role="tab"
+            class="tab"
+            aria-controls="ishiki-panel-models"
+            :aria-selected="tab === 'models'"
+            :tabindex="tab === 'models' ? 0 : -1"
+            @click="tab = 'models'"
+            @keydown="onTabKeydown($event, 0)"
+          >
             模型 <span class="tab-count">{{ allRows.length }}</span>
           </button>
-          <button type="button" role="tab" class="tab" :aria-selected="tab === 'groups'" :tabindex="tab === 'groups' ? 0 : -1" @click="tab = 'groups'">
+          <button
+            id="ishiki-tab-groups"
+            type="button"
+            role="tab"
+            class="tab"
+            aria-controls="ishiki-panel-groups"
+            :aria-selected="tab === 'groups'"
+            :tabindex="tab === 'groups' ? 0 : -1"
+            @click="tab = 'groups'"
+            @keydown="onTabKeydown($event, 1)"
+          >
             模型组 <span class="tab-count">{{ groups.length }}</span>
           </button>
         </div>
@@ -521,7 +549,7 @@ function asRecord(value: unknown): Record<string, unknown> {
         </div>
       </div>
 
-      <div class="panel-body">
+      <div class="panel-body" role="tabpanel" :id="`ishiki-panel-${tab}`" :aria-labelledby="`ishiki-tab-${tab}`">
         <template v-if="tab === 'models'">
           <EmptyState
             v-if="filteredRows.length === 0 && filtering"
@@ -567,22 +595,19 @@ function asRecord(value: unknown): Record<string, unknown> {
               </header>
 
               <div v-if="entry.rows.length === 0" class="field-hint">该供应商尚未声明模型。</div>
-              <div v-else class="model-grid">
-                <article v-for="row in entry.rows" :key="row.reference" class="model-card">
-                  <div class="model-card-top">
-                    <div class="flex-1">
-                      <div class="model-name">{{ row.model.name ?? row.model.id }}</div>
-                      <div class="model-ref">
-                        <ExpandableText :value="row.reference" mode="ends" mono :head="26" :tail="12" copy-label="模型引用" />
-                      </div>
-                    </div>
-                    <div class="model-card-actions">
-                      <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="`编辑 ${row.reference}`" @click="openEditModel(row.reference)">
-                        <Icon name="edit" :size="14" />
-                      </button>
-                      <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="`删除 ${row.reference}`" @click="askDeleteModel(row.reference)">
-                        <Icon name="trash" :size="14" />
-                      </button>
+              <div v-else class="model-list">
+                <div class="model-list-head" aria-hidden="true">
+                  <span>模型</span>
+                  <span>能力</span>
+                  <span>用量</span>
+                  <span></span>
+                </div>
+                <article v-for="row in entry.rows" :key="row.reference" class="model-row">
+                  <div class="model-row-main">
+                    <div class="model-name">{{ row.model.name ?? row.model.id }}</div>
+                    <div class="model-ref">
+                      <span class="model-ref-text" :title="row.reference">{{ row.reference }}</span>
+                      <CopyButton :value="row.reference" label="模型引用" />
                     </div>
                   </div>
 
@@ -592,19 +617,28 @@ function asRecord(value: unknown): Record<string, unknown> {
                     <span v-if="row.model.input !== undefined" class="badge badge-outline">{{ row.model.input.join(" / ") }}</span>
                   </div>
 
-                  <div class="model-foot">
+                  <div class="model-stats">
                     <span v-if="row.model.contextWindow !== undefined"
-                      >上下文窗口 <strong>{{ formatCompact(row.model.contextWindow) }}</strong></span
+                      >上下文 <strong>{{ formatCompact(row.model.contextWindow) }}</strong></span
                     >
                     <span v-if="row.model.maxTokens !== undefined"
-                      >最大输出 <strong>{{ formatCompact(row.model.maxTokens) }}</strong></span
+                      >输出 <strong>{{ formatCompact(row.model.maxTokens) }}</strong></span
                     >
                     <span v-if="row.model.dimensions !== undefined"
-                      >向量维度 <strong>{{ formatNumber(row.model.dimensions) }}</strong></span
+                      >维度 <strong>{{ formatNumber(row.model.dimensions) }}</strong></span
                     >
                     <span v-if="row.model.contextWindow === undefined && row.model.maxTokens === undefined && row.model.dimensions === undefined" class="faint"
                       >没有额外声明</span
                     >
+                  </div>
+
+                  <div class="model-card-actions">
+                    <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="`编辑 ${row.reference}`" @click="openEditModel(row.reference)">
+                      <Icon name="edit" :size="14" />
+                    </button>
+                    <button type="button" class="btn btn-ghost btn-icon btn-sm" :aria-label="`删除 ${row.reference}`" @click="askDeleteModel(row.reference)">
+                      <Icon name="trash" :size="14" />
+                    </button>
                   </div>
                 </article>
               </div>

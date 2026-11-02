@@ -141,7 +141,8 @@ v-html="line"
 
 .raw-editor:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .raw-inner {
@@ -162,7 +163,7 @@ v-html="line"
   background: var(--surface-muted);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 20px;
   text-align: right;
   user-select: none;
@@ -180,7 +181,7 @@ v-html="line"
   margin: 0;
   padding: 8px 12px 28px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-label);
   white-space: pre;
 }
 
@@ -196,7 +197,7 @@ v-html="line"
 
 .raw-line-number.raw-line-error {
   color: var(--danger-ink);
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .raw-input {
@@ -211,7 +212,7 @@ v-html="line"
   color: transparent;
   caret-color: var(--ink);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-label);
   line-height: 20px;
   white-space: pre;
   overflow: hidden;

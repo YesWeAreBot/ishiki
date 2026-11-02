@@ -8,11 +8,11 @@ export const MODEL_TYPE_VALUES: readonly ModelType[] = MODEL_TYPE_OPTIONS.map((o
 
 /** 输入类型的取值范围与展示名，来自网关 MODALITIES。 */
 export const MODALITY_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "text", label: "text · 文本" },
-  { value: "image", label: "image · 图像" },
-  { value: "audio", label: "audio · 音频" },
-  { value: "video", label: "video · 视频" },
-  { value: "pdf", label: "pdf · 文档" },
+  { value: "text", label: "文本（text）" },
+  { value: "image", label: "图像（image）" },
+  { value: "audio", label: "音频（audio）" },
+  { value: "video", label: "视频（video）" },
+  { value: "pdf", label: "文档（pdf）" },
 ];
 
 export const THINK_LEVEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = THINK_LEVELS.map((level) => ({ value: level, label: THINK_LEVEL_LABELS[level] }));

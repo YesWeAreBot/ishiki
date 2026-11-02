@@ -408,15 +408,15 @@ function openRuntimeSession(sessionId: string): void {
 
 .profile-spec-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-label);
 }
 
 .profile-spec-value {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink-soft);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: var(--fs-body);
+  font-weight: 500;
 }
 
 @media (max-width: 900px) {

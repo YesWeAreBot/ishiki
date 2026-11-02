@@ -197,7 +197,6 @@ onMounted(() => {
   <PageShell>
     <PageHeader
       title="唤醒判定"
-      eyebrow="观测 / 唤醒判定"
       desc="每条记录保留模型给出的语义证据与本地规则的最终结论。各项证据独立计算，每条规则只与自己的阈值比较。"
     >
       <template #actions>
@@ -256,12 +255,10 @@ onMounted(() => {
           <div>
             <div class="panel-title">
               {{ modeMeta(item).label }}
-              <span class="muted">·</span>
-              <span class="mono">{{ reasonText(item) }}</span>
             </div>
             <div class="panel-sub">
-              {{ formatDateTime(item.at) }} · {{ relativeTime(item.at) }} · {{ item.context?.scene ?? "频道" }} {{ item.channelId }} ·
-              {{ formatNumber(item.pendingCount) }} 条合批 · {{ item.durationMs }} 毫秒
+              <span class="mono">{{ reasonText(item) }}</span>，{{ formatDateTime(item.at) }}，{{ relativeTime(item.at) }}，{{ item.context?.scene ?? "频道" }} {{ item.channelId }}，
+              {{ formatNumber(item.pendingCount) }} 条合批，{{ item.durationMs }} 毫秒
             </div>
           </div>
           <div class="panel-actions">
@@ -327,9 +324,9 @@ onMounted(() => {
 
             <template v-if="item.context !== undefined">
               <div class="jev-section-title">
-                模型上下文 · {{ item.context.scene }}
+                模型上下文，{{ item.context.scene }}
                 <span v-if="item.context.secondsSinceBotLastSpoke !== undefined">
-                  · 距机器人上次发言 {{ Math.round(item.context.secondsSinceBotLastSpoke) }} 秒</span
+                  ，距机器人上次发言 {{ Math.round(item.context.secondsSinceBotLastSpoke) }} 秒</span
                 >
               </div>
               <div class="jev-context">
@@ -398,7 +395,7 @@ onMounted(() => {
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   color: var(--ink-soft);
-  font-size: 12px;
+  font-size: var(--fs-label);
   line-height: 1.6;
   white-space: nowrap;
 }
@@ -434,7 +431,7 @@ onMounted(() => {
 .jev-details > summary {
   cursor: pointer;
   color: var(--accent-ink);
-  font-size: 12px;
+  font-size: var(--fs-body);
   font-weight: 500;
   line-height: 2;
 }
@@ -449,7 +446,7 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 12px;
+  font-size: var(--fs-label);
   line-height: 1.6;
   word-break: break-word;
 }
@@ -477,7 +474,7 @@ onMounted(() => {
   border-radius: 4px;
   background: var(--surface-raised);
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
 }
 
 .jev-context-text {
@@ -495,7 +492,7 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.5;
   word-break: break-word;
 }
@@ -518,7 +515,7 @@ onMounted(() => {
   display: grid;
   gap: 5px;
   margin-bottom: 14px;
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .jev-step {
@@ -555,7 +552,7 @@ onMounted(() => {
   border-left: 2px solid var(--accent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--accent-soft);
-  font-size: 13px;
+  font-size: var(--fs-body);
   line-height: 1.5;
   word-break: break-word;
 }
@@ -563,14 +560,14 @@ onMounted(() => {
 .jev-focus-label {
   flex: none;
   color: var(--accent-ink);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .jev-section-title {
   margin: 4px 0 8px;
   color: var(--ink-soft);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: var(--fs-label);
+  font-weight: 500;
   letter-spacing: 0;
 }
 
@@ -585,7 +582,7 @@ onMounted(() => {
   grid-template-columns: 92px 1fr 48px;
   gap: 10px;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .jev-row-label {
@@ -628,7 +625,7 @@ onMounted(() => {
   border-radius: 4px;
   background: var(--surface-raised);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
   line-height: 1.5;
 }
 

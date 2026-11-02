@@ -44,7 +44,7 @@ export function modelOptions(providers: readonly ProviderView[], groups: readonl
   for (const { provider, model, reference } of modelRows(providers)) {
     rows.push({
       reference,
-      label: model.name === undefined || model.name.length === 0 ? model.id : `${model.name} · ${model.id}`,
+      label: model.name === undefined || model.name.length === 0 ? model.id : `${model.name}（${model.id}）`,
       kind: "model",
       type: model.type,
       provider: provider.id,

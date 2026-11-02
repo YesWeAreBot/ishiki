@@ -310,7 +310,7 @@ function positiveInteger(value: unknown): number | undefined {
           <span class="field-label">添加语言模型</span>
           <select v-model="memberToAdd" class="select">
             <option value="">选择模型…</option>
-            <option v-for="option in languageOptions" :key="option.reference" :value="option.reference">{{ option.reference }} · {{ option.label }}</option>
+            <option v-for="option in languageOptions" :key="option.reference" :value="option.reference">{{ option.reference }}（{{ option.label }}）</option>
           </select>
         </div>
         <div class="field" style="width: 138px">

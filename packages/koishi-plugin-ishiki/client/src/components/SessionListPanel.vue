@@ -3,10 +3,10 @@ import { computed, ref } from "vue";
 
 import { dayEnd, dayStart } from "../lib/dateFilter";
 import { formatDateTime, formatNumber, relativeTime } from "../lib/format";
+import { statusLabel, statusTone } from "../lib/status";
 import type { SessionSummary } from "../types";
 import EmptyState from "./EmptyState.vue";
 import Icon from "./Icon.vue";
-import StatusBadge from "./StatusBadge.vue";
 
 const props = defineProps<{
   sessions: SessionSummary[];
@@ -49,10 +49,22 @@ function resetFilters(): void {
   fromDate.value = "";
   toDate.value = "";
 }
+
+/** 会话 ID 前半段是平台与账号，列表里只留能区分会话的尾段。 */
+function shortSessionId(id: string): string {
+  const slash = id.lastIndexOf("/");
+  return slash === -1 ? id : id.slice(slash + 1);
+}
 </script>
 
 <template>
   <section class="panel session-list-panel" aria-label="会话列表">
+    <div class="panel-head" style="padding-bottom: 12px">
+      <div class="panel-title">会话列表</div>
+      <div class="panel-actions">
+        <span class="badge badge-outline">{{ filteredSessions.length }} / {{ sessions.length }}</span>
+      </div>
+    </div>
     <div class="list-search">
       <div class="stack-sm">
         <div class="search-box">
@@ -64,23 +76,23 @@ function resetFilters(): void {
             <option value="all">全部人格</option>
             <option v-for="profileId in profileIds" :key="profileId" :value="profileId">{{ profileId }}</option>
           </select>
+          <details class="list-date-filter">
+            <summary aria-label="活动日期">
+              <span class="row">
+                <Icon name="clock" :size="13" />
+                <span class="list-date-label">活动日期</span>
+              </span>
+              <span v-if="fromDate.length > 0 || toDate.length > 0" class="badge badge-info">已限定</span>
+              <Icon class="list-date-chevron" name="chevronDown" :size="13" />
+            </summary>
+            <div class="row list-date-range">
+              <input v-model="fromDate" class="input" type="date" aria-label="活动起始日期" />
+              <span class="faint small">至</span>
+              <input v-model="toDate" class="input" type="date" aria-label="活动结束日期" />
+            </div>
+          </details>
           <button v-if="hasFilters" type="button" class="btn btn-ghost btn-sm" @click="resetFilters">清除</button>
         </div>
-        <details class="list-date-filter">
-          <summary aria-label="活动日期">
-            <span class="row">
-              <Icon name="clock" :size="13" />
-              <span class="list-date-label">活动日期</span>
-            </span>
-            <span v-if="fromDate.length > 0 || toDate.length > 0" class="badge badge-info">已限定</span>
-            <Icon class="list-date-chevron" name="chevronDown" :size="13" />
-          </summary>
-          <div class="row list-date-range">
-            <input v-model="fromDate" class="input" type="date" aria-label="活动起始日期" />
-            <span class="faint small">至</span>
-            <input v-model="toDate" class="input" type="date" aria-label="活动结束日期" />
-          </div>
-        </details>
       </div>
     </div>
 
@@ -108,24 +120,17 @@ function resetFilters(): void {
           @click="emit('select', session)"
         >
           <span class="session-item-top">
-            <Icon class="session-item-icon" name="sessions" :size="14" />
-            <span class="session-item-id mono" :title="session.id">{{ session.id }}</span>
+            <span class="session-item-id mono" :title="session.id">{{ shortSessionId(session.id) }}</span>
+            <span class="session-item-state" :class="`is-${statusTone(session.state)}`">{{ statusLabel(session.state) }}</span>
             <time class="session-item-time" :title="formatDateTime(session.lastActivity)">{{ relativeTime(session.lastActivity) }}</time>
           </span>
           <span class="session-item-meta">
-            <span class="session-item-profile" :title="session.profileId">{{ session.profileId }}</span>
-            <StatusBadge :state="session.state" />
-            <span class="session-item-domain">{{ session.domainLabel }}</span>
+            <span class="session-item-profile" :title="session.id">{{ session.profileId }}</span>
             <span class="session-item-count">{{ formatNumber(session.entries) }} 条</span>
             <span v-if="session.corrupt > 0" class="badge badge-danger">{{ session.corrupt }} 行损坏</span>
           </span>
         </button>
       </div>
-    </div>
-
-    <div class="panel-foot">
-      <span class="small muted">显示 {{ filteredSessions.length }} / {{ sessions.length }} 个会话</span>
-      <span v-if="profileIds.length === 0" class="small faint">尚未加载人格配置快照</span>
     </div>
   </section>
 </template>
@@ -136,16 +141,18 @@ function resetFilters(): void {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .list-search {
   position: relative;
   flex: none;
-  padding: 12px;
+  --search-pad: var(--gutter);
+  padding: 12px var(--search-pad);
 }
 
 .list-search .row {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
 .list-search .row > .select,
@@ -154,7 +161,16 @@ function resetFilters(): void {
   min-width: 0;
 }
 
+.list-search .row > .select {
+  min-width: 96px;
+}
+
+.list-search .row > .btn {
+  margin-left: auto;
+}
+
 .list-date-filter {
+  flex: none;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface-muted);
@@ -167,7 +183,7 @@ function resetFilters(): void {
   min-height: 34px;
   padding: 0 9px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   cursor: pointer;
   list-style: none;
 }
@@ -181,7 +197,7 @@ function resetFilters(): void {
 }
 
 .list-date-chevron {
-  transition: transform 0.14s ease;
+  transition: transform var(--dur-micro) var(--ease-out);
 }
 
 .list-date-filter[open] .list-date-chevron {
@@ -193,15 +209,53 @@ function resetFilters(): void {
 }
 
 .list-date-filter[open] .list-date-range {
-  flex-wrap: wrap;
-}
-
-.list-date-filter[open] .list-date-range > .input {
-  flex: 1 0 100%;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: var(--search-pad);
+  left: var(--search-pad);
+  z-index: 20;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 .list-date-range > .input {
   min-width: 0;
+}
+
+.list-date-filter[open] .list-date-range > .input {
+  flex: 1 1 0;
+  width: 0;
+}
+
+.session-list-panel:has(.list-date-filter[open]) .session-list-scroll {
+  padding-top: 60px;
+}
+
+.list-date-filter:has(.badge) summary .list-date-label {
+  display: none;
+}
+
+@container (max-width: 320px) {
+  .list-date-filter summary .list-date-label {
+    display: none;
+  }
+
+  .list-date-filter summary .badge {
+    width: 6px;
+    height: 6px;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--cool);
+    color: transparent;
+    font-size: 0;
+  }
 }
 
 .session-list-scroll {
@@ -220,24 +274,18 @@ function resetFilters(): void {
 .session-list-item {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
   border-bottom: 0;
   border-radius: var(--radius-sm);
-  min-height: 66px;
-  padding: 10px 11px;
+  padding: 10px 12px;
 }
 
 .session-item-top {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
   width: 100%;
-}
-
-.session-item-icon {
-  flex: none;
-  color: var(--muted);
 }
 
 .session-item-id {
@@ -245,49 +293,77 @@ function resetFilters(): void {
   flex: 1;
   overflow: hidden;
   color: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-label);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-item-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.session-item-state::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.session-item-state.is-success {
+  color: var(--success-ink);
+}
+
+.session-item-state.is-info {
+  color: var(--cool-ink);
+}
+
+.session-item-state.is-warning {
+  color: var(--warning-ink);
+}
+
+.session-item-state.is-danger {
+  color: var(--danger-ink);
 }
 
 .session-item-time {
   flex: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .session-item-meta {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  padding-left: 21px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   line-height: 1.45;
 }
 
 .session-item-profile {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   color: var(--ink-soft);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-item-domain {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .session-item-count {
   flex: none;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -296,52 +372,10 @@ function resetFilters(): void {
   margin: 8px;
 }
 
-.panel-foot {
-  flex: none;
-}
-
 @media (max-width: 900px) {
   .list-search {
-    padding: 9px 10px;
-  }
-
-  .list-search .stack-sm {
-    display: grid;
-    grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.7fr) minmax(120px, 0.5fr);
-    align-items: start;
-    gap: 8px;
-  }
-
-  .list-search .row {
-    flex-wrap: wrap;
-  }
-
-  .list-date-filter {
-    align-self: stretch;
-  }
-
-  .list-date-filter[open] .list-date-range {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 10px;
-    z-index: 20;
-    width: min(320px, calc(100vw - 64px));
-    padding: 10px;
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    box-shadow: var(--shadow-overlay);
-    flex-wrap: nowrap;
-    align-items: center;
-  }
-
-  .list-date-filter[open] .list-date-range > .input {
-    flex: 1 1 0;
-    width: 0;
-  }
-
-  .session-list-panel:has(.list-date-filter[open]) .session-list-scroll {
-    padding-top: 68px;
+    --search-pad: 10px;
+    padding: 9px var(--search-pad);
   }
 
   .session-list-item {
@@ -393,10 +427,6 @@ function resetFilters(): void {
   .list-date-filter summary .list-date-label,
   .list-date-filter summary .badge,
   .list-date-filter summary .list-date-chevron {
-    display: none;
-  }
-
-  .panel-foot {
     display: none;
   }
 }

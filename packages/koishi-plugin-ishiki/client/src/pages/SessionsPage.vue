@@ -32,7 +32,7 @@ function selectSession(session: SessionSummary): void {
 
 <template>
   <PageShell class="sessions-page">
-    <PageHeader title="会话日志" desc="按时间浏览会话中的消息记录。会话列表与消息窗口分别滚动，选择一项即可查看完整上下文。" eyebrow="运行 / 会话日志">
+    <PageHeader title="会话日志" desc="按时间浏览会话中的消息记录。会话列表与消息窗口分别滚动，选择一项即可查看完整上下文。">
       <template #actions>
         <button type="button" class="btn btn-soft btn-sm" :disabled="listBusy" @click="refreshList">
           <span v-if="listBusy" class="spinner" aria-hidden="true"></span>
@@ -53,8 +53,8 @@ function selectSession(session: SessionSummary): void {
 .sessions-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--header-height, 3rem) - var(--footer-height, 1.75rem));
-  height: calc(100dvh - var(--header-height, 3rem) - var(--footer-height, 1.75rem));
+  height: calc(100vh - var(--header-height, 3rem) - var(--footer-height, 1.75rem) - var(--topbar-h));
+  height: calc(100dvh - var(--header-height, 3rem) - var(--footer-height, 1.75rem) - var(--topbar-h));
   min-height: 0;
   padding-bottom: 16px;
   overflow: hidden;
@@ -62,50 +62,48 @@ function selectSession(session: SessionSummary): void {
 
 .sessions-page .page-header {
   flex: none;
-  margin-bottom: 14px;
-  padding-bottom: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
 }
 
 .sessions-layout {
   display: grid;
   flex: 1;
-  grid-template-columns: minmax(250px, 292px) minmax(0, 1fr);
+  grid-template-columns: 344px minmax(0, 1fr);
   gap: 14px;
   min-height: 0;
 }
 
 @media (max-width: 1080px) {
   .sessions-layout {
-    grid-template-columns: 250px minmax(0, 1fr);
-    gap: 10px;
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 }
 
 @media (max-width: 900px) {
-  .sessions-page {
-    --console-mobile-nav-height: 51px;
-    height: calc(100vh - var(--header-height, 3rem) - var(--footer-height, 1.75rem) - var(--console-mobile-nav-height));
-    height: calc(100dvh - var(--header-height, 3rem) - var(--footer-height, 1.75rem) - var(--console-mobile-nav-height));
-    padding-bottom: 12px;
-  }
-
   .sessions-layout {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(120px, 24vh) minmax(0, 1fr);
+    gap: 10px;
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 640px) {
   .sessions-page {
+    height: auto;
+    min-height: 0;
     padding-bottom: 10px;
+    overflow: visible;
   }
 
   .sessions-page .page-header {
     margin-bottom: 10px;
+    padding-bottom: 10px;
   }
 
   .sessions-layout {
-    grid-template-rows: minmax(150px, 26vh) minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    gap: 10px;
   }
 }
 </style>

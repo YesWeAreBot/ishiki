@@ -97,7 +97,9 @@ watch(
           <div class="chat-title mono">{{ selectedId }}</div>
           <div class="chat-subline">
             <template v-if="summary !== undefined">
-              {{ summary.profileId }} · {{ summary.domainLabel }} · {{ formatNumber(summary.messages) }} 条消息
+              <span>{{ summary.profileId }}</span>
+              <span>{{ summary.domainLabel }}</span>
+              <span>{{ formatNumber(summary.messages) }} 条消息</span>
             </template>
             <template v-else>会话不在当前列表快照中，仍可直接读取日志。</template>
           </div>
@@ -120,7 +122,7 @@ watch(
         </button>
         <button
           type="button"
-          class="btn btn-ghost btn-sm chat-tool"
+          class="btn btn-ghost btn-sm chat-tool chat-tool-info"
           :class="{ 'is-active': detailsOpen }"
           :aria-pressed="detailsOpen"
           aria-label="显示或隐藏会话信息"
@@ -199,28 +201,6 @@ watch(
         </div>
       </form>
 
-      <div v-if="detailsOpen" class="chat-details">
-        <div class="chat-detail-actions">
-          <button v-if="summary !== undefined" type="button" class="btn btn-sm btn-ghost" @click="openProfile">
-            <Icon name="profile" :size="13" />
-            打开人格配置
-          </button>
-          <button v-if="summary !== undefined" type="button" class="btn btn-sm btn-ghost" @click="openRuntime">
-            <Icon name="runtimes" :size="13" />
-            打开运行实例
-          </button>
-        </div>
-        <div v-if="summary !== undefined" class="chat-file">
-          <span class="field-label">日志文件</span>
-          <code>{{ summary.file }}</code>
-          <CopyButton :value="summary.file" label="日志文件路径" />
-        </div>
-        <div v-else class="notice notice-info">
-          <Icon name="info" :size="14" />
-          <span>该会话不在当前列表快照中，条目仍会按会话编号直接读取。</span>
-        </div>
-      </div>
-
       <div v-if="failure !== undefined && entries.length > 0" class="error-panel chat-error">
         <Icon name="alert" :size="15" />
         <div class="flex-1">
@@ -239,7 +219,7 @@ watch(
           <span class="small faint">展开查看</span>
         </summary>
         <ul class="corrupt-lines">
-          <li v-for="line in corruptLines" :key="line.line">第 {{ line.line }} 行 · {{ line.error }}</li>
+          <li v-for="line in corruptLines" :key="line.line">第 {{ line.line }} 行：{{ line.error }}</li>
         </ul>
         <button type="button" class="btn btn-sm btn-ghost" :disabled="loading" @click="loadLatest(true)">
           <span v-if="loading" class="spinner" aria-hidden="true"></span>
@@ -252,6 +232,31 @@ watch(
         <span>整个日志文件有 {{ corruptTotal }} 行损坏，当前载入范围内没有遇到。</span>
       </div>
     </div>
+
+    <div class="chat-body">
+      <aside v-if="selectedId.length > 0" class="chat-aside" :hidden="!detailsOpen" aria-label="会话信息">
+        <div class="chat-detail-actions">
+          <button v-if="summary !== undefined" type="button" class="btn btn-sm btn-ghost" @click="openProfile">
+            <Icon name="profile" :size="13" />
+            打开人格配置
+          </button>
+          <button v-if="summary !== undefined" type="button" class="btn btn-sm btn-ghost" @click="openRuntime">
+            <Icon name="runtimes" :size="13" />
+            打开运行实例
+          </button>
+        </div>
+        <div v-if="summary !== undefined" class="chat-file">
+          <div class="chat-file-head">
+            <span class="field-label">日志文件</span>
+            <CopyButton :value="summary.file" label="日志文件路径" />
+          </div>
+          <code :title="summary.file">{{ summary.file }}</code>
+        </div>
+        <div v-else class="notice notice-info">
+          <Icon name="info" :size="14" />
+          <span>该会话不在当前列表快照中，条目仍会按会话编号直接读取。</span>
+        </div>
+      </aside>
 
     <div class="chat-stage">
       <div v-if="selectedId.length === 0" class="chat-empty">
@@ -292,6 +297,7 @@ watch(
         :loading-older="loadingOlder"
         @load-older="loadOlder"
       />
+      </div>
     </div>
   </section>
 </template>
@@ -310,7 +316,7 @@ watch(
   flex: none;
   align-items: center;
   gap: 14px;
-  padding: 11px 14px;
+  padding: 11px var(--gutter);
   border-bottom: 1px solid var(--line);
   background: var(--surface-head);
 }
@@ -342,19 +348,21 @@ watch(
 .chat-title {
   overflow: hidden;
   color: var(--ink);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--fs-title);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .chat-subline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
   overflow: hidden;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--fs-label);
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-actions {
@@ -394,11 +402,13 @@ watch(
   align-items: center;
   gap: 0;
   min-height: 34px;
+  padding: 0 calc(var(--gutter) - 11px);
   overflow-x: auto;
+  overflow-y: hidden;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--fs-label);
   scrollbar-width: none;
   white-space: nowrap;
 }
@@ -416,8 +426,8 @@ watch(
 .chat-metrics strong {
   color: var(--ink);
   font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: var(--fs-label);
+  font-weight: 500;
 }
 
 .chat-metrics .metric-loaded {
@@ -452,7 +462,7 @@ watch(
   max-height: min(38vh, 320px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 11px 13px;
+  padding: 11px var(--gutter);
   border-bottom: 1px solid var(--line);
   background: var(--surface-muted);
 }
@@ -481,38 +491,95 @@ watch(
   margin-left: auto;
 }
 
-.chat-details {
+.chat-body {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  padding-top: 10px;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.entry-filters + .chat-details {
-  margin-top: 10px;
-  border-top: 1px solid var(--line);
+.chat-aside {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 10px;
+  padding: 12px var(--gutter);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.chat-aside[hidden] {
+  display: none;
+}
+
+@media (min-width: 1180px) {
+  .chat-body {
+    flex-direction: row;
+    align-items: stretch;
+  }
+
+  .chat-aside {
+    order: 2;
+    width: 304px;
+    overflow-y: auto;
+    padding: 16px;
+    border-bottom: 0;
+    border-left: 1px solid var(--line);
+  }
+
+  .chat-aside[hidden] {
+    display: flex;
+  }
+
+  .chat-stage {
+    order: 1;
+    min-width: 0;
+  }
+
+  .chat-tool-info {
+    display: none;
+  }
 }
 
 .chat-detail-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 5px;
+}
+
+.chat-detail-actions .btn {
+  justify-content: flex-start;
 }
 
 .chat-file {
   display: flex;
-  flex: 1 1 300px;
-  align-items: center;
-  gap: 7px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   min-width: 0;
 }
 
+.chat-file-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
 .chat-file code {
+  display: block;
+  width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-error,
@@ -540,8 +607,8 @@ watch(
   justify-content: space-between;
   gap: 10px;
   color: var(--warning-ink);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--fs-label);
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -556,7 +623,7 @@ watch(
   overflow-y: auto;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
   line-height: 1.55;
 }
 
@@ -606,7 +673,7 @@ watch(
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--fs-label);
 }
 
 .chat-loading-row {

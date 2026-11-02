@@ -18,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added rejection reasons to the chat fold and compact commands, reporting the measured candidate size and the threshold it fell below
 
 ### Changed
-- Reworked the console client visual design with a muted slate palette, flat surfaces, tighter radius scale and unified design tokens
 - Split usage charts by unit so call counts and token usage render on independent axes
 - Updated console copy for sessions, profiles and groups to use consistent terminology
 - Reworked usage charts with a responsive layout, dual token and call axes, and a cache hit rate series
@@ -28,9 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced reasoning token tracking with a cache hit rate summary card
 - Extended automatic compaction across the whole cold zone up to the inbound message that starts the current turn
 - Kept injected user prompts at the end of history out of the compact region
+- Reworked the console design tokens around an OKLCH paper and graphite palette with self-hosted Host Grotesk and Atkinson Hyperlegible Mono fonts
+- Replaced the console sidebar with a sticky top navigation bar that scrolls horizontally on narrow screens
+- Rebuilt the model catalog as a table-style list with capability badges, usage stats and row actions
+- Moved session details into a side rail that toggles as a full-width band on narrow screens
+- Unified status labels and tones into a shared module used by badges and session lists
 
 ### Removed
 - Removed the cache page, its snapshot API and related console store state
+- Removed the console drawer shell in favor of dedicated pages and side rails
 
 ### Fixed
 - Fixed mobile console layouts where the activity date filter, chat header and session entry filters overlapped or clipped

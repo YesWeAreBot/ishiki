@@ -361,7 +361,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
       value:
         channels.length === 0 ? "不认领任何频道" : channels.map((row) => `${row.account.trim()}（${parsePatterns(row.patterns).length} 个模式）`).join("、"),
     },
-    { label: "引擎", value: `上下文 ${draft.value.engines.context} · 唤醒 ${draft.value.engines.wakeup} · 工具调用 ${draft.value.engines.toolcall}` },
+    { label: "引擎", value: `上下文 ${draft.value.engines.context}，唤醒 ${draft.value.engines.wakeup}，工具调用 ${draft.value.engines.toolcall}` },
     { label: "人格", value: draft.value.persona.trim().length > 0 ? `${draft.value.persona.trim().length} 字` : "留空，稍后在编辑器里写" },
   ];
 }
@@ -370,7 +370,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
 <template>
   <BaseModal
     :open="open"
-    :title="profile === undefined ? '配置向导' : `配置向导 · ${profile.id}`"
+    :title="profile === undefined ? '配置向导' : `配置向导：${profile.id}`"
     desc="按步骤完成人格配置；所有内容只在最后一步统一写入。"
     width="min(860px, 100%)"
     :closable="!submitting"
@@ -454,7 +454,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
           <FormField label="归属供应商" required hint="可以复用现有供应商，或新建一个。">
             <select v-model="providerChoice" class="select" :disabled="submitting" aria-label="归属供应商" @change="touch()">
               <option :value="NEW_PROVIDER">新建供应商</option>
-              <option v-for="entry in store.providers" :key="entry.id" :value="entry.id">{{ entry.id }} · {{ entry.api }}</option>
+              <option v-for="entry in store.providers" :key="entry.id" :value="entry.id">{{ entry.id }}（{{ entry.api }}）</option>
             </select>
           </FormField>
           <FormField
@@ -577,7 +577,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
             @change="patchDraft({ engines: { ...draft.engines, [kind]: ($event.target as HTMLSelectElement).value } })"
           >
             <option v-for="option in choices" :key="option.name" :value="option.name">
-              {{ option.available ? option.label : `${option.label} · 不可用` }}
+              {{ option.available ? option.label : `${option.label}（不可用）` }}
             </option>
           </select>
         </FormField>
@@ -644,7 +644,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
   align-items: center;
   gap: 7px;
   color: var(--faint);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .wizard-steps li.done {
@@ -653,7 +653,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
 
 .wizard-steps li.current {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .wizard-step-mark {
@@ -665,7 +665,7 @@ function confirmSummary(): Array<{ label: string; value: string }> {
   border-radius: var(--radius-sm);
   background: var(--surface);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: var(--fs-micro);
 }
 
 li.done .wizard-step-mark {
@@ -687,7 +687,7 @@ li.current .wizard-step-mark {
   .wizard-step-desc {
     display: inline;
     font-weight: 400;
-    font-size: 11px;
+    font-size: var(--fs-micro);
   }
 }
 

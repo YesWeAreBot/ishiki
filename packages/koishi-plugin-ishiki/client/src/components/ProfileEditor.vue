@@ -277,7 +277,7 @@ function findEngine(kind: EngineKind, name: string): EngineDescriptor | undefine
 
 function engineOptionLabel(option: EngineDescriptor): string {
   const base = option.label === option.name ? option.name : `${option.label}（${option.name}）`;
-  return option.available ? base : `${base} · 不可用`;
+  return option.available ? base : `${base}（不可用）`;
 }
 
 function selectEngine(kind: EngineKind, name: string): void {
@@ -770,7 +770,7 @@ const personaPath = computed(() => {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--ink-soft);
-  font-size: 11.5px;
+  font-size: var(--fs-label);
   line-height: 1.55;
 }
 

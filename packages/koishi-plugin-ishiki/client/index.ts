@@ -6,7 +6,7 @@ import IshikiApp from "./src/IshikiApp.vue";
 
 import "./src/styles.css";
 
-/** 控制台入口：只有一个 Ishiki 页面，页面内部自带侧栏。 */
+/** 控制台入口：只有一个 Ishiki 页面，页面内部自带顶部导航。 */
 export default function (ctx: Context): void {
   icons.register("ishiki", IshikiIcon);
   ctx.page({

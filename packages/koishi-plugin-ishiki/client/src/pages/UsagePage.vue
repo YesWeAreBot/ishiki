@@ -197,7 +197,6 @@ onMounted(() => {
     <PageHeader
       title="用量统计"
       desc="用量账本记录每次模型调用的输入、输出与缓存 Token。图表与汇总来自原始用量记录，模型组与具体模型分开统计。"
-      eyebrow="观测 / 用量"
     >
       <template #actions>
         <span v-if="snapshot !== undefined" class="badge badge-outline"> 同步于 {{ formatDateTime(snapshot.syncedAt) }} </span>
@@ -213,7 +212,7 @@ onMounted(() => {
     <div class="stack">
       <div class="panel">
         <div class="panel-body">
-          <div class="form-grid three">
+          <div class="usage-filters">
             <label class="field">
               <span class="field-label">时间范围</span>
               <select v-model="range" class="select" :disabled="loading">
@@ -238,6 +237,10 @@ onMounted(() => {
               </select>
               <span v-if="entityOptions.length === 0" class="field-hint">还没有出现过调用的模型或模型组。</span>
             </label>
+            <div class="usage-filter-actions">
+              <button type="button" class="btn btn-primary" :disabled="loading" @click="apply">应用筛选</button>
+              <button type="button" class="btn btn-ghost" :disabled="loading" @click="reset">重置</button>
+            </div>
           </div>
 
           <div v-if="range === 'custom'" class="form-grid" style="margin-top: 12px">
@@ -249,11 +252,6 @@ onMounted(() => {
               <span class="field-label">结束时间</span>
               <input v-model="customTo" class="input" type="datetime-local" step="1" :disabled="loading" />
             </label>
-          </div>
-
-          <div class="row row-wrap" style="margin-top: 12px">
-            <button type="button" class="btn btn-primary btn-sm" :disabled="loading" @click="apply">应用筛选</button>
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="loading" @click="reset">重置</button>
           </div>
         </div>
       </div>
@@ -451,6 +449,29 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.usage-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(0, 1.1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.usage-filter-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 22px;
+}
+
+@media (max-width: 900px) {
+  .usage-filters {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .usage-filter-actions {
+    grid-column: 1 / -1;
+  }
+}
+
 .usage-metric-second {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }

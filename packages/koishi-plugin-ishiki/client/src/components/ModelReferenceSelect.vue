@@ -102,8 +102,8 @@ function withLevel(target: string, value: string): string {
   gap: 8px;
 }
 
-.model-reference-level:disabled {
-  opacity: 0.6;
+.model-reference-level {
+  min-width: 0;
 }
 
 @media (max-width: 640px) {

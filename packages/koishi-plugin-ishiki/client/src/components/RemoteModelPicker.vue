@@ -32,7 +32,7 @@ const merged = computed<RemoteModelInfo[]>(() => {
 });
 
 function optionLabel(model: RemoteModelInfo): string {
-  const name = model.name === undefined || model.name.length === 0 || model.name === model.id ? model.id : `${model.name} · ${model.id}`;
+  const name = model.name === undefined || model.name.length === 0 || model.name === model.id ? model.id : `${model.name}（${model.id}）`;
   return declaredIds.value.has(model.id) && (entry.value?.models.some((item) => item.id === model.id) ?? false) ? `${name}（已声明）` : name;
 }
 
@@ -42,7 +42,7 @@ function optionDetail(model: RemoteModelInfo): string {
   if (model.maxTokens !== undefined) parts.push(`输出 ${formatCompact(model.maxTokens)}`);
   if (!declaredIds.value.has(model.id)) parts.push("未声明");
   else if (!(entry.value?.models.some((item) => item.id === model.id) ?? false)) parts.push("不在在线名单中");
-  return parts.join(" · ");
+  return parts.join("，");
 }
 
 function onPick(event: Event): void {
@@ -85,7 +85,7 @@ function reload(): void {
         <select class="select" aria-label="从在线名单选择模型" :disabled="disabled" @change="onPick">
           <option value="">从在线名单选择（{{ entry.models.length }} 个）…</option>
           <option v-for="model in merged" :key="model.id" :value="model.id">
-            {{ optionLabel(model) }}<template v-if="optionDetail(model).length > 0"> · {{ optionDetail(model) }}</template>
+            {{ optionLabel(model) }}<template v-if="optionDetail(model).length > 0">，{{ optionDetail(model) }}</template>
           </option>
         </select>
         <button type="button" class="btn btn-sm" :disabled="disabled" title="重新获取名单" @click="reload">
