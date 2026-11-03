@@ -83,4 +83,4 @@ data/ishiki/requests
 `<dataPath>` 下的产物都可以直接查看，布局见[参考：数据目录](/docs/reference/data-layout)。两个常用点：
 
 - `<profile>/runtimes/<实例>/events.jsonl` 是实例的完整事件流（JSONL），一行一个 JSON，是还原一次对话的最终事实。
-- `<profile>/runtimes/<实例>/resources/` 下的 `assets/`、`artifacts/` 是媒体与工具输出的落盘字节，旁有同名 `.json` 元数据。
+- `<profile>/runtimes/<实例>/resources/` 下的 `assets/`、`artifacts/` 是媒体与工具输出的落盘字节。asset 使用 `<uuid>.<实际扩展名>` 与 `<uuid>.metadata.json`，artifact 使用内容寻址文件名与 `<name>.json` 元数据。

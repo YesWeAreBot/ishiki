@@ -3,7 +3,7 @@ import h from "@satorijs/element";
 import type { AttachmentItem } from "../types/messages.js";
 import type { ResourceCenter } from "./center.js";
 
-/** Inbound media element types the platform layer registers as lazy resources. */
+/** Inbound media element types the platform layer registers as downloaded resources when eligible. */
 const MEDIA_KINDS: Record<string, "image" | "audio" | "video" | "file"> = { img: "image", audio: "audio", video: "video", file: "file" };
 
 /** Wildcard media-type hint stored on the asset sidecar; the bytes decide the concrete type on read. */
@@ -17,10 +17,10 @@ export interface CapturedContent {
 }
 
 /**
- * Register each media element of an inbound message as a lazy asset and
- * rewrite its `src` to the resource URL. Nothing is downloaded here: the
- * registered reference is materialized on demand, and one request's media
- * quota decides whether the bytes ever reach the model.
+ * Register each media element of an inbound message and rewrite its `src` to
+ * the stable resource URL. The store runs its HEAD + bounded GET policy before
+ * returning. A failed probe or an oversized source leaves the reference
+ * available for an explicit read, which uses the separate read ceiling.
  */
 export async function captureResources(center: ResourceCenter, content: string): Promise<CapturedContent> {
   const items: AttachmentItem[] = [];
@@ -37,6 +37,7 @@ export async function captureResources(center: ResourceCenter, content: string):
       filename,
       sourceInfo: Object.keys(rest).length > 0 ? { ...rest } : undefined,
     });
+    await center.store.autoDownload(url.slice("asset://".length), mediaType);
     items[index] = { url, mediaType: mediaType ?? "application/octet-stream", ...(filename === undefined ? {} : { filename }) };
     return h(element.type, { ...element.attrs, src: url }, ...element.children);
   });

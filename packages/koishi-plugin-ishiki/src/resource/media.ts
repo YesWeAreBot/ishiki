@@ -1,3 +1,33 @@
+import { fileTypeFromBuffer } from "file-type";
+import mime from "mime";
+
+export interface MediaTypeDetails {
+  mediaType: string;
+  extension: string;
+}
+
+function declaredMediaType(value: string | undefined): string | undefined {
+  const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType && mediaType !== "*/*" && !mediaType.endsWith("/*") ? mediaType : undefined;
+}
+
+function safeExtension(value: string | undefined): string {
+  return value && /^[a-z0-9]+$/i.test(value) ? value.toLowerCase() : "bin";
+}
+
+/**
+ * Type and extension come from the bytes first. A concrete declared type is
+ * consulted only when the bytes match no known signature; URL and display
+ * filename do not participate in storage naming.
+ */
+export async function detectStoredMediaType(declared: string | undefined, bytes: Uint8Array): Promise<MediaTypeDetails> {
+  const detected = await fileTypeFromBuffer(bytes);
+  if (detected !== undefined) return { mediaType: detected.mime, extension: safeExtension(detected.ext) };
+  const mediaType = declaredMediaType(declared);
+  if (mediaType !== undefined) return { mediaType, extension: safeExtension(mime.getExtension(mediaType) ?? undefined) };
+  return { mediaType: "application/octet-stream", extension: "bin" };
+}
+
 /**
  * Resolve an asset's media type: declared wins unless it is a wildcard hint
  * (`image/*` from inbound registration) — then the bytes decide. Returns

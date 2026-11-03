@@ -54,7 +54,9 @@ data/ishiki
 
 ### resources/assets/
 
-平台媒体（聊天里的图片等）。文件名是 32 位十六进制（源 URL 的 SHA-256 前 32 位），旁有同名 `.json` 元数据（含 `src` 原始 URL、`mediaType`、来源信息）。惰性拉取：消息里的图只在被读取时才下载落盘。
+平台媒体（聊天里的图片、音频、视频和文件）。每项使用 UUID v7 标识；字节文件名为 `<uuid>.<实际扩展名>`，元数据文件名为 `<uuid>.metadata.json`。元数据记录原始 `src`、媒体类型、来源信息、创建时间、实际文件名与自动下载结果。符合条件的 HTTP 来源在入站时自动下载，默认上限 20 MiB；来源不符合条件、声明缺失、超限或请求失败时保留引用，后续显式读取仍可尝试下载，读取上限单独为 20 MiB。
+
+`assets.cleanup.enabled` 默认关闭；开启后按 `retentionDays`（默认 30 天）和 `intervalMinutes`（默认 60 分钟）删除过期 asset 的字节文件与元数据。清理只处理 assets，工具 artifact 不受影响。
 
 ### resources/artifacts/
 

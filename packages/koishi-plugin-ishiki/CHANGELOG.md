@@ -7,11 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- Asset URLs now use UUID v7 identifiers; 32-character hexadecimal `asset://` URLs are no longer recognized
+
+### Added
+- Assets download eligible HTTP sources on arrival within `assets.autoDownloadMaxBytes` and keep the reference when the limit is exceeded or the request fails
+- Optional `assets.cleanup` removes expired asset bytes and metadata on a configurable interval
+- `read` accepts a non-empty `question` query on image URLs and answers it with `attachment.visionModel` without attaching the image to the main conversation
+- Added `attachment.messageImageInput` to allow or reject automatic platform message images in the projection
+
+### Changed
+- Assets now use UUID v7 identifiers with `<uuid>.<extension>` byte files and `<uuid>.metadata.json` sidecars
+
 ### Fixed
 - Fixed jev re-waking the same pending messages on every turn end after a wake turn ended without a matching reply: the batch is consumed when it is handed to a turn, and a reply to any message in the batch clears it
 - Fixed the console session log on phones: the session list and message viewport scroll independently again, and jump-to-latest reliably returns to the newest entry
 - Fixed creating a new persona profile opening the wizard with the selected profile's identifier and a locked id field
-
 ## [0.0.6] - 2026-11-03
 
 ### Added

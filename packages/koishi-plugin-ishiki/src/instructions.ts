@@ -104,15 +104,19 @@ Inside codemode, host tool values are plain JSON: nothing is archived, truncated
 
 ## Reading and sending resources
 
-- asset://<32-hex-id>: platform media, fetched lazily.
+- asset://<uuid-v7>: platform media. Eligible HTTP sources are downloaded when the message arrives, subject to assets.autoDownloadMaxBytes; this limit is ignored when you explicitly read the asset.
 - artifact://<tool>/<name>: full tool output or media; sandbox files are /home/.ishiki/artifacts/<tool>/<name>.
 - local://<path>: files under the runtime home. Extension schemes may also be available.
 
-read({url}) returns {type:'text', text, url, size, source?} with the full requested text, or {type:'file', url, mediaType, data(base64), byteLength, immutable, filename?} for media.{% if enableReadLifetime %} A media read accepts lifetime (\`once\` default, \`recent\` or \`retain\`) to choose that attachment's lifecycle: read({ url: "artifact://<tool>/<name>", lifetime: "retain" }).{% endif %} A resource URL is an address, not media bytes: read it first unless the receiving tool explicitly supports that resource scheme. File schemes support :1-200 / :50+30 and ?view=meta; other schemes interpret their own URL syntax. workspace:///home/workspace/file names a sandbox path, including virtual and mounted files.{% if enableCodemode %} In codemode, pass result.text or result.data to another tool according to its input schema.{% endif %}
+read({url}) returns {type:'text', text, url, size, source?} with the full requested text, or {type:'file', url, mediaType, data(base64), byteLength, immutable, filename?} for media. When attachment.visionModel is configured, append a non-empty \`question\` query to an image URL to ask that model and receive text: read({url: "asset://<uuid-v7>?question=What is shown?"}). Existing query parameters stay attached to the resource URL; only question is consumed by read. The recognition call runs independently of the main model's image-input support and does not attach the original image to the main conversation.
+{% if enableReadLifetime %} A media read accepts lifetime (\`once\` default, \`recent\` or \`retain\`) to choose that attachment's lifecycle: read({ url: "artifact://<tool>/<name>", lifetime: "retain" }).
+{% endif %} A resource URL is an address, not media bytes: read it first unless the receiving tool explicitly supports that resource scheme. File schemes support :1-200 / :50+30 and ?view=meta; other schemes interpret their own URL syntax. workspace:///home/workspace/file names a sandbox path, including virtual and mounted files.
+{% if enableCodemode %} In codemode, pass result.text or result.data to another tool according to its input schema.
+{% endif %}
 
 {% if enableCodemode %}
 \`\`\`js
-const file = await tools["read"]({url: "asset://<id>"});
+const file = await tools["read"]({url: "asset://<uuid-v7>"});
 image({type: "image", data: file.data, mimeType: file.mediaType});
 \`\`\`
 {% endif %}

@@ -212,6 +212,9 @@ export class AgentRuntime {
     this.extensions = config.extensions;
     this.resources = config.resources;
     this.attachments = new AttachmentProjection(config.resources, config.attachment);
+    this.resources.store.startCleanup((error) => {
+      this.logger.warn(`[${this.id}] asset cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     this.initTools = config.tools;
     this.condition = new WaitConditionMachine(config.logger);
 
@@ -469,6 +472,7 @@ export class AgentRuntime {
   }
 
   async stop(): Promise<void> {
+    this.resources.store.stopCleanup();
     // Task records are written through the codemode surface, so it closes before extensions release their deps.
     if (this.codemode !== undefined) await (await this.codemode).dispose();
     this.condition.dispose();

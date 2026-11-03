@@ -1,7 +1,7 @@
 import Schema from "schemastery";
 
 import { ContextEngines } from "../context/index.js";
-import { AttachmentConfig } from "../resource/config.js";
+import { AssetConfig, AttachmentConfig } from "../resource/config.js";
 import { ToolcallEngines } from "../toolcall/index.js";
 import { WakeupEngines } from "../wakeup/index.js";
 
@@ -134,6 +134,7 @@ export interface ProfileSettings {
   pacing: PacingConfig;
   typing: TypingConfig;
   attachment: AttachmentConfig;
+  assets: AssetConfig;
 }
 
 export interface ProfileConfig {
@@ -150,6 +151,7 @@ export interface ProfileConfig {
   pacing?: PacingConfig;
   typing?: TypingConfig;
   attachment?: AttachmentConfig;
+  assets?: AssetConfig;
 }
 
 export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
@@ -166,6 +168,7 @@ export const ProfileConfig: Schema<ProfileConfig> = Schema.object({
   pacing: PacingConfig.description("轮次步数节奏"),
   typing: TypingConfig.description("消息打字模拟"),
   attachment: AttachmentConfig.description("附件与图片处理"),
+  assets: AssetConfig.description("asset 自动下载与清理"),
 });
 
 /** 解析产物：一个 profile 的全部静态信息，装配期只读它。 */
@@ -218,6 +221,7 @@ export function resolveProfile(raw: unknown, id: string, root: string): Profile 
       pacing: PacingConfig((config.pacing ?? {}) as PacingConfig),
       typing: TypingConfig((config.typing ?? {}) as TypingConfig),
       attachment: AttachmentConfig((config.attachment ?? {}) as AttachmentConfig),
+      assets: AssetConfig((config.assets ?? {}) as AssetConfig),
     },
     extensions: resolveExtensions(config.extends ?? {}),
   };

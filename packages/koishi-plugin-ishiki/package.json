@@ -48,10 +48,13 @@
     "@satorijs/element": "^3.2.0",
     "@yesimagent/core": "0.0.9",
     "@yesimagent/gateway": "0.0.9",
+    "file-type": "^22.3.0",
     "jpeg-js": "^0.4.4",
+    "mime": "^4.1.2",
     "pngjs": "^7.0.0",
     "reggol": "^1.7.1",
     "schemastery": "^3.18.0",
+    "uuid": "^14.0.3",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

@@ -94,10 +94,6 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
       type: 'PacingConfig',
       description: '一轮的步数预算与中途提醒，见下',
     },
-    toolsearch: {
-      type: 'ToolsearchConfig',
-      description: '按需发现工具，见下',
-    },
     typing: {
       type: 'TypingConfig',
       description: '打字延迟模拟，见下',
@@ -105,6 +101,10 @@ description: 全部配置字段：插件级、profile 级、引擎配置段
     attachment: {
       type: 'AttachmentConfig',
       description: '附件策略，见下',
+    },
+    assets: {
+      type: 'AssetConfig',
+      description: 'asset 自动下载与清理，见下',
     },
   }}
 />
@@ -162,7 +162,7 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
   type={{
     enable: {
       type: 'boolean',
-      default: 'false',
+      default: 'true',
       description: '开关',
     },
     direct: {
@@ -172,70 +172,28 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
     },
     timeoutMs: {
       type: 'number',
-      default: '30000',
-      description: '单次沙箱执行总时限（毫秒）',
-    },
-    maxToolInputBytes: {
-      type: 'number',
-      default: '32 MiB',
-      description: '单次工具入参预算',
-    },
-    maxToolOutputBytes: {
-      type: 'number',
-      default: '32 MiB',
-      description: '单次工具输出预算',
-    },
-    maxResultBytes: {
-      type: 'number',
-      default: '32 MiB',
-      description: '沙箱返回结果预算',
+      default: '120000',
+      description: '单次沙箱执行总时限（毫秒），脚本里的 @options 可以覆盖',
     },
     memoryLimitBytes: {
       type: 'number',
-      default: '256 MiB',
-      description: 'QuickJS 内存预算',
+      default: '512 MiB',
+      description: 'QuickJS 内存预算，创建沙箱时固定',
+    },
+    maxOutputTokens: {
+      type: 'number',
+      default: '3000',
+      description: '工具结果里 RESULT/TEXT/CONSOLE 预览的字符预算（按每 token 4 字符折算）；0 表示省略预览',
+    },
+    maxTasks: {
+      type: 'number',
+      default: '4',
+      description: '同时运行的代码模式后台任务上限',
     },
   }}
 />
 
-### toolsearch
-
-开启后，非常驻工具进入待发现的工具池。`search` 命中项从下一模型步骤可用；与 codemode 配合时，工具签名通过目录更新提供给程序。
-
-<TypeTable
-  type={{
-    enable: {
-      type: 'boolean',
-      default: 'false',
-      description: '开关',
-    },
-    resident: {
-      type: 'string[]',
-      default: '[]',
-      description: '额外常驻工具名；其余工具进入延迟池，经 search 发现后可见',
-    },
-    maxResults: {
-      type: 'number',
-      default: '5',
-      description: '单次 search 最多发现的工具数',
-    },
-    catalogMode: {
-      type: "'incremental' | 'replace'",
-      default: "'incremental'",
-      description: 'catalog 更新策略：incremental 只发新增/变更/删除，replace 每次发完整快照并裁掉旧目录',
-    },
-    fullSnapshotEvery: {
-      type: 'number',
-      default: '8',
-      description: 'incremental 模式下每隔多少次更新补一份完整快照；0 表示不按次数补',
-    },
-    knownIndex: {
-      type: 'boolean',
-      default: 'true',
-      description: 'incremental 模式下在更新末尾附带当前完整工具名列表',
-    },
-  }}
-/>
+脚本内用 `searchTools(query, { limit })` 按名称和描述发现业务工具，再用 `describeTool(name)` 读取完整声明。工具目录在一次脚本执行期间固定。
 
 ### pacing
 
@@ -301,6 +259,15 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
       default: 'false',
       description: '能力上限开关；开启要求模型/组内候选全部声明 input: [text, image]',
     },
+    messageImageInput: {
+      type: 'boolean',
+      default: 'true',
+      description: 'imageInput 开启时，允许平台消息中的图片自动进入主模型上下文；对所有平台消息统一生效',
+    },
+    visionModel: {
+      type: 'string',
+      description: 'read(...?question=...) 使用的独立模型或模型组；留空表示未配置',
+    },
     recentImageCount: {
       type: 'number',
       default: '3',
@@ -328,11 +295,13 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
     },
     maxImageDimension: {
       type: 'number',
-      default: '8000',
-      description: '已知尺寸的单边像素上限',
+      default: '1568',
+      description: '图片长边像素上限，超出时降采样',
     },
   }}
 />
+
+`imageInput` 控制主模型的图片输入总闸。`messageImageInput` 在这个总闸开启时决定平台消息图片是否自动进入上下文；该规则覆盖所有平台消息。`visionModel` 供 `read({ url: "...?question=..." })` 独立识图，主模型无需支持图片输入，识图结果以文本返回。视觉模型或模型组里的每个候选都必须声明 `input: [text, image]`。
 
 每个附件媒体项带 `lifetime`，默认 `once`，所有入口一致：平台图片、直接 MCP 返回、`read` 返回的媒体都只嵌入一次。`imageInput: false` 时不嵌入图片，生命周期一律按 `once` 处理，附件消息只说明未提供的原因。模型可用的覆盖路径只有两条：codemode 最终 `attachments[]` 里的媒体项可以带 `lifetime`；`imageInput` 开启时，直接调用的 `read` 接受 `lifetime`（codemode 内的 `read` 不提供）。
 
@@ -343,6 +312,35 @@ narrative 引擎来自独立插件 `koishi-plugin-ishiki-narrative`，安装并�
 其余配额是每请求一份，平台与工具附件共用；容量不足的图片本次请求不嵌入、不消耗展示机会。硬预算下未被选中的已查看 `recent` 图片会释放，不再参与后续选择；未查看的图片只等待容量，`retain` 本次暂不携带后仍可再试。未发生生命周期移除或选择变化时，投影结果保持消息顺序、ID 与时间戳不变，以复用 provider 的前缀缓存；字节层面的复用只对 `immutable` 资源成立。终止性判定（能力关闭、媒体类型或编码不支持、图片自身字节超过单图上限、图片自身字节超过单次请求累计上限、图片尺寸超限）只输出一次原因，并随成功响应持久化；资源不可用与请求剩余容量不足属于本次请求未提供，会在后续请求重试。
 
 `maxImageRenders` 已移除，替换为生命周期机制与 `recentImageCount` / `imagePruneBatchSize`。profile 里仍写旧字段时，`resolveProfile` 直接报 `attachment.maxImageRenders was removed; use image lifetimes (once, recent, retain) and attachment.recentImageCount/imagePruneBatchSize`。
+
+### assets
+
+<TypeTable
+  type={{
+    autoDownloadMaxBytes: {
+      type: 'number',
+      default: '20 MiB',
+      description: '入站 HTTP 媒体自动下载的字节上限；大小等于上限仍会下载，0 表示关闭自动下载',
+    },
+    'cleanup.enabled': {
+      type: 'boolean',
+      default: 'false',
+      description: '是否定期删除过期 asset',
+    },
+    'cleanup.retentionDays': {
+      type: 'number',
+      default: '30',
+      description: 'asset 创建后保留的天数；0 表示到期即可清理',
+    },
+    'cleanup.intervalMinutes': {
+      type: 'number',
+      default: '60',
+      description: '自动清理的执行间隔（分钟）',
+    },
+  }}
+/>
+
+入站 platform 媒体先注册为 `asset://<UUID v7>`。符合条件的 HTTP 来源在注册后立即执行 HEAD 探测和有界 GET，下载后按实际字节识别媒体类型，并以 `<uuid>.<扩展名>` 保存字节、以 `<uuid>.metadata.json` 保存元数据。HEAD 或 GET 不满足条件时保留引用，模型显式调用 `read` 仍可使用独立读取上限下载。清理只删除过期的 asset 字节与元数据，正在读取的资源会推迟到读取结束；artifact 不受影响。
 
 ## 引擎配置段
 

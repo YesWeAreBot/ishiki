@@ -44,11 +44,12 @@ description: 内置工具的输入输出与资源 URL 的完整语法
 
 ### read
 
-读取资源，输入 `{ url }`；`imageInput` 开启且在 codemode 之外直接调用时，还可带 `lifetime`。文件型 URL 支持行范围和元数据视图：
+读取资源，输入 `{ url }`；`imageInput` 开启且在 codemode 之外直接调用时，还可带 `lifetime`。文件型 URL 支持行范围和元数据视图。图片 URL 可带 `question` 查询参数，交给 `attachment.visionModel` 独立识图：
 
 ```text
 read({ url: "artifact://bash/output.txt:1-200" })
-read({ url: "asset://<32位十六进制>" })
+read({ url: "asset://0190f9f3-3ff8-7000-8000-000000000001" })
+read({ url: "asset://0190f9f3-3ff8-7000-8000-000000000001?question=图里写了什么？" })
 read({ url: "workspace:///home/workspace/report.txt" })
 read({ url: "local://notes.txt?view=meta" })
 ```
@@ -60,7 +61,8 @@ read({ url: "local://notes.txt?view=meta" })
 | `text` | `{ type, url, text, size, mediaType?, filename?, source? }`；`text` 包含请求范围内的完整内容 |
 | `file` | `{ type, url, mediaType, data, byteLength, filename?, immutable, lifetime? }`；`data` 是 base64 媒体数据。`imageInput` 开启时，直调 `read` 可传 `lifetime`，结果会回显所选值 |
 
-- FileScheme 的行选择器为 `:N`、`:start-end` 或 `:start+count`，位于 query 之前。`?view=meta` 读取元数据，惰性 asset 不因此下载。
+- FileScheme 的行选择器为 `:N`、`:start-end` 或 `:start+count`，位于 query 之前。`?view=meta` 只读取元数据，不会拉取 asset 字节。
+- `question` 只由 `read` 消费，其他 query 参数仍属于资源 URL。问题为空、未配置 `attachment.visionModel`、资源不是图片或视觉模型请求失败时，工具返回对应的结构化错误。识图结果是一条 `text` 结果，原图不会附加到主模型上下文。
 - FileScheme 文本的 `source` 包含 `{ url, offset, line, column }`，记录来源与位置；正文不混入展示尾注。
 - codemode 内取得完整结果，不受模型展示预算截断；仍受 SDK 的传输、结果大小和执行限制约束。
 - 传给其他工具时按其输入契约取 `result.text` 或 `result.data`；只有明确支持该 scheme 的工具才能直接接收资源 URL。最终的 `attachments` 可携带媒体节点。
@@ -95,10 +97,6 @@ read({ url: "local://notes.txt?view=meta" })
 - 传媒体出沙箱的唯一方式：返回值顶层带 `attachments` 数组，元素是媒体块（MCP 的 image/audio 块、read 的 file 节点、内嵌 MCP resource）。数组外的一切按普通 JSON 处理。媒体项可带 `lifetime`（`once` 默认、`recent`、`retain`）；沙箱内部工具返回的原始媒体不开始计算生命周期，只有最终 `return` 中的 `attachments[]` 项进入图片生命周期管理。
 - 每次调用是一个独立程序；需要分步传递的数据放进返回值，下一步以观察形式看到。
 
-### search（toolsearch 开启时）
-
-按名称与描述关键词发现延迟池里的工具：输入 `{ query }`，输出 `{ tools: [{ name, description? }] }`。命中的工具**下一步**起可调用；每步结束时目录有变化则持久化一条目录更新。默认 `catalogMode: incremental` 只包含新增、变更或删除的工具，`catalogMode: replace` 则每次发完整快照。常驻工具（`finish`、`send_message`、`read`、`wait`、`codemode`、`search` 加 `resident` 名单）永远可见。
-
 ### finish
 
 结束当前轮次：输入 `{ reason? }`，输出 `{ ok: true }`。收尾动作应由模型直调发起。
@@ -107,7 +105,7 @@ read({ url: "local://notes.txt?view=meta" })
 
 | 方案 | 语法 | 内容 |
 | --- | --- | --- |
-| `asset` | `asset://<32位十六进制>` | 平台媒体，惰性拉取：首次访问才下载并落盘 |
+| `asset` | `asset://<UUID v7>` | 平台媒体；符合条件的 HTTP 来源在入站时自动下载，其余来源在显式读取时下载 |
 | `artifact` | `artifact://<tool>/<name>` | 工具输出归档；沙箱内对应 `/home/.ishiki/artifacts/<tool>/<name>` |
 | `local` | `local://<相对路径>` | 实例目录（runtime home）内的文件；不可越出实例目录 |
 | `skill` | `skill://<技能名>/<路径>` | workspace 扩展注册；路径缺省为 `SKILL.md`；共用 FileScheme |

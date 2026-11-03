@@ -10,6 +10,11 @@ export type ResourceErrorCode =
   | "resource_not_found"
   | "resource_too_large"
   | "resource_read_failed"
+  | "vision_question_empty"
+  | "vision_model_not_configured"
+  | "vision_model_unsupported"
+  | "vision_media_unsupported"
+  | "vision_request_failed"
   | "image_format_unsupported"
   | "image_decode_failed"
   | "image_operation_invalid";

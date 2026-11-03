@@ -113,7 +113,7 @@ function imageBlock(data = PNG) {
 }
 
 describe("platform capture", () => {
-  it("preserves document order when lazy registrations complete out of order", async () => {
+  it("preserves document order when registrations complete out of order", async () => {
     const register = center.store.registerAsset.bind(center.store);
     const fileRegistered = Promise.withResolvers<void>();
     center.store.registerAsset = async (src, meta) => {
@@ -193,7 +193,7 @@ describe("json branch: the attachments field", () => {
     expect(await center.store.names("artifact", "probe")).toEqual([]);
   });
 
-  it("materializes a lazy asset reference without copying it", async () => {
+  it("materializes an asset reference without copying it", async () => {
     const url = await center.store.registerAsset(`data:image/png;base64,${PNG}`);
     const result = await process({ attachments: [{ type: "file", mediaType: "image/png", url }] });
     expect(result.items).toHaveLength(1);
@@ -394,6 +394,63 @@ describe("request projection", () => {
     expect(() => resolveProfile({ attachment: { maxImageRenders: 2 } }, "test", home)).toThrow("attachment.maxImageRenders was removed");
   });
 
+  it("resolves asset storage and independent image policy defaults", () => {
+    const profile = resolveProfile({ model: "mock:vision", channels: { "test:bot": ["*"] } }, "test", home);
+    expect(profile.settings.attachment).toMatchObject({
+      imageInput: false,
+      messageImageInput: true,
+      maxImageDimension: 1568,
+    });
+    expect(profile.settings.attachment.visionModel).toBeUndefined();
+    expect(profile.settings.assets).toEqual({
+      autoDownloadMaxBytes: 20 * 1024 * 1024,
+      cleanup: {
+        enabled: false,
+        retentionDays: 30,
+        intervalMinutes: 60,
+      },
+    });
+  });
+
+  it("applies the platform message image switch uniformly to direct and non-direct messages", async () => {
+    const url = await center.store.writeArtifact("platform", PNG_BUFFER, { mediaType: "image/png" });
+    for (const isDirect of [true, false]) {
+      const event = createCustomMessage("ishiki.message.created", {
+        timestamp: 1,
+        platform: "test",
+        selfId: "bot",
+        channelId: isDirect ? "private:u" : "channel",
+        messageId: `m-${String(isDirect)}`,
+        isDirect,
+        user: { id: "u" },
+        content: "image",
+      });
+      const attachment = createCustomMessage("ishiki.attachment", {
+        source: "platform",
+        platform: "test",
+        selfId: "bot",
+        channelId: isDirect ? "private:u" : "channel",
+        messageId: `m-${String(isDirect)}`,
+        items: [{ url, mediaType: "image/png" }],
+      });
+      const messages = [event, attachment];
+      for (const [imageInput, messageImageInput, expected] of [
+        [false, false, false],
+        [false, true, false],
+        [true, false, false],
+        [true, true, true],
+      ] as const) {
+        const projection = new AttachmentProjection(center, { imageInput, messageImageInput });
+        projection.restore([], messages);
+        const result = await projection.project(messages, `turn-${String(isDirect)}-${String(imageInput)}-${String(messageImageInput)}`);
+        expect(imageParts(result)).toHaveLength(expected ? 1 : 0);
+        expect(JSON.stringify(result)).toContain(
+          expected ? "platform test:bot" : imageInput ? "automatic platform message image input disabled" : "model image input disabled",
+        );
+      }
+    }
+  });
+
   it("ignores orphaned, denied and failed tools, and respects platform retraction", async () => {
     const orphan = await attachmentFor("probe", "call-1");
     expect(attachmentMessages([orphan])).toEqual([]);
@@ -408,7 +465,7 @@ describe("request projection", () => {
       messageId: "m",
       isDirect: true,
       user: { id: "u" },
-      content: `<img src="asset://${"a".repeat(32)}"/>`,
+      content: `<img src="asset://0190f9f3-3ff8-7000-8000-000000000001"/>`,
     });
     const platformAttachment = createCustomMessage("ishiki.attachment", {
       source: "platform",
@@ -416,7 +473,7 @@ describe("request projection", () => {
       selfId: "bot",
       channelId: "channel",
       messageId: "m",
-      items: [{ url: `asset://${"a".repeat(32)}`, mediaType: "image/*" }],
+      items: [{ url: "asset://0190f9f3-3ff8-7000-8000-000000000001", mediaType: "image/*" }],
     });
     expect(attachmentMessages([event, platformAttachment])).toContain(platformAttachment);
     const deleted = createCustomMessage("ishiki.message.deleted", { timestamp: 2, platform: "test", selfId: "bot", channelId: "channel", messageId: "m" });
@@ -1073,7 +1130,7 @@ describe("real Agent / codemode / provider smoke", () => {
     const probe = await scenario({
       steps: (index, bodies) => {
         if (index > 0) return [{ name: "finish", input: { i: "检查结果" } }];
-        const match = /asset:\/\/[a-f0-9]{32}/.exec(JSON.stringify(bodies[0]));
+        const match = /asset:\/\/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/.exec(JSON.stringify(bodies[0]));
         return [
           {
             name: "codemode",

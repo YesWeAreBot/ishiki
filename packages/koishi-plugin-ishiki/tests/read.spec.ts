@@ -1,8 +1,10 @@
 import * as fs from "node:fs/promises";
+import { createServer } from "node:http";
 import * as os from "node:os";
 import path from "node:path";
 
 import { asSchema } from "@yesimagent/core";
+import { createGateway } from "@yesimagent/gateway";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createReadTool, type ReadTool } from "../src/builtin-tools/read.js";
@@ -10,6 +12,7 @@ import { ResourceCenter } from "../src/resource/center.js";
 import { processOutput } from "../src/resource/output.js";
 import { ResourceStore } from "../src/resource/store.js";
 import { TEXT_BUDGET } from "../src/resource/text.js";
+import { createVisionModel } from "../src/vision.js";
 
 let home: string;
 let center: ResourceCenter;
@@ -146,6 +149,145 @@ describe("structured resource reads", () => {
     await expect(read("unknown://value")).rejects.toMatchObject({ code: "resource_unavailable" });
   });
 });
+
+describe("image recognition reads", () => {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const logger = { warn() {}, error() {}, info() {}, debug() {}, level: 1 } as never;
+
+  it("decodes the question, preserves other query parameters and returns vision text", async () => {
+    const provider = await startVisionProvider(200, "图片里是一只白色的小猫");
+    try {
+      let resourceUrl: string | undefined;
+      center.attach({
+        scheme: "visual",
+        resolve: (url) => {
+          resourceUrl = url;
+          return { type: "file", url, bytes: png, mediaType: "image/png", size: png.byteLength, immutable: true };
+        },
+      });
+      const question = '找出图中的 "猫" & 说明颜色?';
+      const input = `visual://screen?lang=${encodeURIComponent("中&x?")}&question=${encodeURIComponent(question)}`;
+      const tool = createReadTool({ center, visionModel: provider.model });
+      const output = (await tool.execute!({ url: input }, { toolCallId: "vision-1", messages: [] })) as ReadTool.Output;
+      expect(output).toEqual({
+        type: "text",
+        url: `visual://screen?lang=${encodeURIComponent("中&x?")}`,
+        text: "图片里是一只白色的小猫",
+        size: Buffer.byteLength("图片里是一只白色的小猫"),
+        mediaType: "text/plain",
+      });
+      expect(resourceUrl).toBe(`visual://screen?lang=${encodeURIComponent("中&x?")}`);
+      const request = JSON.stringify(provider.bodies[0]);
+      expect(request).toContain("找出图中的");
+      expect(request).toContain("& 说明颜色?");
+      expect(request).toContain(`data:image/png;base64,${png.toString("base64")}`);
+      expect(request).not.toContain("question");
+      const converted = await tool.toModelOutput!({ toolCallId: "vision-1", input: { url: input }, output });
+      const visible = await processOutput(center, "read", converted, output);
+      expect(visible).toMatchObject({ output: { type: "text", value: "图片里是一只白色的小猫" }, items: [] });
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("reports empty questions, missing configuration, non-image resources and provider failure", async () => {
+    const configuredProvider = await startVisionProvider(200, "unused");
+    try {
+      const configured = createReadTool({ center, visionModel: configuredProvider.model });
+      const image = await store.writeArtifact("image", png, { mediaType: "image/png" });
+      await expect(configured.execute!({ url: `${image}?question=%20` }, { toolCallId: "vision-empty", messages: [] })).rejects.toMatchObject({
+        code: "vision_question_empty",
+      });
+      await fs.writeFile(path.join(home, "plain.txt"), "plain");
+      await expect(configured.execute!({ url: `local://plain.txt?question=read` }, { toolCallId: "vision-text", messages: [] })).rejects.toMatchObject({
+        code: "vision_media_unsupported",
+      });
+    } finally {
+      await configuredProvider.close();
+    }
+
+    await expect(read(`${await store.writeArtifact("image", png, { mediaType: "image/png" })}?question=read`)).rejects.toMatchObject({
+      code: "vision_model_not_configured",
+    });
+
+    const failingProvider = await startVisionProvider(400, "unused");
+    try {
+      const failing = createReadTool({ center, visionModel: failingProvider.model });
+      const image = await store.writeArtifact("image", png, { mediaType: "image/png" });
+      await expect(failing.execute!({ url: `${image}?question=read` }, { toolCallId: "vision-fail", messages: [] })).rejects.toMatchObject({
+        code: "vision_request_failed",
+      });
+    } finally {
+      await failingProvider.close();
+    }
+  });
+
+  it("rejects a configured model that does not declare image input", async () => {
+    const provider = await startVisionProvider(200, "unused", ["text"]);
+    try {
+      expect(() => createVisionModel(provider.gateway, "vision:recognizer", { backoffMs: 0, attempts: 1, failoverOn: "unavailable" }, logger)).toThrowError(
+        expect.objectContaining({ code: "vision_model_unsupported" }),
+      );
+    } finally {
+      await provider.close();
+    }
+  });
+});
+
+async function startVisionProvider(status: number, text: string, input = ["text", "image"]) {
+  const bodies: unknown[] = [];
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf-8");
+      if (raw.length > 0) bodies.push(JSON.parse(raw));
+      if (status !== 200) {
+        response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "provider failed" } }));
+        return;
+      }
+      const body = JSON.stringify({
+        id: "response",
+        object: "chat.completion",
+        created: 1,
+        model: "recognizer",
+        choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      response.writeHead(200, { "content-type": "application/json" }).end(body);
+    });
+  });
+  const listening = Promise.withResolvers<void>();
+  server.once("error", listening.reject);
+  server.listen(0, "127.0.0.1", listening.resolve);
+  await listening.promise;
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("expected a TCP address");
+  const gateway = createGateway({
+    config: {
+      providers: {
+        vision: {
+          api: "openai-completions",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          apiKey: "test-only",
+          models: [{ id: "recognizer", type: "language", input }],
+        },
+      },
+      groups: {},
+    },
+  });
+  return {
+    gateway,
+    model: gateway.languageModel("vision:recognizer"),
+    bodies,
+    close: async () => {
+      server.closeAllConnections();
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    },
+  };
+}
 
 describe("attachment lifetime", () => {
   const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");

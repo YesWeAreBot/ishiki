@@ -185,6 +185,10 @@ export class AttachmentProjection {
         released.add(candidate.key);
       };
       if (!this.policy.imageInput) reject("model image input disabled");
+      else if (candidate.data.source === "platform" && this.policy.messageImageInput === false)
+        reject(
+          "automatic platform message image input disabled; call read with the asset URL and a non-empty question to inspect it, or read it normally when image input is needed",
+        );
       else if (!item.mediaType.startsWith("image/")) reject("unsupported media type");
       else {
         const duplicate = inlined.get(item.url);

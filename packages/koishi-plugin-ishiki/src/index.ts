@@ -27,6 +27,7 @@ import type { RuntimeMeta } from "./management/types.js";
 import { directoryName, loadProfiles, matchesChannel, matchesPattern, type ChannelFilter, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
+import { ResourceStore } from "./resource/store.js";
 import { AgentRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
 import {
@@ -39,6 +40,7 @@ import {
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import type { IshikiEvent } from "./types/messages.js";
+import { createVisionModel } from "./vision.js";
 import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
 
 // ESM 由模块 URL 定位，CJS 由 __dirname 定位；两者都从当前目录上跳到包根。
@@ -238,6 +240,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
         const baseModel = failover
           ? new FailoverModel(this.gateway, settings.model, settings.failover, this.logger)
           : this.gateway.languageModel(settings.model);
+        const visionModel = createVisionModel(this.gateway, settings.attachment.visionModel, settings.failover, this.logger);
         const contextProvider = ContextEngine.GetService(fiber, settings.context.engine);
         const wakeupProvider = WakeupEngine.GetService(fiber, settings.wakeup.engine);
         const instructionFiles = loadInstructionFiles(settings.instructions, profile.root);
@@ -263,7 +266,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
         const spawn = (key: string, domain: InstanceDomain): AgentRuntime => {
           if (!mounted) throw new Error(`profile "${profile.id}" is disposed`);
           const home = path.join(profile.root, "runtimes", directoryName(key.slice(profile.id.length + 1)));
-          const resources = new ResourceCenter(key, home);
+          const resources = new ResourceCenter(key, home, new ResourceStore(home, settings.assets));
           const host: ExtensionHost = {
             runtimeId: key,
             fiber,
@@ -281,7 +284,7 @@ QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)`;
             model,
             instructions,
             tools: {
-              read: createReadTool({ center: resources, lifetime: readLifetime }),
+              read: createReadTool({ center: resources, lifetime: readLifetime, visionModel }),
               [IMAGE_TOOL]: createImage({
                 center: resources,
                 maxDimension: settings.attachment.maxImageDimension ?? 1_568,

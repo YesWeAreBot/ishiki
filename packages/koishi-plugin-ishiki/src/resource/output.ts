@@ -6,6 +6,7 @@ import type { AttachmentItem, ImageLifetime } from "../types/messages.js";
 import type { ResourceCenter, ResourcePayload } from "./center.js";
 import { ResourceError } from "./errors.js";
 import { parseImageLifetime } from "./lifetime.js";
+import { isAssetId } from "./store.js";
 import { renderTextPage, textFits, type FileTextSource } from "./text.js";
 
 /** One part of a `content` tool result. */
@@ -36,7 +37,7 @@ export interface ProcessedOutput {
 
 /** Store URLs whose sidecar can prove that held bytes are the stored bytes. */
 const REUSABLE_SOURCE = /^(asset|artifact):\/\//;
-const ASSET_URL = /^asset:\/\/([a-f0-9]{32})\/?$/;
+const ASSET_URL = /^asset:\/\/([^/?#]+)\/?$/;
 const ARTIFACT_URL = /^artifact:\/\/([^/?#]+)\/([^/?#]+)$/;
 
 /**
@@ -339,7 +340,7 @@ async function storedMeta(center: ResourceCenter, url: string): Promise<{ conten
   const base = url.split(/[?#]/, 1)[0]!;
   try {
     const asset = ASSET_URL.exec(base);
-    if (asset !== null) return await center.store.getMeta("asset", "", asset[1]!);
+    if (asset !== null && isAssetId(asset[1]!)) return await center.store.getMeta("asset", "", asset[1]!);
     const artifact = ARTIFACT_URL.exec(base);
     if (artifact !== null) return await center.store.getMeta("artifact", artifact[1]!, artifact[2]!);
   } catch {

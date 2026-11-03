@@ -3,11 +3,13 @@ import { createServer } from "node:http";
 import * as os from "node:os";
 import path from "node:path";
 
+import { validate as validateUuid, version as uuidVersion, v7 as uuidv7 } from "uuid";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ResourceCenter, ResourceError, RESERVED_SCHEMES } from "../src/resource/center.js";
 import { ResourceStore } from "../src/resource/store.js";
 
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 let home: string;
 beforeEach(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "ishiki-res-"));
@@ -24,15 +26,23 @@ function assemble() {
 describe("resource registration and isolation", () => {
   it("registers an asset idempotently and materializes its actual bytes", async () => {
     const { store, center } = assemble();
-    const src = "data:image/png;base64,iVBORw0KGgo=";
+    const src = `data:image/png;base64,${PNG.toString("base64")}`;
     const url = await store.registerAsset(src, { mediaType: "image/*" });
     expect(await store.registerAsset(src)).toBe(url);
+    const id = url.slice("asset://".length);
+    expect(validateUuid(id)).toBe(true);
+    expect(uuidVersion(id)).toBe(7);
     const resource = await center.resolve(url);
     if (resource.type !== "file") throw new Error("expected media");
-    expect([...resource.bytes]).toEqual([...Buffer.from("iVBORw0KGgo=", "base64")]);
+    expect([...resource.bytes]).toEqual([...PNG]);
     expect(resource.mediaType).toBe("image/png");
     expect(resource.immutable).toBe(true);
-    expect((await store.getMeta("asset", "", url.slice(8)))?.byteLength).toBe(8);
+    expect(await store.getMeta("asset", "", id)).toMatchObject({
+      id,
+      name: `${id}.png`,
+      mediaType: "image/png",
+      byteLength: PNG.byteLength,
+    });
   });
 
   it("reads metadata without downloading and keeps platform source attributes", async () => {
@@ -44,8 +54,22 @@ describe("resource registration and isolation", () => {
     const metadata = JSON.parse(view.text);
     expect(metadata).toMatchObject({ filename: "screen.png", sourceInfo, fetched: false });
     expect(metadata.src).toBeUndefined();
-    expect((await store.getMeta("asset", "", url.slice(8)))?.fetchedAt).toBeUndefined();
-    await expect(fs.access(path.join(home, "resources", "assets", url.slice(8)))).rejects.toMatchObject({ code: "ENOENT" });
+    const id = url.slice("asset://".length);
+    expect((await store.getMeta("asset", "", id))?.fetchedAt).toBeUndefined();
+    await expect(fs.access(path.join(home, "resources", "assets", `${id}.metadata.json`))).resolves.toBeUndefined();
+  });
+
+  it("reads materialized assets from disk after a runtime restart", async () => {
+    const { store } = assemble();
+    const id = uuidv7();
+    const url = await store.putInHand("asset", "", id, PNG, { mediaType: "image/*" });
+    const reloadedStore = new ResourceStore(home);
+    const reloadedCenter = new ResourceCenter("rt2", home, reloadedStore);
+    expect(await reloadedCenter.resolve(url)).toMatchObject({
+      type: "file",
+      mediaType: "image/png",
+      bytes: PNG,
+    });
   });
 
   it.each(["report.pdf", "", "https://[invalid", "ftp://files.example/report.pdf?rkey=private-file-token"])(
@@ -135,7 +159,7 @@ describe("resource registration and isolation", () => {
     const { store, center } = assemble();
     const secondStore = new ResourceStore(path.join(home, "second"));
     const second = new ResourceCenter("rt2", secondStore.home, secondStore);
-    const id = ResourceStore.deriveId("https://example.com/image.png");
+    const id = uuidv7();
     const firstBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1]);
     const secondBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 2]);
     const url = await store.putInHand("asset", "", id, firstBytes, { mediaType: "image/png" });
@@ -149,6 +173,251 @@ describe("resource registration and isolation", () => {
     await expect(second.resolve("private://value")).rejects.toMatchObject({ code: "resource_unavailable" });
   });
 });
+
+describe("automatic download policy", () => {
+  it("uses HEAD before GET and permits a resource exactly at the configured limit", async () => {
+    const calls: string[] = [];
+    const server = createServer((request, response) => {
+      calls.push(request.method ?? "");
+      if (request.method === "HEAD") {
+        response.writeHead(200, { "content-type": "image/png", "content-length": PNG.byteLength });
+        response.end();
+      } else {
+        response.writeHead(200, { "content-type": "image/png", "content-length": PNG.byteLength });
+        response.end(PNG);
+      }
+    });
+    const listening = Promise.withResolvers<void>();
+    server.once("error", listening.reject);
+    server.listen(0, "127.0.0.1", listening.resolve);
+    await listening.promise;
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a TCP address");
+      const store = new ResourceStore(home, {
+        autoDownloadMaxBytes: PNG.byteLength,
+        cleanup: { enabled: false, retentionDays: 30, intervalMinutes: 60 },
+      });
+      const center = new ResourceCenter("rt1", home, store);
+      const url = await store.registerAsset(`http://127.0.0.1:${address.port}/image.png`, { mediaType: "image/*" });
+      const id = url.slice("asset://".length);
+      expect(await store.autoDownload(id, "image/*")).toEqual({ status: "downloaded" });
+      expect(calls).toEqual(["HEAD", "GET"]);
+      expect(await store.getMeta("asset", "", id)).toMatchObject({
+        id,
+        name: `${id}.png`,
+        mediaType: "image/png",
+        byteLength: PNG.byteLength,
+        autoDownload: { status: "downloaded" },
+      });
+      expect(Buffer.from(await fs.readFile(path.join(home, "resources", "assets", `${id}.png`))).equals(PNG)).toBe(true);
+      expect(await center.resolve(url)).toMatchObject({ type: "file", mediaType: "image/png" });
+    } finally {
+      server.closeAllConnections();
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    }
+  });
+
+  it("skips automatic download when HEAD is unsupported or type or length is unavailable", async () => {
+    const gets: string[] = [];
+    const server = createServer((request, response) => {
+      if (request.method !== "HEAD") gets.push(request.url ?? "");
+      if (request.url === "/head-unsupported") response.writeHead(405).end();
+      else if (request.url === "/missing-type") response.writeHead(200, { "content-length": PNG.byteLength }).end();
+      else if (request.url === "/missing-length") response.writeHead(200, { "content-type": "image/png" }).end();
+      else response.writeHead(200, { "content-type": "image/png", "content-length": PNG.byteLength }).end();
+    });
+    const listening = Promise.withResolvers<void>();
+    server.once("error", listening.reject);
+    server.listen(0, "127.0.0.1", listening.resolve);
+    await listening.promise;
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a TCP address");
+      const store = new ResourceStore(home);
+      const origin = `http://127.0.0.1:${address.port}`;
+      for (const route of ["/head-unsupported", "/missing-type", "/missing-length"]) {
+        const url = await store.registerAsset(`${origin}${route}`, { mediaType: "image/*" });
+        const id = url.slice("asset://".length);
+        const decision = await store.autoDownload(id, "image/*");
+        expect(decision.status).toBe("skipped");
+        expect(decision.reason).toBeTruthy();
+        expect((await store.getMeta("asset", "", id))?.fetchedAt).toBeUndefined();
+      }
+      expect(gets).toEqual([]);
+    } finally {
+      server.closeAllConnections();
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    }
+  });
+
+  it("checks the downloaded byte count instead of trusting HEAD Content-Length", async () => {
+    const bytes = Buffer.alloc(8, 1);
+    const server = createServer((request, response) => {
+      if (request.method === "HEAD") {
+        response.writeHead(200, { "content-type": "application/octet-stream", "content-length": 4 });
+        response.end();
+      } else {
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        response.end(bytes);
+      }
+    });
+    const listening = Promise.withResolvers<void>();
+    server.once("error", listening.reject);
+    server.listen(0, "127.0.0.1", listening.resolve);
+    await listening.promise;
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a TCP address");
+      const store = new ResourceStore(home, {
+        autoDownloadMaxBytes: 4,
+        cleanup: { enabled: false, retentionDays: 30, intervalMinutes: 60 },
+      });
+      const url = await store.registerAsset(`http://127.0.0.1:${address.port}/actual-size.bin`);
+      const id = url.slice("asset://".length);
+      const decision = await store.autoDownload(id);
+      expect(decision).toMatchObject({ status: "skipped", reason: expect.stringContaining("exceeds 4 bytes") });
+      expect((await store.getMeta("asset", "", id))?.fetchedAt).toBeUndefined();
+    } finally {
+      server.closeAllConnections();
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    }
+  });
+
+  it("keeps explicit read independent from the smaller automatic download ceiling", async () => {
+    const server = createServer((request, response) => {
+      if (request.method === "HEAD") {
+        response.writeHead(200, { "content-type": "image/png", "content-length": PNG.byteLength });
+        response.end();
+      } else {
+        response.writeHead(200, { "content-type": "image/png", "content-length": PNG.byteLength });
+        response.end(PNG);
+      }
+    });
+    const listening = Promise.withResolvers<void>();
+    server.once("error", listening.reject);
+    server.listen(0, "127.0.0.1", listening.resolve);
+    await listening.promise;
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a TCP address");
+      const store = new ResourceStore(home, {
+        autoDownloadMaxBytes: PNG.byteLength - 1,
+        cleanup: { enabled: false, retentionDays: 30, intervalMinutes: 60 },
+      });
+      const center = new ResourceCenter("rt1", home, store);
+      const url = await store.registerAsset(`http://127.0.0.1:${address.port}/image.png`, { mediaType: "image/*" });
+      const id = url.slice("asset://".length);
+      expect((await store.autoDownload(id, "image/*")).status).toBe("skipped");
+      expect(await center.resolve(url)).toMatchObject({ type: "file", mediaType: "image/png", size: PNG.byteLength });
+      expect((await store.getMeta("asset", "", id))?.fetchedAt).toBeDefined();
+    } finally {
+      server.closeAllConnections();
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    }
+  });
+});
+
+describe("asset cleanup", () => {
+  it("deletes expired asset and metadata pairs while leaving artifacts alone", async () => {
+    const store = new ResourceStore(home, {
+      autoDownloadMaxBytes: 20 * 1024 * 1024,
+      cleanup: { enabled: false, retentionDays: 1, intervalMinutes: 60 },
+    });
+    const id = uuidv7();
+    const url = await store.putInHand("asset", "", id, PNG, { mediaType: "image/*" });
+    const artifact = await store.writeArtifact("keep", Buffer.from("keep"), { mediaType: "text/plain" });
+    const meta = await store.getMeta("asset", "", id);
+    if (meta === undefined) throw new Error("expected asset metadata");
+    await fs.writeFile(
+      path.join(home, "resources", "assets", `${id}.metadata.json`),
+      JSON.stringify({ ...meta, createdAt: Date.now() - 2 * 24 * 60 * 60 * 1000 }),
+    );
+    expect(await store.cleanupExpired()).toBe(1);
+    await expect(fs.access(path.join(home, "resources", "assets", meta.name))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(home, "resources", "assets", `${id}.metadata.json`))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await store.getMeta("asset", "", id)).toBeUndefined();
+    expect(url).toMatch(/^asset:\/\//);
+    expect(await centerResolveArtifact(store, artifact)).toBe("keep");
+  });
+
+  it("skips an asset with an active read and deletes it on the next pass", async () => {
+    const responded = Promise.withResolvers<void>();
+    const requestStarted = Promise.withResolvers<void>();
+    const server = createServer((request, response) => {
+      requestStarted.resolve();
+      void responded.promise.then(() => {
+        response.writeHead(200, { "content-type": "image/png", "content-length": PNG.byteLength });
+        response.end(PNG);
+      });
+    });
+    const listening = Promise.withResolvers<void>();
+    server.once("error", listening.reject);
+    server.listen(0, "127.0.0.1", listening.resolve);
+    await listening.promise;
+    try {
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a TCP address");
+      const store = new ResourceStore(home, {
+        autoDownloadMaxBytes: 20 * 1024 * 1024,
+        cleanup: { enabled: false, retentionDays: 1, intervalMinutes: 60 },
+      });
+      const center = new ResourceCenter("rt1", home, store);
+      const url = await store.registerAsset(`http://127.0.0.1:${address.port}/slow.png`, { mediaType: "image/*" });
+      const id = url.slice("asset://".length);
+      const reading = center.resolve(url);
+      await requestStarted.promise;
+      const meta = await store.getMeta("asset", "", id);
+      if (meta === undefined) throw new Error("expected asset metadata");
+      await fs.writeFile(
+        path.join(home, "resources", "assets", `${id}.metadata.json`),
+        JSON.stringify({ ...meta, createdAt: Date.now() - 2 * 24 * 60 * 60 * 1000 }),
+      );
+      expect(await store.cleanupExpired()).toBe(0);
+      responded.resolve();
+      expect(await reading).toMatchObject({ type: "file", mediaType: "image/png" });
+      expect(await store.cleanupExpired()).toBe(1);
+      expect(await store.getMeta("asset", "", id)).toBeUndefined();
+    } finally {
+      responded.resolve();
+      server.closeAllConnections();
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    }
+  });
+
+  it("registers one cleanup timer and clears it on stop", () => {
+    const store = new ResourceStore(home, {
+      autoDownloadMaxBytes: 20 * 1024 * 1024,
+      cleanup: { enabled: true, retentionDays: 0, intervalMinutes: 1 },
+    });
+    const timer = (store as unknown as { cleanupTimer?: unknown }).cleanupTimer;
+    expect(timer).toBeUndefined();
+    store.startCleanup(() => undefined);
+    const firstTimer = (store as unknown as { cleanupTimer?: unknown }).cleanupTimer;
+    expect(firstTimer).toBeDefined();
+    store.startCleanup(() => undefined);
+    expect((store as unknown as { cleanupTimer?: unknown }).cleanupTimer).toBe(firstTimer);
+    store.stopCleanup();
+    expect((store as unknown as { cleanupTimer?: unknown }).cleanupTimer).toBeUndefined();
+  });
+});
+
+async function centerResolveArtifact(store: ResourceStore, url: string): Promise<string> {
+  const center = new ResourceCenter("artifact-check", store.home, store);
+  const payload = await center.resolve(url);
+  if (payload.type !== "text") throw new Error("expected text artifact");
+  return payload.text;
+}
 
 describe("stored snapshots and file schemes", () => {
   it("round-trips text and binary artifacts with their media metadata", async () => {
@@ -168,7 +437,7 @@ describe("stored snapshots and file schemes", () => {
       await expect(store.putInHand("artifact", namespace, "file.bin", new Uint8Array(), {})).rejects.toMatchObject({ code: "invalid_resource_uri" });
       await expect(store.names("artifact", namespace)).rejects.toMatchObject({ code: "invalid_resource_uri" });
     }
-    await expect(store.putInHand("asset", "../other", "a".repeat(32), new Uint8Array(), {})).rejects.toMatchObject({ code: "invalid_resource_uri" });
+    await expect(store.putInHand("asset", "../other", uuidv7(), new Uint8Array(), {})).rejects.toMatchObject({ code: "invalid_resource_uri" });
     await expect(store.getMeta("artifact", "tool", "../other")).rejects.toMatchObject({ code: "invalid_resource_uri" });
   });
 
@@ -195,7 +464,7 @@ describe("stored snapshots and file schemes", () => {
     }
   });
 
-  it("reports unsupported views without fetching lazy media", async () => {
+  it("reports unsupported views without fetching media bytes", async () => {
     const { store, center } = assemble();
     const url = await store.registerAsset("https://example.com/not-fetched.png", { mediaType: "image/png" });
     await expect(center.resolve(`${url}?view=thumb`)).rejects.toMatchObject({ code: "unsupported_view" });

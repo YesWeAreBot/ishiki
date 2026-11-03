@@ -390,7 +390,7 @@ codemode 的 `store` / `load` 持久化：每次脚本调用写过 store 就追�
 真实写入的一行：
 
 ```json
-{"id":"567813b8-bf0e-4837-920c-00e3a9d3d86e","type":"message","data":{"id":"c02facbb-6779-45b5-8fc1-d6bc743874ff","timestamp":1793531049892,"role":"custom","type":"ishiki.message.created","data":{"platform":"test","selfId":"bot","channelId":"channel","messageId":"m1","timestamp":1793531049892,"content":"<img src=\"asset://1035bd26f42ad76b7b38eb94cfe376b1\"/>","isDirect":true,"user":{"id":"u1","name":"阿岚"}}},"timestamp":1793531049900}
+{"id":"567813b8-bf0e-4837-920c-00e3a9d3d86e","type":"message","data":{"id":"c02facbb-6779-45b5-8fc1-d6bc743874ff","timestamp":1793531049892,"role":"custom","type":"ishiki.message.created","data":{"platform":"test","selfId":"bot","channelId":"channel","messageId":"m1","timestamp":1793531049892,"content":"<img src=\"asset://0190f9f3-3ff8-7000-8000-000000000001\"/>","isDirect":true,"user":{"id":"u1","name":"阿岚"}}},"timestamp":1793531049900}
 ```
 
 写入 `session-handler.ts:22`，由 `runtime.deliver` 以 `trigger: false` 送进流（`runtime.ts:445-458`）：输入先入账，唤醒与开轮另行判定。因此这类条目通常不带 `turnId`，只有在该轮进行中被合入的消息才带。

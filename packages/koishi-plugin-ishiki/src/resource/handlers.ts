@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { ResourceError } from "./errors.js";
 import { FileScheme, type FileEntry, type FileUrl } from "./file.js";
-import type { ResourceStore } from "./store.js";
+import { isAssetId, type ResourceStore } from "./store.js";
 
 export class AssetHandler extends FileScheme {
   readonly scheme = "asset";
@@ -14,17 +14,25 @@ export class AssetHandler extends FileScheme {
   }
 
   protected async open(url: FileUrl): Promise<FileEntry> {
-    if (!/^[a-f0-9]{32}$/.test(url.authority) || url.segments.length !== 0)
-      throw new ResourceError("invalid_resource_uri", `asset URL requires a 32-hex id: ${url.href}`);
+    if (!isAssetId(url.authority) || url.segments.length !== 0) throw new ResourceError("invalid_resource_uri", `asset URL requires a UUID v7 id: ${url.href}`);
     const meta = await this.store.getMeta("asset", "", url.authority);
     if (meta === undefined) throw new ResourceError("resource_not_found", `asset not found: ${url.href}`);
     const filename = meta.filename;
     return {
-      path: path.join(this.store.home, "resources", "assets", url.authority),
+      path: path.join(this.store.home, "resources", "assets", meta.name),
       ...(url.view === undefined ? { bytes: await this.store.readBytes("asset", "", url.authority) } : {}),
       mediaType: meta.mediaType,
       filename,
-      metadata: { mediaType: meta.mediaType, byteLength: meta.byteLength, filename, fetched: meta.fetchedAt !== undefined, sourceInfo: meta.sourceInfo },
+      metadata: {
+        id: meta.id,
+        mediaType: meta.mediaType,
+        byteLength: meta.byteLength,
+        filename,
+        createdAt: meta.createdAt,
+        fetched: meta.fetchedAt !== undefined,
+        autoDownload: meta.autoDownload,
+        sourceInfo: meta.sourceInfo,
+      },
     };
   }
 }

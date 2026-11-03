@@ -3,7 +3,7 @@ title: 配置图片与附件
 description: 让 bot 看得见图、也发得出图
 ---
 
-Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能看见）由 `attachment.imageInput` 与模型声明共同决定；**出站**（bot 怎么把图发出去）由 `send_message` 的元素模式完成。
+Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能看见）由 `attachment` 段的开关、模型声明与独立视觉模型共同决定；**出站**（bot 怎么把图发出去）由 `send_message` 的元素模式完成。
 
 配置位置：profile 的 `attachment` 段。
 
@@ -12,17 +12,29 @@ Ishiki 对图片的处理分两侧：**入站**（别人发的图 bot 能不能�
 ```yaml
 attachment:
   imageInput: true           # 本 profile 的能力上限开关
+  messageImageInput: false    # 平台消息图片是否自动进入主模型上下文
+  visionModel: vision-main    # read(...?question=...) 使用的模型或模型组
   recentImageCount: 3        # recent 生命周期的目标保留数，默认 3
   imagePruneBatchSize: 2     # 每次成批移除最旧的已查看图片数，默认 2
   maxImageBytes: 5242880     # 单图上限，默认 5 MiB
   maxTotalImageBytes: 10485760   # 整次请求所有图累计，默认 10 MiB
   maxImageCount: 4           # 单次请求图片张数上限，默认 4
-  maxImageDimension: 8000    # 单边像素上限，默认 8000
+  maxImageDimension: 1568    # 单边像素上限，默认 1568
+assets:
+  autoDownloadMaxBytes: 20971520 # 入站自动下载上限，默认 20 MiB；0 关闭
+  cleanup:
+    enabled: true            # 定期清理过期 asset，默认关闭
+    retentionDays: 30        # 创建后保留天数，默认 30
+    intervalMinutes: 60      # 清理间隔，默认 60
 ```
 
 <Callout type="error" title="imageInput 的硬前提">
 profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml` 里声明 `input: [text, image]`。只要有任何一个候选没声明，profile 装配即失败并报 `profile imageInput requires declared image input on every candidate of …`。这是故意的，故障转移不能把请求落到看不见图的模型上。
 </Callout>
+
+`attachment.imageInput` 控制主模型的总图片输入能力。`messageImageInput` 默认开启，设为 `false` 后，平台消息里的图片不会自动进入主模型上下文；这个开关覆盖所有平台消息，私聊和群聊使用同一规则。工具返回的媒体不受这个开关影响。
+
+`attachment.visionModel` 接受模型引用或模型组。配置后，`read({ url: "asset://<UUID v7>?question=..." })` 会单独调用这个视觉模型，返回识别文本。该调用不要求主模型支持图片输入，也不会把原图放入主模型上下文。每个候选模型都应在 `models.yaml` 中声明 `input: [text, image]`；任一组内候选不支持时，profile 装配报 `vision_model_unsupported`。
 
 ### 图片生命周期
 
@@ -34,7 +46,7 @@ profile 的模型（或 failover 组内每个候选）都必须在 `models.yaml`
 | `recent` | 保留最近查看过的图片，供后续轮次回看 | 活动 `recent` 图总数超出 `recentImageCount` 时，按 `imagePruneBatchSize` 成批移除最旧的**已查看**图片；未查看的图片不参与移除。被硬预算挤出的已查看图片直接释放；来源记录被移除时同样释放，包括交付状态已经持久化的图片 |
 | `retain` | 只要来源记录还在活动上下文里，每轮都可嵌入 | 上下文引擎移除来源记录（`prepareEntries`）时释放，即使此前已持久化过交付状态；本次请求预算不足时暂不携带，不算退出 |
 
-所有入口默认 `once`：平台消息里的图片、直接 MCP 返回的媒体、`read` 返回的媒体都一样。`imageInput: false` 时不会嵌入任何图片，生命周期一律按 `once` 处理，附件消息只说明未提供的原因。模型可用的覆盖路径只有两条：
+所有入口默认 `once`：平台消息里的图片、直接 MCP 返回的媒体、`read` 返回的媒体都一样。`imageInput: false` 时不会嵌入任何图片，生命周期一律按 `once` 处理，附件消息只说明未提供的原因。即使主模型的图片输入关闭，配置了 `visionModel` 后仍可用 `question` 独立识图。模型可用的覆盖路径只有两条：
 
 - codemode 最终返回值的 `attachments[]` 中，媒体项可以直接带 `lifetime`。沙箱内部的中间结果不产生附件，只有最终 return 计算在内。
 - `imageInput` 开启时，直接调用的 `read` 接受 `{ url, lifetime }`。codemode 内的 `read` 不提供这个参数；在沙箱里请把 `lifetime` 写进最终 `attachments[]` 的对应项。
@@ -59,8 +71,18 @@ return {
 直接调用 `read` 时，`lifetime` 是可选项；省略即 `once`：
 
 ```js
-read({ url: "asset://<32位十六进制>", lifetime: "recent" })
+read({ url: "asset://0190f9f3-3ff8-7000-8000-000000000001", lifetime: "recent" })
 ```
+
+识图与回看可以写成：
+
+```js
+read({
+  url: "asset://0190f9f3-3ff8-7000-8000-000000000001?question=图里有哪些文字？",
+})
+```
+
+`question` 只由 `read` 解释，URL 中其他查询参数会保留给资源处理器。问题为空、视觉模型未配置、目标资源不是图片或模型请求失败时，工具返回明确错误，不会退回主模型的图片输入路径。
 
 `recent` 的移除在每次请求投影前执行，并按批进行。例如 `recentImageCount: 3`、`imagePruneBatchSize: 2`，出现第 5 张活动图片时才触发移除，从最旧的已查看图片开始移除至多 2 张；已查看不足 2 张时只移除现有的，第 4 张不会触发移除。批处理让两次移除之间的消息前缀保持不变，provider 的前缀缓存不会被每来一张新图片打散。图片不自动缩放；`maxImageCount`、`maxImageBytes`、`maxTotalImageBytes`、`maxImageDimension` 是每请求预算，容量不足的图片本次请求不嵌入、不消耗展示机会，按到达顺序等待后续请求。硬预算下未被选中的已查看 `recent` 图片会释放，不再参与后续选择；未查看的图片只等待容量，`retain` 本次暂不携带后仍可再试。
 
@@ -109,7 +131,7 @@ read({ url: "asset://<32位十六进制>", lifetime: "recent" })
 
 ## 附件在历史里如何呈现
 
-- 入站图片在到达时注册为 `asset://<id>` 资源，随后以一条「附件消息」进入对话；原消息被撤回时，附件消息自动从历史投影中消失。
+- 入站图片在到达时注册为 `asset://<UUID v7>` 资源，随后以一条「附件消息」进入对话；原消息被撤回时，附件消息自动从历史投影中消失。
 - 工具返回的媒体统一归档为 `artifact://<tool>/<name>`，模型看到的是占位标记 `[attachment: artifact://…; image/png; …]`，真实字节在资源里。
 - 附件消息只在还有内容需要交付时出现：需要嵌入的字节，或者本次请求无法提供的原因。交付状态由生命周期决定：`once` 成功交付后退出请求，`recent` 保留最近几张，`retain` 跟随来源记录存活。源消息体与工具结果里的 URL 始终保留。
 - 未发生生命周期移除或预算选择变化时，投影出的消息保持原有顺序、ID 与时间戳不变，方便 provider 复用前缀缓存；只有 `immutable` 资源（如 artifact 快照）保证字节不变，动态来源每次读取可能不同。
@@ -120,7 +142,9 @@ read({ url: "asset://<32位十六进制>", lifetime: "recent" })
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 装配报 `requires declared image input` | 模型/failover 候选未声明 `input: [text, image]` | 补全 models.yaml 的模型声明 |
+| 装配报 `vision_model_unsupported` | `attachment.visionModel` 的模型或组内候选不支持图片输入 | 换用声明了 `input: [text, image]` 的视觉模型 |
 | 装配报 `maxImageRenders was removed` | profile 还在用旧字段 | 删除 `maxImageRenders`，按需设置 `recentImageCount` / `imagePruneBatchSize` |
 | 图发出去是空的或没发出去 | `src` 不在白名单协议、资源已失效 | 用工具结果里的原样 URL |
 | bot 说「看不见图」 | `imageInput` 关着；或配额把图挡了 | 开启开关；调大配额；看附件消息里的原因 |
+| `read` 带 `question` 报 `vision_model_not_configured` | profile 没有配置独立视觉模型 | 设置 `attachment.visionModel` |
 | 历史里的图片不见了 | `once` 已成功交付，或 `recent` 已被成批移除 | 正常行为；需要时让 bot 重新 read 对应 URL，或改用 `retain` 生命周期 |
