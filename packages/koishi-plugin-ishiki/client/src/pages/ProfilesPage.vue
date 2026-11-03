@@ -30,6 +30,8 @@ const detailLoading = ref(false);
 const detailError = ref("");
 const busy = ref<BusyAction | null>(null);
 const wizardOpen = ref(false);
+/** 新建向导与既有配置的重新配置共用一个向导组件，目标为空表示新建。 */
+const wizardProfile = ref<ProfileView | undefined>(undefined);
 
 const action = reactive<{
   kind: "stop" | "delete" | null;
@@ -265,6 +267,11 @@ function onSaved(view: ProfileView): void {
   editing.value = false;
 }
 
+function openWizard(profile?: ProfileView): void {
+  wizardProfile.value = profile;
+  wizardOpen.value = true;
+}
+
 function onWizardCreated(view: ProfileView): void {
   wizardOpen.value = false;
   void router.push(`/ishiki/profiles/${encodeURIComponent(view.id)}`);
@@ -280,7 +287,7 @@ function clearFilters(): void {
   <PageShell>
     <PageHeader title="人格配置" desc="管理人格、频道认领、引擎与扩展配置，并应用或停止配置。保存后的配置需要应用才会生效。">
       <template #actions>
-        <button type="button" class="btn btn-primary" @click="wizardOpen = true"><Icon name="plus" :size="15" /> 新建人格配置</button>
+        <button type="button" class="btn btn-primary" @click="openWizard()"><Icon name="plus" :size="15" /> 新建人格配置</button>
         <button v-if="!editing && profileId !== ''" type="button" class="btn" :disabled="detailLoading" @click="load(profileId)">
           <span v-if="detailLoading" class="spinner" aria-hidden="true"></span>
           <Icon v-else name="refresh" :size="15" /> 刷新详情
@@ -401,7 +408,7 @@ function clearFilters(): void {
           :profile="detail"
           :busy="busy"
           @edit="editing = true"
-          @wizard="wizardOpen = true"
+          @wizard="openWizard(detail ?? undefined)"
           @apply="run('apply')"
           @reload="run('reload')"
           @stop="ask('stop', detail)"
@@ -410,7 +417,7 @@ function clearFilters(): void {
       </div>
     </div>
 
-    <ProfileWizard :open="wizardOpen" :profile="detail ?? undefined" @close="wizardOpen = false" @created="onWizardCreated" />
+    <ProfileWizard :open="wizardOpen" :profile="wizardProfile" @close="wizardOpen = false" @created="onWizardCreated" />
 
     <BaseModal
       :open="action.kind !== null"

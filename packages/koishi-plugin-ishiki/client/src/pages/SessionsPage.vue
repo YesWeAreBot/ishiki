@@ -90,10 +90,11 @@ function selectSession(session: SessionSummary): void {
 
 @media (max-width: 640px) {
   .sessions-page {
-    height: auto;
-    min-height: 0;
     padding-bottom: 10px;
-    overflow: visible;
+  }
+
+  .sessions-page :deep(.page-desc) {
+    display: none;
   }
 
   .sessions-page .page-header {
@@ -102,7 +103,7 @@ function selectSession(session: SessionSummary): void {
   }
 
   .sessions-layout {
-    grid-template-rows: auto auto;
+    grid-template-rows: minmax(150px, 22vh) minmax(0, 1fr);
     gap: 10px;
   }
 }

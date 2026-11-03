@@ -385,6 +385,15 @@ function shortSessionId(id: string): string {
 }
 
 @media (max-width: 720px) {
+  .session-list-panel .panel-head {
+    flex-wrap: nowrap;
+  }
+
+  .session-list-panel .panel-actions {
+    width: auto;
+    margin-left: auto;
+  }
+
   .list-search .stack-sm {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(104px, 0.58fr) auto auto;

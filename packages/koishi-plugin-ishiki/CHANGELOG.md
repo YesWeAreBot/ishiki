@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Fixed jev re-waking the same pending messages on every turn end after a wake turn ended without a matching reply: the batch is consumed when it is handed to a turn, and a reply to any message in the batch clears it
+- Fixed the console session log on phones: the session list and message viewport scroll independently again, and jump-to-latest reliably returns to the newest entry
+- Fixed creating a new persona profile opening the wizard with the selected profile's identifier and a locked id field
 
 ## [0.0.6] - 2026-11-03
 

@@ -123,14 +123,14 @@ function nearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= BOTTOM_THRESHOLD;
 }
 
-function scrollToLatest(smooth = true): void {
+function scrollToLatest(): void {
   const element = viewport.value;
   if (element === null) return;
   stickToBottom.value = true;
   atBottom.value = true;
   newCount.value = 0;
-  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  element.scrollTo({ top: element.scrollHeight, behavior: smooth && !reduceMotion ? "smooth" : "auto" });
+  // 虚拟列表在滚动过程中会更新行高并回写锚点，平滑滚动会被锚定打断，这里直接落到末尾。
+  element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
   scrollTop.value = element.scrollTop;
 }
 
@@ -182,7 +182,7 @@ function scheduleMeasure(): void {
     }
     if (!changed) return;
     void nextTick().then(() => {
-      if (stickToBottom.value) scrollToLatest(false);
+      if (stickToBottom.value) scrollToLatest();
       else void restoreAnchor(anchor);
     });
   });
@@ -200,7 +200,7 @@ onMounted(() => {
       if (entry.target === viewportElement) {
         const anchor = stickToBottom.value ? undefined : captureAnchor();
         viewportHeight.value = viewportElement.clientHeight;
-        if (stickToBottom.value) void nextTick().then(() => scrollToLatest(false));
+        if (stickToBottom.value) void nextTick().then(() => scrollToLatest());
         else void restoreAnchor(anchor);
       } else {
         scheduleMeasure();
@@ -210,7 +210,7 @@ onMounted(() => {
   resizeObserver.observe(viewportElement);
   resizeObserver.observe(contentElement);
   void nextTick().then(() => {
-    scrollToLatest(false);
+    scrollToLatest();
     scheduleMeasure();
   });
 });
@@ -237,7 +237,7 @@ watch(
     if (shouldStick) {
       stickToBottom.value = true;
       atBottom.value = true;
-      scrollToLatest(false);
+      scrollToLatest();
     } else {
       stickToBottom.value = false;
       await restoreAnchor(anchor);
