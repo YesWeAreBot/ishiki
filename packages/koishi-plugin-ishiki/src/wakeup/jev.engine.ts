@@ -1311,7 +1311,8 @@ export class JevWakeupInstance implements WakeupEngineInstance {
                   : 1;
             }
             s.lastConversationAt = m.timestamp;
-            if (s.pending?.messages.at(-1)?.messageId === call.semanticTurn) {
+            // 一次唤醒拿到的是整批待回复消息；回信命中其中任意一条就说明这一批已经交出去了。
+            if (s.pending?.messages.some((message) => message.messageId === call.semanticTurn)) {
               s.pending = undefined;
               if (s.timer) clearTimeout(s.timer);
               s.timer = undefined;
@@ -1344,7 +1345,12 @@ export class JevWakeupInstance implements WakeupEngineInstance {
             const ruleMessage = messages.find((message) => matchesJevRules(message, this.rules));
             if (ruleMessage) {
               s.pending = { messages, since: s.pending?.since ?? now };
-              wake(s, "reply", "rule", ruleMessage.messageId);
+              // 整批已经交给这一轮：立即消费。否则本轮不以匹配的 send_message 收尾时，轮末会拿同一批消息再次唤醒。
+              if (wake(s, "reply", "rule", ruleMessage.messageId)) {
+                s.pending = undefined;
+                if (s.timer) clearTimeout(s.timer);
+                s.timer = undefined;
+              }
               continue;
             }
             const since = s.pending?.since ?? now;

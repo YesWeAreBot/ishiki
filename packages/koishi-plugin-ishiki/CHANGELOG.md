@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed jev re-waking the same pending messages on every turn end after a wake turn ended without a matching reply: the batch is consumed when it is handed to a turn, and a reply to any message in the batch clears it
+
 ## [0.0.6] - 2026-11-03
 
 ### Added

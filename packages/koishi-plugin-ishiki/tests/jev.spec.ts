@@ -593,6 +593,60 @@ describe("JEV wakeup lifecycle", () => {
     expect(requestedState).toMatchObject({ pending_message: { id: "busy-1" } });
     dispose();
   });
+
+  it("consumes a deferred rule-matched batch after handing it to one turn", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    let idle = false;
+    const { promise: waitGate, resolve: releaseWait } = Promise.withResolvers<void>();
+    const continueAgent = vi.fn<() => void>();
+    const agent = {
+      isIdle: () => idle,
+      wait: () => waitGate,
+      continue: continueAgent,
+      storage: { read: () => [] },
+      channel: {
+        subscribe: (_name: "agent", listener: (event: AgentEvent) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as Agent;
+    const engine = new JevWakeupInstance(
+      { debounceMs: 0, maxWaitMs: 0, minIntervalMs: 0, rules: { direct: true, atSelf: false, quoteSelf: false, keywords: [] } },
+      { logger: { debug: vi.fn<(message: string) => void>(), warn: vi.fn<(message: string) => void>() }, fiber: {} } as never,
+      new JevTraceStore(),
+    );
+    const dispose = engine.attach(agent);
+    const emitMessage = (id: string) => {
+      const message: IshikiMessageCreated = {
+        timestamp: Date.now(),
+        platform: "test",
+        selfId: "bot",
+        channelId: "room",
+        messageId: id,
+        content: "在吗",
+        isDirect: true,
+        user: { id: "member", name: "Member" },
+      };
+      for (const listener of listeners) listener({ type: "message.appended", message: createCustomMessage("ishiki.message.created", message) });
+    };
+    const emitTurnDone = (turnId: string) => {
+      for (const listener of listeners) listener({ type: "turn.done", turnId });
+    };
+
+    emitMessage("ask");
+    expect(continueAgent).not.toHaveBeenCalled();
+
+    emitTurnDone("turn-1");
+    idle = true;
+    releaseWait();
+    await vi.waitFor(() => expect(continueAgent).toHaveBeenCalledTimes(1));
+
+    emitTurnDone("turn-2");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(continueAgent).toHaveBeenCalledTimes(1);
+    dispose();
+  });
 });
 
 describe("JEV configuration", () => {
