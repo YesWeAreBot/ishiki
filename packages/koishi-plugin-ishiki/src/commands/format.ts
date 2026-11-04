@@ -11,7 +11,7 @@ import type {
   RuntimeState,
   RuntimeView,
   SessionSummary,
-} from "../management/types.js";
+} from "../manage/types.js";
 
 const PROFILE_STATES: Record<ProfileSummary["state"], string> = { active: "已激活", inactive: "未激活", failed: "失败", loading: "加载中" };
 const RUNTIME_STATES: Record<RuntimeState, string> = { idle: "空闲", running: "运行中", stopped: "已停止", failed: "失败" };

@@ -1,8 +1,8 @@
 import type { Command, Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import { ManagementError } from "../management/errors.js";
-import type { ModelDecl, ProviderInput } from "../management/types.js";
+import { ManagementError } from "../manage/errors.js";
+import type { ModelDecl, ProviderInput } from "../manage/types.js";
 import { CONFIRM_OPTION, confirm, hasAuthority, optionFlag, optionNumber, optionText, parseJsonArgument, positional, positionalText } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatGroupDetail, formatModelsList, formatProviderDetail } from "./format.js";

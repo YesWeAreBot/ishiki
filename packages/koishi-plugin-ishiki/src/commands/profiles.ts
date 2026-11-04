@@ -2,7 +2,7 @@ import type { Command, Context } from "koishi";
 
 import { Extension } from "../extension.js";
 import type Ishiki from "../index.js";
-import { ManagementError } from "../management/errors.js";
+import { ManagementError } from "../manage/errors.js";
 import { serviceName } from "../registry.js";
 import { CONFIRM_OPTION, confirm, hasAuthority, optionText, parseJsonArgument, positional, positionalText, restArguments } from "./context.js";
 import { wrapAction } from "./errors.js";

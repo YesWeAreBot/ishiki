@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Command, Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import { ManagementError } from "../management/errors.js";
+import { ManagementError } from "../manage/errors.js";
 import { overlaps, readProfileRaw, resolveProfile, type ChannelFilter } from "../profile/index.js";
 import { CONFIRM_OPTION, confirm, hasAuthority, optionText, positional } from "./context.js";
 import { wrapAction } from "./errors.js";

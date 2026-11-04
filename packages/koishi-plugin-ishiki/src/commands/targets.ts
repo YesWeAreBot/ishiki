@@ -1,8 +1,8 @@
 import type { Session } from "koishi";
 
 import type Ishiki from "../index.js";
-import { ManagementError } from "../management/errors.js";
-import type { ChannelAddress, RuntimeView } from "../management/types.js";
+import { ManagementError } from "../manage/errors.js";
+import type { ChannelAddress, RuntimeView } from "../manage/types.js";
 import type { AgentRuntime } from "../runtime.js";
 
 export interface RuntimeTarget {

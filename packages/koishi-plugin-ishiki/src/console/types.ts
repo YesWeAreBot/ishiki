@@ -20,7 +20,7 @@ import type {
   SessionSummary,
   UsageFilters,
   UsageSnapshot,
-} from "../management/types.js";
+} from "../manage/types.js";
 import type { JevSnapshot } from "../wakeup/jev.engine.js";
 
 /** 控制台数据服务的推送内容；写入操作走请求响应，不进入推送快照。 */

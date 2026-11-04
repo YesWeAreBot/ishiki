@@ -2,7 +2,7 @@ import { DataService, type Console } from "@koishijs/console";
 import type { Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import type { ModelsDocument, UsageSnapshot } from "../management/types.js";
+import type { ModelsDocument, UsageSnapshot } from "../manage/types.js";
 import { requireJevTrace, type JevSnapshot, type JevTrace } from "../wakeup/jev.engine.js";
 import type { ProfilesSnapshot, RuntimesSnapshot, SessionsSnapshot } from "./types.js";
 

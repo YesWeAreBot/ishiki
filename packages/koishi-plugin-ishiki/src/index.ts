@@ -2,7 +2,7 @@ import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSy
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { AgentPlugin } from "@yesimagent/core";
+import type { AgentPlugin, LanguageModelV4 } from "@yesimagent/core";
 import { createGateway, type Gateway, type GatewayConfig } from "@yesimagent/gateway";
 import { Context, Service, type Session } from "koishi";
 import Logger from "reggol";
@@ -22,11 +22,13 @@ import { createDumpFetch } from "./debugger.js";
 import { Extension, type ExtensionHost } from "./extension.js";
 import { FailoverModel } from "./failover.js";
 import { loadInstructionFiles, renderInstructions } from "./instructions.js";
-import { Management } from "./management/index.js";
-import type { RuntimeMeta } from "./management/types.js";
+import { Management } from "./manage/index.js";
+import type { RuntimeMeta } from "./manage/types.js";
+import type { FailoverConfig } from "./profile/config.js";
 import { directoryName, loadProfiles, matchesChannel, matchesPattern, type ChannelFilter, type InstanceDomain, type Profile } from "./profile/index.js";
 import { supportsImageInput } from "./resource/capabilities.js";
 import { ResourceCenter } from "./resource/center.js";
+import { ResourceError } from "./resource/errors.js";
 import { ResourceStore } from "./resource/store.js";
 import { AgentRuntime } from "./runtime.js";
 import { StandardHandler } from "./session-handler.js";
@@ -40,7 +42,6 @@ import {
 } from "./toolcall/index.js";
 import { loadParser } from "./toolcall/parser.js";
 import type { IshikiEvent } from "./types/messages.js";
-import { createVisionModel } from "./vision.js";
 import { JevWakeupEngine, StandardWakeupEngine, WakeupEngine, WillingnessWakeupEngine } from "./wakeup/index.js";
 
 // ESM 由模块 URL 定位，CJS 由 __dirname 定位；两者都从当前目录上跳到包根。
@@ -63,6 +64,23 @@ export function installDefaultPreset(dataPath: string): boolean {
     copyFileSync(path.join(presetDirectory, file.source), target, constants.COPYFILE_EXCL);
   }
   return true;
+}
+
+/** 图像识别模型：配置为空时返回 undefined；候选模型必须全部声明 image 输入。 */
+export function createVisionModel(
+  gateway: Gateway,
+  configured: string | undefined,
+  failoverConfig: FailoverConfig,
+  logger: Logger,
+): LanguageModelV4 | undefined {
+  const reference = configured?.trim();
+  if (!reference) return undefined;
+  if (!supportsImageInput(gateway, reference)) {
+    throw new ResourceError("vision_model_unsupported", `vision model "${reference}" must declare image input on every candidate`);
+  }
+  return gateway.groups().includes(reference) || (failoverConfig.attempts ?? 1) > 1
+    ? new FailoverModel(gateway, reference, failoverConfig, logger)
+    : gateway.languageModel(reference);
 }
 
 /** 一条路由：一个 profile 加它派生出来的全部 runtime。 */

@@ -1,8 +1,8 @@
 import type { Argv, Awaitable, Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import { ManagementError } from "../management/errors.js";
-import type { RuntimeView } from "../management/types.js";
+import { ManagementError } from "../manage/errors.js";
+import type { RuntimeView } from "../manage/types.js";
 import type { AgentRuntime } from "../runtime.js";
 import { positional } from "./context.js";
 import { renderError } from "./errors.js";

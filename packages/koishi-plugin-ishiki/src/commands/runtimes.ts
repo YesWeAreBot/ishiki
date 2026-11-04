@@ -1,7 +1,7 @@
 import type { Command, Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import { ManagementError } from "../management/errors.js";
+import { ManagementError } from "../manage/errors.js";
 import { CONFIRM_OPTION, confirm, optionText, positional, restArguments } from "./context.js";
 import { wrapAction } from "./errors.js";
 import { formatRuntimeList, formatRuntimeView } from "./format.js";

@@ -8,8 +8,8 @@ import { blankProfileDraft, buildProfileConfig, validateProfileDraft } from "../
 import { inspectModelEntry, inspectProfileConfig, parseRaw, serializeRaw } from "../client/src/lib/rawConfig";
 import { schemaDefaults, schemaFields } from "../client/src/lib/schema";
 import { bucketUsage } from "../client/src/lib/usageSeries";
-import { serializeSchema } from "../src/management/schema";
-import type { GroupView, ProviderView, UsageRecord } from "../src/management/types";
+import { serializeSchema } from "../src/manage/schema";
+import type { GroupView, ProviderView, UsageRecord } from "../src/manage/types";
 
 const providers: ProviderView[] = [
   {

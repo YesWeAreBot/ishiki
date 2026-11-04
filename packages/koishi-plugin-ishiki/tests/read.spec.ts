@@ -8,11 +8,11 @@ import { createGateway } from "@yesimagent/gateway";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createReadTool, type ReadTool } from "../src/builtin-tools/read.js";
+import { createVisionModel } from "../src/index.js";
 import { ResourceCenter } from "../src/resource/center.js";
 import { processOutput } from "../src/resource/output.js";
 import { ResourceStore } from "../src/resource/store.js";
 import { TEXT_BUDGET } from "../src/resource/text.js";
-import { createVisionModel } from "../src/vision.js";
 
 let home: string;
 let center: ResourceCenter;

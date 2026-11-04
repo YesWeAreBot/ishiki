@@ -1,7 +1,7 @@
 import type { Argv } from "koishi";
 import type Logger from "reggol";
 
-import { ManagementError, describeError } from "../management/errors.js";
+import { ManagementError, describeError } from "../manage/errors.js";
 
 export type CommandAction = (argv: Argv) => Promise<string | void>;
 

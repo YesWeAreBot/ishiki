@@ -1,6 +1,6 @@
-import type { SchemaNode } from "../../../src/management/schema";
+import type { SchemaNode } from "../../../src/manage/schema";
 
-export type { SchemaNode } from "../../../src/management/schema";
+export type { SchemaNode } from "../../../src/manage/schema";
 
 /** 当前值命中的联合分支：所有 const 字段都必须相等，没有 const 字段的分支作为兜底。 */
 function branchMatches(node: SchemaNode, record: Record<string, unknown> | undefined): boolean {

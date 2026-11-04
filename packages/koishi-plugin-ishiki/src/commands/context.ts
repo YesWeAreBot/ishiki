@@ -1,6 +1,6 @@
 import type { Argv, Session } from "koishi";
 
-import { ManagementError } from "../management/errors.js";
+import { ManagementError } from "../manage/errors.js";
 
 /** 所有二次确认指令共用的跳过选项。 */
 export const CONFIRM_OPTION = { name: "yes", decl: "-y, --yes" } as const;

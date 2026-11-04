@@ -2,7 +2,7 @@ import { App, Schema, Service, type Context } from "koishi";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { Extension } from "../src/extension.js";
-import { extensionsDirectory } from "../src/management/catalog.js";
+import { extensionsDirectory } from "../src/manage/catalog.js";
 
 class DemoExtension extends Extension<{ mode: string }> {
   public readonly Schema = Schema.object({

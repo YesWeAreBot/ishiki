@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Context } from "koishi";
 
 import type Ishiki from "../index.js";
-import { ManagementError, describeError } from "../management/errors.js";
+import { ManagementError, describeError } from "../manage/errors.js";
 import { JEV_TRACE_SERVICE, requireJevTrace } from "../wakeup/jev.engine.js";
 import { JevProvider, ModelsProvider, ProfilesProvider, RuntimesProvider, SessionsProvider, UsageProvider } from "./services.js";
 import type { ConsoleResult } from "./types.js";
