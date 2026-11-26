@@ -1,0 +1,57 @@
+{
+  "name": "koishi-plugin-ishiki-command-bridge",
+  "version": "0.0.1",
+  "description": "Discover scoped Koishi commands and run approved commands from Ishiki.",
+  "keywords": [
+    "commands",
+    "extension",
+    "ishiki",
+    "koishi",
+    "plugin"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/command-bridge"
+  },
+  "files": [
+    "lib",
+    "index.mjs"
+  ],
+  "type": "module",
+  "main": "./lib/index.cjs",
+  "module": "./index.mjs",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./index.mjs",
+      "require": "./lib/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "devDependencies": {
+    "@koishijs/plugin-database-memory": "^3.7.0",
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": "0.0.6"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": "0.0.6"
+  },
+  "koishi": {
+    "description": {
+      "zh": "按会话发现 Koishi 命令，通过 Ishiki 代调已授权的命令",
+      "en": "Discover and run scoped Koishi commands from Ishiki"
+    },
+    "service": {
+      "optional": [
+        "database"
+      ],
+      "required": [
+        "ishiki"
+      ]
+    }
+  }
+}

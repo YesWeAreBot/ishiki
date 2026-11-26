@@ -13,6 +13,8 @@ const satoriCore = koishiRequire.resolve("@satorijs/core");
 export default defineConfig({
   resolve: {
     alias: {
+      // Load the same host registry for source extensions and the local integration harness.
+      "koishi-plugin-ishiki": packageRequire.resolve("./src/index.ts"),
       koishi: koishiCore,
       "@satorijs/core": satoriCore,
     },
