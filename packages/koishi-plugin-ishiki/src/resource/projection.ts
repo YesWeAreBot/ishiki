@@ -3,10 +3,30 @@ import { createEntry, createUserMessage, type AgentEntry, type AgentMessage, typ
 import type { AttachmentItem, ImageLifetime, IshikiAttachment } from "../types/messages.js";
 import type { ResourceCenter, ResourceFile } from "./center.js";
 import type { AttachmentConfig } from "./config.js";
+import { ResourceError, type ResourceErrorCode } from "./errors.js";
 import { prepareImageForModel } from "./image.js";
 import { keepsFailedToolAttachments } from "./tool-output.js";
 
 const INLINE_IMAGE_TYPES: Record<string, true> = { "image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true };
+
+const TERMINAL_RESOURCE_ERRORS: Partial<Record<ResourceErrorCode, true>> = {
+  invalid_resource_uri: true,
+  resource_unavailable: true,
+  resource_too_large: true,
+  image_format_unsupported: true,
+  image_decode_failed: true,
+};
+
+function isAuthoritativeHttpClientError(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429;
+}
+
+function isTerminalResourceError(error: unknown): boolean {
+  if (!(error instanceof ResourceError)) return false;
+  if (error.terminal !== undefined) return error.terminal;
+  if (TERMINAL_RESOURCE_ERRORS[error.code] === true) return true;
+  return error.code === "resource_read_failed" && isAuthoritativeHttpClientError(error.status);
+}
 
 function platformKey(data: { platform: string; selfId: string; channelId: string; messageId: string }): string {
   return JSON.stringify([data.platform, data.selfId, data.channelId, data.messageId]);
@@ -134,6 +154,7 @@ export class AttachmentProjection {
     const maxTotalImageBytes = this.policy.maxTotalImageBytes ?? 10 * 1024 * 1024;
     const maxImageCount = this.policy.maxImageCount ?? 4;
     const maxImageDimension = this.policy.maxImageDimension ?? 1_568;
+    const maxResolveFailures = Math.max(2, maxImageCount);
     const groups = new Map<AgentMessage, Candidate[]>();
     const candidates: Candidate[] = [];
     for (const message of messages) {
@@ -175,8 +196,13 @@ export class AttachmentProjection {
     const viewedRecent = recent.filter((candidate) => candidate.slot.shown).reverse();
     const order = [...unseen, ...retained, ...viewedRecent];
     const inlined = new Map<string, ResourceFile>();
+    const failedUrls = new Map<string, unknown>();
     const shown: string[] = [];
     let totalBytes = 0;
+    const failCandidate = (candidate: Candidate, error: unknown) => {
+      candidate.reason = `not supplied this request: resource unavailable (${error instanceof Error ? error.message : String(error)})`;
+      if (candidate.lifetime === "once" || isTerminalResourceError(error)) released.add(candidate.key);
+    };
     for (const candidate of order) {
       const { item } = candidate;
       if (released.has(candidate.key)) continue;
@@ -195,38 +221,45 @@ export class AttachmentProjection {
         if (duplicate !== undefined) {
           candidate.include = duplicate;
           candidate.size = duplicate.size;
+        } else if (inlined.size >= maxImageCount) {
+          candidate.reason = "not supplied this request: image count budget; waiting for capacity";
+          if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
+        } else if (failedUrls.has(item.url)) {
+          failCandidate(candidate, failedUrls.get(item.url));
         } else {
-          try {
-            const cached = this.cache.get(item.url);
-            const payload = cached ?? (await this.center.resolve(item.url));
-            const mediaType = payload.mediaType ?? item.mediaType;
-            if (payload.type !== "file" || INLINE_IMAGE_TYPES[mediaType] !== true) reject("unsupported image encoding");
-            else {
-              const prepared = prepareImageForModel(payload.bytes, mediaType, maxImageDimension);
-              const include: ResourceFile = {
-                ...payload,
-                bytes: prepared.bytes,
-                mediaType: prepared.mediaType,
-                size: prepared.bytes.byteLength,
-              };
-              candidate.size = include.size;
-              if (inlined.size >= maxImageCount) {
-                candidate.reason = "not supplied this request: image count budget; waiting for capacity";
-                if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
-              } else if (include.size > maxImageBytes) reject("single image byte limit");
-              else if (include.size > maxTotalImageBytes) reject("image exceeds the request byte budget");
-              else if (totalBytes + include.size > maxTotalImageBytes) {
-                candidate.reason = "not supplied this request: image byte budget; waiting for capacity";
-                if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
-              } else {
-                candidate.include = include;
-                inlined.set(item.url, include);
-                totalBytes += include.size;
-                if (payload.immutable) this.cache.set(item.url, include);
+          const cached = this.cache.get(item.url);
+          if (cached === undefined && failedUrls.size >= maxResolveFailures) {
+            candidate.reason = "not supplied this request: image failure budget; waiting for capacity";
+          } else {
+            try {
+              const payload = cached ?? (await this.center.resolve(item.url));
+              const mediaType = payload.mediaType ?? item.mediaType;
+              if (payload.type !== "file" || INLINE_IMAGE_TYPES[mediaType] !== true) reject("unsupported image encoding");
+              else {
+                const prepared = prepareImageForModel(payload.bytes, mediaType, maxImageDimension);
+                const include: ResourceFile = {
+                  ...payload,
+                  bytes: prepared.bytes,
+                  mediaType: prepared.mediaType,
+                  size: prepared.bytes.byteLength,
+                };
+                candidate.size = include.size;
+                if (include.size > maxImageBytes) reject("single image byte limit");
+                else if (include.size > maxTotalImageBytes) reject("image exceeds the request byte budget");
+                else if (totalBytes + include.size > maxTotalImageBytes) {
+                  candidate.reason = "not supplied this request: image byte budget; waiting for capacity";
+                  if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
+                } else {
+                  candidate.include = include;
+                  inlined.set(item.url, include);
+                  totalBytes += include.size;
+                  if (payload.immutable) this.cache.set(item.url, include);
+                }
               }
+            } catch (error) {
+              failedUrls.set(item.url, error);
+              failCandidate(candidate, error);
             }
-          } catch (error) {
-            candidate.reason = `not supplied this request: resource unavailable (${error instanceof Error ? error.message : String(error)})`;
           }
         }
       }

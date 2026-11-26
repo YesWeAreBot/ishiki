@@ -303,7 +303,7 @@ export class ResourceStore {
         return disk;
       }
       if (kind === "artifact" || current.fetchedAt !== undefined) {
-        throw new ResourceError("resource_not_found", `resource bytes missing: ${kind}/${namespace}/${name}`);
+        throw new ResourceError("resource_not_found", `resource bytes missing: ${kind}/${namespace}/${name}`, { terminal: true });
       }
       const inflight = this.inflight.get(current.id);
       if (inflight) return await inflight;
@@ -549,7 +549,7 @@ function describeAutoDownloadError(error: unknown): string {
 
 async function probeHttpSource(src: string): Promise<Probe> {
   const response = await fetchWithTimeout(src, "HEAD");
-  if (!response.ok) throw new ResourceError("resource_read_failed", `HEAD returned ${response.status}`);
+  if (!response.ok) throw new ResourceError("resource_read_failed", `HEAD returned ${response.status}`, { status: response.status });
   const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType === undefined || mediaType.length === 0 || mediaType === "*/*" || mediaType.endsWith("/*"))
     throw new ResourceError("resource_read_failed", "HEAD did not provide a concrete Content-Type");
@@ -594,7 +594,7 @@ export async function fetchBytes(src: string, options: { signal?: AbortSignal; m
     const detail = typeof code === "string" ? code : error instanceof Error ? error.name : "fetch failed";
     throw new ResourceError("resource_read_failed", `asset source is unreachable: ${detail}`);
   }
-  if (!response.ok) throw new ResourceError("resource_read_failed", `asset source returned ${response.status}`);
+  if (!response.ok) throw new ResourceError("resource_read_failed", `asset source returned ${response.status}`, { status: response.status });
   const declared = parseContentLength(response.headers.get("content-length"));
   if (declared !== undefined && declared > maxBytes) throw new ResourceError("resource_too_large", `asset exceeds ${maxBytes} bytes`);
   if (response.body === null) {
@@ -639,15 +639,13 @@ export function decodeDataUrl(src: string): Uint8Array {
   const match = /^data:([^;,]*)(;base64)?,([\s\S]*)$/.exec(src);
   if (!match) throw new ResourceError("invalid_resource_uri", "malformed data: URL");
   const [, mediaType, isBase64, payload] = match;
-  if (isBase64) {
-    try {
-      return Buffer.from(payload!, "base64");
-    } catch {
-      throw new ResourceError("resource_read_failed", "data: URL base64 decode failed");
-    }
-  }
+  if (isBase64) return Buffer.from(payload!, "base64");
   if (mediaType && !mediaType.startsWith("text/")) {
-    throw new ResourceError("resource_read_failed", `unsupported inline data type: ${mediaType}`);
+    throw new ResourceError("resource_read_failed", `unsupported inline data type: ${mediaType}`, { terminal: true });
   }
-  return Buffer.from(decodeURIComponent(payload!), "utf-8");
+  try {
+    return Buffer.from(decodeURIComponent(payload!), "utf-8");
+  } catch {
+    throw new ResourceError("invalid_resource_uri", "malformed data: URL");
+  }
 }
