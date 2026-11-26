@@ -136,6 +136,7 @@ Ishiki 的设计围绕 Agent 本身展开。未来希望进一步提供独立于
 | [`koishi-plugin-ishiki-mcp-client`](https://ishiki.js.org/docs/guides/mcp/)      | MCP 工具与资源接入                        |
 | [`koishi-plugin-ishiki-narrative`](packages/narrative/README.zh-CN.md)           | 叙事上下文与多角色模型交互                |
 | [`koishi-plugin-ishiki-onebot-actions`](packages/onebot-actions/README.md)       | OneBot 动作目录与协议特有操作             |
+| [`koishi-plugin-ishiki-command-bridge`](packages/command-bridge/README.md)       | 按会话发现和代调 Koishi 命令              |
 
 欢迎通过 [Issues](https://github.com/YesWeAreBot/ishiki/issues) 分享使用体验与设计想法，或提交 Pull Request 参与开发。构建与文档工作流见[维护手册](https://ishiki.js.org/docs/dev/maintenance/)。QQ交流群：[857518324](https://qm.qq.com/q/EeL0FDu3JK)。
 
