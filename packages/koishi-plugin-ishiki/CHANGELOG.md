@@ -15,9 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional `assets.cleanup` removes expired asset bytes and metadata on a configurable interval
 - `read` accepts a non-empty `question` query on image URLs and answers it with `attachment.visionModel` without attaching the image to the main conversation
 - Added `attachment.messageImageInput` to allow or reject automatic platform message images in the projection
+- `@earendil-works/pi-mcp`, `@satorijs/element`, `reggol`, and `schemastery` are now declared as runtime dependencies
 
 ### Changed
 - Assets now use UUID v7 identifiers with `<uuid>.<extension>` byte files and `<uuid>.metadata.json` sidecars
+- Bumped `@ai-sdk-tool/parser` to 5.2.0 and `@earendil-works/pi-codemode` to 1.6.0
 
 ### Fixed
 - Fixed jev re-waking the same pending messages on every turn end after a wake turn ended without a matching reply: the batch is consumed when it is handed to a turn, and a reply to any message in the batch clears it

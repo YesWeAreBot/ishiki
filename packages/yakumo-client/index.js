@@ -1,14 +1,14 @@
 // Bridges the Koishi console client build into the yakumo pipeline.
 //
 // `@koishijs/client/lib` registers a `client` *service* via `ctx.register`, which yakumo 1.x
-// could reach from `pipeline.build` but yakumo 3.x cannot: `ctx.cli.execute` only dispatches
+// could reach from `pipeline.build` but yakumo 3.x and 4.x cannot: the pipeline only dispatches
 // CLI commands. This plugin exposes the same build as a CLI command so the step actually runs.
 import { build } from "@koishijs/client/lib";
 
-export const inject = ["yakumo", "cli"];
+export const inject = ["yakumo", "std:cli"];
 
 function apply(ctx) {
-  ctx.cli.command("client [...packages]", "Build Koishi console client bundles").action(async ({ args }) => {
+  ctx.std.cli.command("client [...packages]", "Build Koishi console client bundles").action(async ({ args }) => {
     await ctx.yakumo.initialize();
     const packages = ctx.yakumo.locate(args);
     if (!packages.length) throw new Error("No package matched the given arguments");
