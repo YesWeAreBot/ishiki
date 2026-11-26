@@ -3,10 +3,32 @@ import { createEntry, createUserMessage, type AgentEntry, type AgentMessage, typ
 import type { AttachmentItem, ImageLifetime, IshikiAttachment } from "../types/messages.js";
 import type { ResourceCenter, ResourceFile } from "./center.js";
 import type { AttachmentConfig } from "./config.js";
+import { ResourceError, type ResourceErrorCode } from "./errors.js";
 import { prepareImageForModel } from "./image.js";
 import { keepsFailedToolAttachments } from "./tool-output.js";
 
 const INLINE_IMAGE_TYPES: Record<string, true> = { "image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true };
+
+const TERMINAL_RESOURCE_ERRORS: Partial<Record<ResourceErrorCode, true>> = {
+  invalid_resource_uri: true,
+  invalid_attachment_lifetime: true,
+  unsupported_view: true,
+  resource_unavailable: true,
+  resource_too_large: true,
+  image_format_unsupported: true,
+  image_decode_failed: true,
+  image_operation_invalid: true,
+};
+
+function isAuthoritativeHttpClientError(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429;
+}
+
+function isTerminalResourceError(error: unknown): boolean {
+  if (!(error instanceof ResourceError)) return false;
+  if (error.terminal === true || TERMINAL_RESOURCE_ERRORS[error.code] === true) return true;
+  return error.code === "resource_read_failed" && isAuthoritativeHttpClientError(error.status);
+}
 
 function platformKey(data: { platform: string; selfId: string; channelId: string; messageId: string }): string {
   return JSON.stringify([data.platform, data.selfId, data.channelId, data.messageId]);
@@ -195,6 +217,9 @@ export class AttachmentProjection {
         if (duplicate !== undefined) {
           candidate.include = duplicate;
           candidate.size = duplicate.size;
+        } else if (inlined.size >= maxImageCount) {
+          candidate.reason = "not supplied this request: image count budget; waiting for capacity";
+          if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
         } else {
           try {
             const cached = this.cache.get(item.url);
@@ -210,10 +235,7 @@ export class AttachmentProjection {
                 size: prepared.bytes.byteLength,
               };
               candidate.size = include.size;
-              if (inlined.size >= maxImageCount) {
-                candidate.reason = "not supplied this request: image count budget; waiting for capacity";
-                if (candidate.slot.shown && candidate.lifetime === "recent") released.add(candidate.key);
-              } else if (include.size > maxImageBytes) reject("single image byte limit");
+              if (include.size > maxImageBytes) reject("single image byte limit");
               else if (include.size > maxTotalImageBytes) reject("image exceeds the request byte budget");
               else if (totalBytes + include.size > maxTotalImageBytes) {
                 candidate.reason = "not supplied this request: image byte budget; waiting for capacity";
@@ -227,6 +249,7 @@ export class AttachmentProjection {
             }
           } catch (error) {
             candidate.reason = `not supplied this request: resource unavailable (${error instanceof Error ? error.message : String(error)})`;
+            if (candidate.lifetime === "once" || isTerminalResourceError(error)) released.add(candidate.key);
           }
         }
       }

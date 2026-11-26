@@ -110,17 +110,19 @@ describe("resource registration and isolation", () => {
       const src = `${origin}/report?rkey=private-file-token`;
       const url = await store.registerAsset(src);
       expect(await center.resolve(url)).toMatchObject({ type: "text", text: "downloaded report" });
-      for (const [route, code, detail] of [
-        ["denied", "resource_read_failed", "403"],
-        ["oversized", "resource_too_large", String(limit)],
-        ["streamed", "resource_too_large", String(limit)],
+      for (const [route, expected] of [
+        ["denied", { code: "resource_read_failed", status: 403, message: expect.stringContaining("403") }],
+        ["oversized", { code: "resource_too_large", message: expect.stringContaining(String(limit)) }],
+        ["streamed", { code: "resource_too_large", message: expect.stringContaining(String(limit)) }],
       ] as const) {
         const target = await store.registerAsset(`${origin}/${route}?rkey=private-file-token`);
         const failure = center.resolve(target);
-        await expect(failure).rejects.toMatchObject({ code, message: expect.stringContaining(detail) });
+        await expect(failure).rejects.toMatchObject(expected);
         await expect(failure).rejects.toHaveProperty("message", expect.not.stringContaining("private-file-token"));
         await expect(failure).rejects.toHaveProperty("message", expect.not.stringContaining(origin));
       }
+      const malformedData = await store.registerAsset("data:text/plain,%ZZ");
+      await expect(center.resolve(malformedData)).rejects.toMatchObject({ code: "invalid_resource_uri" });
     } finally {
       const closing = Promise.withResolvers<void>();
       server.close((error) => (error ? closing.reject(error) : closing.resolve()));

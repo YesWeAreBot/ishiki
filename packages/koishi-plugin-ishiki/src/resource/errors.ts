@@ -19,12 +19,23 @@ export type ResourceErrorCode =
   | "image_decode_failed"
   | "image_operation_invalid";
 
+export interface ResourceErrorOptions {
+  status?: number;
+  terminal?: boolean;
+}
+
 export class ResourceError extends Error {
+  public readonly status?: number;
+  public readonly terminal?: boolean;
+
   public constructor(
     public readonly code: ResourceErrorCode,
     message?: string,
+    options?: ResourceErrorOptions,
   ) {
     super(message ?? code);
     this.name = "ResourceError";
+    this.status = options?.status;
+    this.terminal = options?.terminal;
   }
 }
