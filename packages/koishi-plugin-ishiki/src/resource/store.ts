@@ -303,7 +303,7 @@ export class ResourceStore {
         return disk;
       }
       if (kind === "artifact" || current.fetchedAt !== undefined) {
-        throw new ResourceError("resource_not_found", `resource bytes missing: ${kind}/${namespace}/${name}`);
+        throw new ResourceError("resource_not_found", `resource bytes missing: ${kind}/${namespace}/${name}`, { terminal: true });
       }
       const inflight = this.inflight.get(current.id);
       if (inflight) return await inflight;
@@ -639,13 +639,7 @@ export function decodeDataUrl(src: string): Uint8Array {
   const match = /^data:([^;,]*)(;base64)?,([\s\S]*)$/.exec(src);
   if (!match) throw new ResourceError("invalid_resource_uri", "malformed data: URL");
   const [, mediaType, isBase64, payload] = match;
-  if (isBase64) {
-    try {
-      return Buffer.from(payload!, "base64");
-    } catch {
-      throw new ResourceError("resource_read_failed", "data: URL base64 decode failed", { terminal: true });
-    }
-  }
+  if (isBase64) return Buffer.from(payload!, "base64");
   if (mediaType && !mediaType.startsWith("text/")) {
     throw new ResourceError("resource_read_failed", `unsupported inline data type: ${mediaType}`, { terminal: true });
   }

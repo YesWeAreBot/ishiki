@@ -696,42 +696,117 @@ describe("request projection", () => {
     const c = await distinctAttachment("c", "3", 30);
     const messages = [toolMessage("a", "1"), a, toolMessage("a-dup", "1-dup"), aDup, toolMessage("b", "2"), b, toolMessage("c", "3"), c];
     const resolveSpy = vi.spyOn(center, "resolve");
-    const projection = new AttachmentProjection(center, { imageInput: true, maxImageCount: 1 });
-    projection.restore([], messages);
+    try {
+      const projection = new AttachmentProjection(center, { imageInput: true, maxImageCount: 1 });
+      projection.restore([], messages);
 
-    const turn1 = await projection.project(messages, "turn");
-    expect(imageParts(turn1)).toHaveLength(1);
-    expect(resolveSpy).toHaveBeenCalledTimes(1);
-    expect(resolveSpy).toHaveBeenCalledWith(a.data.items[0]!.url);
-    const turn1Json = JSON.stringify(turn1);
-    expect(turn1Json).toContain("Same image supplied elsewhere in this request.");
-    expect(turn1Json).toContain("not supplied this request: image count budget; waiting for capacity");
+      const turn1 = await projection.project(messages, "turn");
+      expect(imageParts(turn1)).toHaveLength(1);
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+      expect(resolveSpy).toHaveBeenCalledWith(a.data.items[0]!.url);
+      const turn1Json = JSON.stringify(turn1);
+      expect(turn1Json).toContain("Same image supplied elsewhere in this request.");
+      expect(turn1Json).toContain("not supplied this request: image count budget; waiting for capacity");
 
-    await commitImages(projection, messages);
-    resolveSpy.mockClear();
+      await commitImages(projection, messages);
+      resolveSpy.mockClear();
 
-    const turn2 = await projection.project(messages, "turn");
-    expect(imageParts(turn2)).toHaveLength(1);
-    expect(resolveSpy).toHaveBeenCalledTimes(1);
-    expect(resolveSpy).toHaveBeenCalledWith(b.data.items[0]!.url);
+      const turn2 = await projection.project(messages, "turn");
+      expect(imageParts(turn2)).toHaveLength(1);
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+      expect(resolveSpy).toHaveBeenCalledWith(b.data.items[0]!.url);
 
-    // Failed earlier resolution must not consume maxImageCount capacity.
-    resolveSpy.mockClear();
-    const missing = createCustomMessage("ishiki.attachment", {
+      // Failed earlier resolution must not consume maxImageCount capacity.
+      resolveSpy.mockClear();
+      const missing = createCustomMessage("ishiki.attachment", {
+        source: "tool",
+        toolName: "missing",
+        toolCallId: "m",
+        items: [{ url: "artifact://x/missing", mediaType: "image/png", lifetime: "once" }],
+      });
+      const withFailure = [toolMessage("missing", "m"), missing, toolMessage("c", "3"), c];
+      const recovery = new AttachmentProjection(center, { imageInput: true, maxImageCount: 1 });
+      recovery.restore([], withFailure);
+      const recovered = await recovery.project(withFailure, "turn");
+      expect(imageParts(recovered)).toHaveLength(1);
+      expect(JSON.stringify(recovered)).toContain("resource unavailable");
+      expect(JSON.stringify(recovered)).toContain("tool c, call 3");
+      expect(resolveSpy).toHaveBeenCalledTimes(2);
+      const recoveryEntries = await commitImages(recovery, withFailure);
+      const recoveryDelivery = recoveryEntries.findLast((entry) => entry.type === "ishiki.images");
+      expect(recoveryDelivery).toMatchObject({
+        data: {
+          shown: [`${c.id}:0`],
+          released: expect.arrayContaining([`${missing.id}:0`, `${c.id}:0`]),
+        },
+      });
+    } finally {
+      resolveSpy.mockRestore();
+    }
+  });
+
+  it("caps per-request resolution failures and deduplicates failed URLs within a turn", async () => {
+    const encoded = encodeImage({ width: 1, height: 1, mediaType: "image/png", data: Buffer.from([40, 0, 0, 255]) });
+    const validUrl = await center.store.writeArtifact("after-budget", encoded.bytes, { mediaType: "image/png" });
+    const fail1 = createCustomMessage("ishiki.attachment", {
       source: "tool",
-      toolName: "missing",
-      toolCallId: "m",
-      items: [{ url: "artifact://x/missing", mediaType: "image/png", lifetime: "once" }],
+      toolName: "fail-1",
+      toolCallId: "f1",
+      items: [{ url: "artifact://x/fail-1", mediaType: "image/png", lifetime: "once" }],
     });
-    const withFailure = [toolMessage("missing", "m"), missing, toolMessage("c", "3"), c];
-    const recovery = new AttachmentProjection(center, { imageInput: true, maxImageCount: 1 });
-    recovery.restore([], withFailure);
-    const recovered = await recovery.project(withFailure, "turn");
-    expect(imageParts(recovered)).toHaveLength(1);
-    expect(JSON.stringify(recovered)).toContain("resource unavailable");
-    expect(JSON.stringify(recovered)).toContain("tool c, call 3");
-    expect(resolveSpy).toHaveBeenCalledTimes(2);
-    resolveSpy.mockRestore();
+    const fail1Dup = createCustomMessage("ishiki.attachment", {
+      source: "tool",
+      toolName: "fail-1-dup",
+      toolCallId: "f1-dup",
+      items: [{ url: "artifact://x/fail-1", mediaType: "image/png", lifetime: "once" }],
+    });
+    const fail2 = createCustomMessage("ishiki.attachment", {
+      source: "tool",
+      toolName: "fail-2",
+      toolCallId: "f2",
+      items: [{ url: "artifact://x/fail-2", mediaType: "image/png", lifetime: "once" }],
+    });
+    const validAfterBudget = createCustomMessage("ishiki.attachment", {
+      source: "tool",
+      toolName: "valid",
+      toolCallId: "v",
+      items: [{ url: validUrl, mediaType: "image/png", byteLength: encoded.bytes.byteLength, lifetime: "once" }],
+    });
+    const messages = [
+      toolMessage("fail-1", "f1"),
+      fail1,
+      toolMessage("fail-1-dup", "f1-dup"),
+      fail1Dup,
+      toolMessage("fail-2", "f2"),
+      fail2,
+      toolMessage("valid", "v"),
+      validAfterBudget,
+    ];
+    const resolveSpy = vi.spyOn(center, "resolve");
+    try {
+      const projection = new AttachmentProjection(center, { imageInput: true, maxImageCount: 2 });
+      projection.restore([], messages);
+
+      const turn1 = await projection.project(messages, "turn");
+      expect(resolveSpy).toHaveBeenCalledTimes(2);
+      expect(resolveSpy).toHaveBeenNthCalledWith(1, "artifact://x/fail-1");
+      expect(resolveSpy).toHaveBeenNthCalledWith(2, "artifact://x/fail-2");
+      expect(imageParts(turn1)).toEqual([]);
+      expect(JSON.stringify(turn1)).toContain("image failure budget; waiting for capacity");
+
+      const entries1 = await commitImages(projection, messages);
+      const delivery1 = entries1.findLast((entry) => entry.type === "ishiki.images");
+      expect(delivery1?.data.released).toEqual(expect.arrayContaining([`${fail1.id}:0`, `${fail1Dup.id}:0`, `${fail2.id}:0`]));
+      expect(delivery1?.data.released).not.toContain(`${validAfterBudget.id}:0`);
+
+      resolveSpy.mockClear();
+      const turn2 = await projection.project(messages, "turn");
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+      expect(resolveSpy).toHaveBeenCalledWith(validUrl);
+      expect(imageParts(turn2)).toHaveLength(1);
+    } finally {
+      resolveSpy.mockRestore();
+    }
   });
 
   it("retires failed once attachments after a durable response instead of re-fetching on every turn", async () => {
@@ -756,16 +831,19 @@ describe("request projection", () => {
       });
       const messages = [toolMessage("fetch", "once-1"), onceAttachment];
 
+      const storage = createJsonlStorage(path.join(home, "unpersisted.jsonl"));
+      await storage.append(createEntry("message", messages[0]!, { turnId: "seed" }));
+
       const projection = new AttachmentProjection(center, { imageInput: true });
-      projection.restore([], messages);
+      projection.restore(await storage.read(), messages);
       const first = await projection.project(messages, "turn");
       expect(hits).toBe(1);
       expect(JSON.stringify(first)).toContain("resource unavailable (asset source returned 503)");
 
-      // Unpersisted turns still allow retry on reconstruction.
+      // Unpersisted turns (appended entries never written to storage) still allow retry on reconstruction.
       projection.append([createEntry("message", createAssistantMessage("not persisted"), { turnId: "turn" })]);
       const restarted = new AttachmentProjection(center, { imageInput: true });
-      restarted.restore([], messages);
+      restarted.restore(await storage.read(), messages);
       await restarted.project(messages, "turn");
       expect(hits).toBe(2);
 
@@ -796,8 +874,10 @@ describe("request projection", () => {
       }
       if (request.url?.startsWith("/flaky.png")) {
         flakyHits += 1;
-        if (flakyHits === 1) response.writeHead(429).end("rate limited");
-        else if (flakyHits === 2) response.writeHead(503).end("upstream busy");
+        if (flakyHits === 1) response.writeHead(408).end("request timeout");
+        else if (flakyHits === 2) response.writeHead(425).end("too early");
+        else if (flakyHits === 3) response.writeHead(429).end("rate limited");
+        else if (flakyHits === 4) response.writeHead(503).end("upstream busy");
         else response.writeHead(200, { "content-type": "image/png" }).end(PNG_BUFFER);
         return;
       }
@@ -811,10 +891,17 @@ describe("request projection", () => {
       const address = server.address();
       if (address === null || typeof address === "string") throw new Error("expected a TCP address");
       const origin = `http://127.0.0.1:${address.port}`;
+      const cleanedUrl = await center.store.registerAsset(`data:image/png;base64,${PNG}`, { mediaType: "image/png" });
+      await center.store.cleanupExpired(Date.now() + 365 * 86_400_000);
       const expiredUrl = await center.store.registerAsset(`${origin}/expired.png`, { mediaType: "image/*" });
       const corruptUrl = await center.store.writeArtifact("corrupt", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00]), { mediaType: "image/png" });
       const badDataUrl = await center.store.registerAsset("data:application/octet-stream,raw", { mediaType: "image/png" });
+      const missingBlobUrl = await center.store.writeArtifact("missing-blob", PNG_BUFFER, { mediaType: "image/png" });
+      const missingBlobParsed = new URL(missingBlobUrl);
+      await fs.rm(path.join(home, "resources", "artifacts", missingBlobParsed.hostname, missingBlobParsed.pathname.slice(1)), { force: true });
       const flakyUrl = await center.store.registerAsset(`${origin}/flaky.png`, { mediaType: "image/*" });
+      // Use a fresh ResourceCenter so missingBlob is read from disk rather than ResourceStore's in-memory write cache.
+      const projectionCenter = new ResourceCenter("rt", home);
 
       const expired = createCustomMessage("ishiki.attachment", {
         source: "tool",
@@ -834,6 +921,18 @@ describe("request projection", () => {
         toolCallId: "t-data",
         items: [{ url: badDataUrl, mediaType: "image/png", lifetime: "recent" }],
       });
+      const cleaned = createCustomMessage("ishiki.attachment", {
+        source: "tool",
+        toolName: "cleaned",
+        toolCallId: "t-cleaned",
+        items: [{ url: cleanedUrl, mediaType: "image/png", lifetime: "retain" }],
+      });
+      const missingBlob = createCustomMessage("ishiki.attachment", {
+        source: "tool",
+        toolName: "missing-blob",
+        toolCallId: "t-blob",
+        items: [{ url: missingBlobUrl, mediaType: "image/png", lifetime: "retain" }],
+      });
       const flaky = createCustomMessage("ishiki.attachment", {
         source: "tool",
         toolName: "flaky",
@@ -847,11 +946,15 @@ describe("request projection", () => {
         corrupt,
         toolMessage("bad-data", "t-data"),
         badData,
+        toolMessage("cleaned", "t-cleaned"),
+        cleaned,
+        toolMessage("missing-blob", "t-blob"),
+        missingBlob,
         toolMessage("flaky", "t-flaky"),
         flaky,
       ];
 
-      const projection = new AttachmentProjection(center, { imageInput: true });
+      const projection = new AttachmentProjection(projectionCenter, { imageInput: true, maxImageCount: 10 });
       projection.restore([], messages);
 
       const turn1 = await projection.project(messages, "turn");
@@ -859,24 +962,30 @@ describe("request projection", () => {
       expect(JSON.stringify(turn1)).toContain("resource unavailable");
       const entries1 = await commitImages(projection, messages);
       const delivery1 = entries1.findLast((entry) => entry.type === "ishiki.images");
-      expect(delivery1?.data.released).toEqual(expect.arrayContaining([`${expired.id}:0`, `${corrupt.id}:0`, `${badData.id}:0`]));
+      expect(delivery1?.data.released).toEqual(
+        expect.arrayContaining([`${expired.id}:0`, `${corrupt.id}:0`, `${badData.id}:0`, `${cleaned.id}:0`, `${missingBlob.id}:0`]),
+      );
       expect(delivery1?.data.released).not.toContain(`${flaky.id}:0`);
 
-      const turn2 = await projection.project(messages, "turn");
+      for (const expectedStatus of [425, 429, 503]) {
+        const retryTurn = await projection.project(messages, "turn");
+        const retryJson = JSON.stringify(retryTurn);
+        expect(retryJson).not.toContain("tool expired");
+        expect(retryJson).not.toContain("tool corrupt");
+        expect(retryJson).not.toContain("tool bad-data");
+        expect(retryJson).not.toContain("tool cleaned");
+        expect(retryJson).not.toContain("tool missing-blob");
+        expect(retryJson).toContain(`asset source returned ${expectedStatus}`);
+        await commitImages(projection, messages);
+      }
       expect(expiredHits).toBe(1);
-      expect(flakyHits).toBe(2);
-      const turn2Json = JSON.stringify(turn2);
-      expect(turn2Json).not.toContain("tool expired");
-      expect(turn2Json).not.toContain("tool corrupt");
-      expect(turn2Json).not.toContain("tool bad-data");
-      expect(turn2Json).toContain("asset source returned 503");
-      await commitImages(projection, messages);
+      expect(flakyHits).toBe(4);
 
-      const turn3 = await projection.project(messages, "turn");
+      const finalTurn = await projection.project(messages, "turn");
       expect(expiredHits).toBe(1);
-      expect(flakyHits).toBe(3);
-      expect(imageParts(turn3)).toHaveLength(1);
-      expect(JSON.stringify(turn3)).toContain("tool flaky, call t-flaky");
+      expect(flakyHits).toBe(5);
+      expect(imageParts(finalTurn)).toHaveLength(1);
+      expect(JSON.stringify(finalTurn)).toContain("tool flaky, call t-flaky");
     } finally {
       const closing = Promise.withResolvers<void>();
       server.close((error) => (error ? closing.reject(error) : closing.resolve()));

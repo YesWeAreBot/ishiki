@@ -16,7 +16,7 @@ export class AssetHandler extends FileScheme {
   protected async open(url: FileUrl): Promise<FileEntry> {
     if (!isAssetId(url.authority) || url.segments.length !== 0) throw new ResourceError("invalid_resource_uri", `asset URL requires a UUID v7 id: ${url.href}`);
     const meta = await this.store.getMeta("asset", "", url.authority);
-    if (meta === undefined) throw new ResourceError("resource_not_found", `asset not found: ${url.href}`);
+    if (meta === undefined) throw new ResourceError("resource_not_found", `asset not found: ${url.href}`, { terminal: true });
     const filename = meta.filename;
     return {
       path: path.join(this.store.home, "resources", "assets", meta.name),

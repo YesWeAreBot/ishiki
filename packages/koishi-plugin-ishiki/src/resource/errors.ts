@@ -21,6 +21,7 @@ export type ResourceErrorCode =
 
 export interface ResourceErrorOptions {
   status?: number;
+  /** Explicit retryability override for attachment projection (`true` retires, `false` keeps retrying). */
   terminal?: boolean;
 }
 
