@@ -1,0 +1,96 @@
+{
+  "name": "koishi-plugin-ishiki-sticker",
+  "version": "0.0.1",
+  "description": "Universal sticker collection, VLM review/tagging, hybrid search, frequency-controlled sending, and Console WebUI for Ishiki.",
+  "keywords": [
+    "agent",
+    "chatbot",
+    "extension",
+    "ishiki",
+    "koishi",
+    "meme",
+    "plugin",
+    "sticker"
+  ],
+  "homepage": "https://github.com/YesWeAreBot/ishiki/blob/main/packages/sticker",
+  "bugs": {
+    "url": "https://github.com/YesWeAreBot/ishiki/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YesWeAreBot/ishiki.git",
+    "directory": "packages/sticker"
+  },
+  "files": [
+    "dist",
+    "lib",
+    "index.mjs"
+  ],
+  "type": "module",
+  "main": "./lib/index.cjs",
+  "module": "./index.mjs",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./index.mjs",
+      "require": "./lib/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@koishijs/client": "^5.30.11",
+    "@koishijs/console": "^5.30.11",
+    "@koishijs/plugin-database-memory": "^3.7.0",
+    "@koishijs/plugin-server": "^3.2.9",
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": ">=0.0.6 <0.1.0"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.11",
+    "koishi-plugin-ishiki": ">=0.0.6 <0.1.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "koishi": {
+    "description": {
+      "zh": "为 Ishiki 提供表情包收藏、审查、检索、发送与可视化图库管理",
+      "en": "Sticker collection, review, search, sending, and gallery WebUI for Ishiki"
+    },
+    "service": {
+      "optional": [
+        "console",
+        "database",
+        "server"
+      ],
+      "required": [
+        "ishiki"
+      ]
+    }
+  },
+  "yakumo": {
+    "client": {
+      "build": {
+        "rollupOptions": {
+          "output": {
+            "paths": {
+              "@koishijs/client": "../client.js",
+              "vue": "../vue.js",
+              "vue-router": "../vue-router.js",
+              "@vueuse/core": "../vueuse.js"
+            }
+          }
+        }
+      }
+    }
+  }
+}
