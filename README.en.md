@@ -136,6 +136,7 @@ Ishiki's design centers on the Agent itself. A future goal is to offer operation
 | [`koishi-plugin-ishiki-narrative`](packages/narrative/README.md)                 | Narrative context and multi-role model interaction        |
 | [`koishi-plugin-ishiki-onebot-actions`](packages/onebot-actions/README.en.md)    | OneBot action catalogs and protocol-specific operations   |
 | [`koishi-plugin-ishiki-command-bridge`](packages/command-bridge/README.md)       | Discover scoped Koishi commands and run approved commands |
+| [`koishi-plugin-ishiki-sticker`](packages/sticker/README.md)                     | Sticker collection, VLM review, search, sending & WebUI   |
 
 Share your experience and design ideas through [Issues](https://github.com/YesWeAreBot/ishiki/issues), or contribute a pull request. The [maintenance guide](https://ishiki.js.org/docs/dev/maintenance/) covers builds and documentation workflows. QQ group: [857518324](https://qm.qq.com/q/EeL0FDu3JK).
 
